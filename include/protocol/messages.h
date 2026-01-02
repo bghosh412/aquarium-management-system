@@ -15,7 +15,8 @@ enum class MessageType : uint8_t {
     CONFIG = 0x03,      // Hub sends configuration to node (provisioning)
     COMMAND = 0x04,     // Hub sends command to node
     STATUS = 0x05,      // Node sends status to hub
-    HEARTBEAT = 0x06    // Periodic alive signal
+    HEARTBEAT = 0x06,   // Periodic alive signal
+    UNMAP = 0x07        // Hub unmaps a device (reset to discovery mode)
 };
 
 // Node types in the system
@@ -88,6 +89,13 @@ struct HeartbeatMessage {
     uint16_t uptimeMinutes;
 } __attribute__((packed));
 
+// UNMAP message - hub to node (reset device to discovery mode)
+struct UnmapMessage {
+    MessageHeader header;
+    uint8_t reason;  // Reason code for unmapping
+    uint8_t reserved[8];  // Reserved for future use
+} __attribute__((packed));
+
 // Maximum message size check (ESP-NOW limit is 250 bytes)
 static_assert(sizeof(AnnounceMessage) <= 250, "AnnounceMessage too large for ESP-NOW");
 static_assert(sizeof(AckMessage) <= 250, "AckMessage too large for ESP-NOW");
@@ -95,5 +103,6 @@ static_assert(sizeof(ConfigMessage) <= 250, "ConfigMessage too large for ESP-NOW
 static_assert(sizeof(CommandMessage) <= 250, "CommandMessage too large for ESP-NOW");
 static_assert(sizeof(StatusMessage) <= 250, "StatusMessage too large for ESP-NOW");
 static_assert(sizeof(HeartbeatMessage) <= 250, "HeartbeatMessage too large for ESP-NOW");
+static_assert(sizeof(UnmapMessage) <= 250, "UnmapMessage too large for ESP-NOW");
 
 #endif // PROTOCOL_MESSAGES_H

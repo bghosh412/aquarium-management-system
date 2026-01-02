@@ -1,17 +1,5 @@
 {
-  "unmappedDevices": [
-    {
-      "mac": "AA:BB:CC:DD:EE:FF",
-      "type": "LIGHT",
-      "firmwareVersion": 1,
-      "capabilities": 0,
-      "discoveredAt": 1704153600000,
-      "lastSeen": 1704153600000,
-      "announceCount": 5,
-      "status": "DISCOVERED",
-      "notes": "Example unmapped device - waiting for user provisioning"
-    }
-  ],
+  "unmappedDevices": [],
   "metadata": {
     "lastCleanup": 0,
     "totalDiscovered": 0,

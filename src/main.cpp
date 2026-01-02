@@ -93,17 +93,17 @@ void loadConfiguration() {
     
     // Load from file
     if (!LittleFS.exists("/config/hub_config.txt")) {
-        Serial.println("⚠️  Config file not found, using defaults");
+        Serial.println("  Config file not found, using defaults");
         return;
     }
     
     File file = LittleFS.open("/config/hub_config.txt", "r");
     if (!file) {
-        Serial.println("❌ Failed to open config file");
+        Serial.println(" Failed to open config file");
         return;
     }
     
-    Serial.println("📄 Loading configuration...");
+    Serial.println(" Loading configuration...");
     
     while (file.available()) {
         String line = file.readStringUntil('\n');
@@ -159,7 +159,7 @@ void loadConfiguration() {
     
     file.close();
     
-    Serial.println("✅ Configuration loaded");
+    Serial.println(" Configuration loaded");
     Serial.printf("   - Heartbeat: %s (%ds)\n", 
                   config.heartbeatEnabled ? "ON" : "OFF", 
                   config.heartbeatIntervalSec);
@@ -178,23 +178,23 @@ void printMemoryStatus() {
     uint32_t freePSRAM = ESP.getFreePsram() / 1024;  // KB
     uint32_t totalPSRAM = ESP.getPsramSize() / 1024;  // KB
     
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.printf("💾 HEAP:  %u KB free / %u KB total (%.1f%%)\n", 
+    Serial.println("");
+    Serial.printf(" HEAP:  %u KB free / %u KB total (%.1f%%)\n", 
                   freeHeap, totalHeap, 
                   (freeHeap * 100.0) / totalHeap);
-    Serial.printf("💾 PSRAM: %u KB free / %u KB total (%.1f%%)\n", 
+    Serial.printf(" PSRAM: %u KB free / %u KB total (%.1f%%)\n", 
                   freePSRAM, totalPSRAM, 
                   (freePSRAM * 100.0) / totalPSRAM);
-    Serial.printf("⏱️  Uptime: %lu seconds\n", millis() / 1000);
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.printf("  Uptime: %lu seconds\n", millis() / 1000);
+    Serial.println("");
     
     // Warnings
     if (freeHeap < config.heapWarningThresholdKB) {
-        Serial.printf("⚠️  HEAP WARNING: Only %u KB free!\n", freeHeap);
+        Serial.printf("  HEAP WARNING: Only %u KB free!\n", freeHeap);
     }
     
     if (freePSRAM < config.psramWarningThresholdKB) {
-        Serial.printf("⚠️  PSRAM WARNING: Only %u KB free!\n", freePSRAM);
+        Serial.printf("  PSRAM WARNING: Only %u KB free!\n", freePSRAM);
     }
 }
 
@@ -208,7 +208,7 @@ void aggressiveMemoryCleanup() {
     
     // Log cleanup
     if (config.debugSerial) {
-        Serial.println("🧹 Aggressive memory cleanup triggered");
+        Serial.println(" Aggressive memory cleanup triggered");
     }
 }
 
@@ -220,7 +220,7 @@ void watchdogTask(void* parameter) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xCheckInterval = pdMS_TO_TICKS(5000);  // Check every 5 seconds
     
-    Serial.printf("🐕 Watchdog task started on core %d\n", xPortGetCoreID());
+    Serial.printf(" Watchdog task started on core %d\n", xPortGetCoreID());
     
     unsigned long lastMemoryCheck = 0;
     unsigned long lastHealthCheck = 0;
@@ -260,18 +260,31 @@ void watchdogTask(void* parameter) {
 // ============================================================================
 
 bool setupFilesystem() {
-    Serial.println("📁 Initializing LittleFS...");
+    Serial.println(" Initializing LittleFS...");
     
     if (!LittleFS.begin(true)) {
-        Serial.println("❌ LittleFS mount failed");
+        Serial.println(" LittleFS mount failed");
         return false;
     }
     
-    Serial.println("✅ LittleFS mounted");
+    Serial.println(" LittleFS mounted");
+    
+    // Initialize unmapped-devices.json if it doesn't exist
+    if (!LittleFS.exists("/config/unmapped-devices.json")) {
+        Serial.println(" Creating unmapped-devices.json...");
+        File file = LittleFS.open("/config/unmapped-devices.json", "w");
+        if (file) {
+            file.print("{\"metadata\":{\"lastCleanup\":0,\"totalDiscovered\":0,\"autoCleanupAfterDays\":7},\"unmappedDevices\":[]}");
+            file.close();
+            Serial.println("   - unmapped-devices.json initialized");
+        } else {
+            Serial.println("   - ERROR: Failed to create unmapped-devices.json");
+        }
+    }
     
     // List files (debug)
     if (config.debugSerial) {
-        Serial.println("📂 Filesystem contents:");
+        Serial.println(" Filesystem contents:");
         File root = LittleFS.open("/");
         File file = root.openNextFile();
         while (file) {
@@ -288,7 +301,7 @@ bool setupFilesystem() {
 // ============================================================================
 
 void setupWiFi() {
-    Serial.println("📡 Starting WiFi configuration...");
+    Serial.println(" Starting WiFi configuration...");
     
     // Set hostname before WiFi begins
     WiFi.setHostname(config.mdnsHostname.c_str());
@@ -305,29 +318,49 @@ void setupWiFi() {
     // Try to connect with saved credentials or start AP
     if (!wifiManager.autoConnect(config.wifiAPName.c_str(), 
                                    config.wifiAPPassword.c_str())) {
-        Serial.println("❌ Failed to connect, restarting...");
+        Serial.println(" Failed to connect, restarting...");
         delay(3000);
         ESP.restart();
     }
     
-    Serial.println("✅ WiFi connected");
+    Serial.println(" WiFi connected");
     Serial.printf("   - IP: %s\n", WiFi.localIP().toString().c_str());
     Serial.printf("   - RSSI: %d dBm\n", WiFi.RSSI());
     Serial.printf("   - Hostname: %s\n", WiFi.getHostname());
+    
+    // CRITICAL: Set WiFi channel to match ESP-NOW channel
+    // WiFi STA and ESP-NOW must use the same channel
+    // This forces the WiFi connection to use channel 6 for ESP-NOW compatibility
+    Serial.println(" Setting WiFi channel for ESP-NOW compatibility...");
+    int currentChannel = WiFi.channel();
+    Serial.printf("   - Current WiFi channel: %d\n", currentChannel);
+    
+    if (currentChannel != config.espnowChannel) {
+        Serial.printf("   - WARNING: WiFi on channel %d, but ESP-NOW needs channel %d\n", 
+                     currentChannel, config.espnowChannel);
+        Serial.println("   - ESP-NOW will use WiFi's channel (not configurable in STA mode)");
+        Serial.printf("   - SOLUTION: Configure your router to use channel %d\n", config.espnowChannel);
+        
+        // Update config to match WiFi channel
+        config.espnowChannel = currentChannel;
+        Serial.printf("   - Updated ESP-NOW channel to %d (WiFi channel)\n", config.espnowChannel);
+    } else {
+        Serial.printf("   - WiFi channel %d matches ESP-NOW channel (OK)\n", config.espnowChannel);
+    }
 }
 
 void setupMDNS() {
-    Serial.println("🌐 Starting mDNS responder...");
+    Serial.println(" Starting mDNS responder...");
     
     if (!MDNS.begin(config.mdnsHostname.c_str())) {
-        Serial.println("❌ mDNS failed to start");
+        Serial.println(" mDNS failed to start");
         return;
     }
     
     // Add service
     MDNS.addService("http", "tcp", 80);
     
-    Serial.printf("✅ mDNS responder started: http://%s.local\n", 
+    Serial.printf(" mDNS responder started: http://%s.local\n", 
                   config.mdnsHostname.c_str());
 }
 
@@ -341,7 +374,7 @@ void setupMDNS() {
  */
 bool loadAquariumsFromFile() {
     if (!LittleFS.exists("/config/aquariums.json")) {
-        Serial.println("⚠️  aquariums.json not found, creating empty file");
+        Serial.println("  aquariums.json not found, creating empty file");
         File file = LittleFS.open("/config/aquariums.json", "w");
         if (file) {
             file.println("{\"aquariums\":[]}");
@@ -352,7 +385,7 @@ bool loadAquariumsFromFile() {
     
     File file = LittleFS.open("/config/aquariums.json", "r");
     if (!file) {
-        Serial.println("❌ Failed to open aquariums.json");
+        Serial.println(" Failed to open aquariums.json");
         return false;
     }
     
@@ -361,7 +394,7 @@ bool loadAquariumsFromFile() {
     file.close();
     
     if (error) {
-        Serial.printf("❌ Failed to parse aquariums.json: %s\\n", error.c_str());
+        Serial.printf(" Failed to parse aquariums.json: %s\\n", error.c_str());
         return false;
     }
     
@@ -373,7 +406,7 @@ bool loadAquariumsFromFile() {
         String name = obj["name"] | "";
         
         if (id == 0 || name.isEmpty()) {
-            Serial.println("⚠️  Skipping invalid aquarium entry");
+            Serial.println("  Skipping invalid aquarium entry");
             continue;
         }
         
@@ -406,10 +439,10 @@ bool loadAquariumsFromFile() {
         // Add to manager's registry
         AquariumManager::getInstance().addAquarium(aquarium);
         loadedCount++;
-        Serial.printf("✅ Loaded aquarium: %s (ID: %d)\\n", name.c_str(), id);
+        Serial.printf(" Loaded aquarium: %s (ID: %d)\\n", name.c_str(), id);
     }
     
-    Serial.printf("📊 Loaded %d aquariums from file\\n", loadedCount);
+    Serial.printf(" Loaded %d aquariums from file\\n", loadedCount);
     return loadedCount > 0;
 }
 
@@ -466,18 +499,18 @@ bool saveAquariumsToFile() {
     // Write to file
     File file = LittleFS.open("/config/aquariums.json", "w");
     if (!file) {
-        Serial.println("❌ Failed to open aquariums.json for writing");
+        Serial.println(" Failed to open aquariums.json for writing");
         return false;
     }
     
     if (serializeJson(doc, file) == 0) {
-        Serial.println("❌ Failed to write aquariums.json");
+        Serial.println(" Failed to write aquariums.json");
         file.close();
         return false;
     }
     
     file.close();
-    Serial.println("✅ Aquariums saved to file");
+    Serial.println(" Aquariums saved to file");
     return true;
 }
 
@@ -525,7 +558,7 @@ uint8_t getNextAquariumId() {
 // ============================================================================
 
 void setupWebServer() {
-    Serial.println("🌐 Starting web server...");
+    Serial.println(" Starting web server...");
     
     // Serve static files from LittleFS
     server.serveStatic("/", LittleFS, "/UI/").setDefaultFile("index.html");
@@ -657,7 +690,7 @@ void setupWebServer() {
         
         // Save to file
         if (!saveAquariumsToFile()) {
-            Serial.println("⚠️  Warning: Failed to save aquariums to file");
+            Serial.println("  Warning: Failed to save aquariums to file");
         }
         
         // Return success with ID
@@ -670,7 +703,7 @@ void setupWebServer() {
         serializeJson(responseDoc, response);
         request->send(201, "application/json", response);
         
-        Serial.printf("✅ Created aquarium: %s (ID: %d)\\n", name.c_str(), newId);
+        Serial.printf(" Created aquarium: %s (ID: %d)\\n", name.c_str(), newId);
     });
     
     // GET single aquarium
@@ -734,7 +767,7 @@ void setupWebServer() {
         saveAquariumsToFile();
         
         request->send(200, "text/plain", "Aquarium deleted successfully");
-        Serial.printf("✅ Deleted aquarium ID: %d\\n", id);
+        Serial.printf(" Deleted aquarium ID: %d\\n", id);
     });
     
     // GET unmapped devices
@@ -752,11 +785,26 @@ void setupWebServer() {
         request->send(200, "application/json", jsonData);
     });
     
+    // GET all devices
+    server.on("/api/devices", HTTP_GET, [](AsyncWebServerRequest *request){
+        File file = LittleFS.open("/config/devices.json", "r");
+        if (!file) {
+            // Return empty list if file doesn't exist
+            request->send(200, "application/json", "{\"devices\":[]}");
+            return;
+        }
+        
+        String jsonData = file.readString();
+        file.close();
+        
+        request->send(200, "application/json", jsonData);
+    });
+    
     // POST provision device
     server.on("/api/provision-device", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
         if (index == 0) {
-            Serial.println("📥 Received provision-device request");
+            Serial.println(" Received provision-device request");
         }
         
         if (index + len == total) {
@@ -765,7 +813,7 @@ void setupWebServer() {
             DeserializationError error = deserializeJson(doc, data, len);
             
             if (error) {
-                Serial.printf("❌ JSON parse error: %s\n", error.c_str());
+                Serial.printf(" JSON parse error: %s\n", error.c_str());
                 request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
                 return;
             }
@@ -775,7 +823,7 @@ void setupWebServer() {
             String deviceName = doc["name"].as<String>();
             uint8_t tankId = doc["tankId"];
             
-            Serial.printf("🔧 Provisioning device: %s -> %s (Tank %d)\n",
+            Serial.printf(" Provisioning device: %s -> %s (Tank %d)\n",
                          macStr.c_str(), deviceName.c_str(), tankId);
             
             // Convert MAC string to bytes
@@ -827,12 +875,12 @@ void setupWebServer() {
             bool sent = ESPNowManager::getInstance().send(mac, (uint8_t*)&configMsg, sizeof(configMsg));
             
             if (!sent) {
-                Serial.println("❌ Failed to send CONFIG message");
+                Serial.println(" Failed to send CONFIG message");
                 request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to send CONFIG to device\"}");
                 return;
             }
             
-            Serial.println("✅ CONFIG message sent to device");
+            Serial.println(" CONFIG message sent to device");
             
             // Remove from unmapped devices
             unmappedDevices.remove(foundIndex);
@@ -864,7 +912,7 @@ void setupWebServer() {
             serializeJson(devicesDoc, devicesFile);
             devicesFile.close();
             
-            Serial.printf("✅ Device provisioned: %s\n", deviceName.c_str());
+            Serial.printf(" Device provisioned: %s\n", deviceName.c_str());
             
             // Send success response
             String response = "{\"success\":true,\"device\":{";
@@ -878,6 +926,117 @@ void setupWebServer() {
         }
     });
     
+    // POST unmap device
+    server.on("/api/unmap-device", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index == 0) {
+            Serial.println(" Received unmap-device request");
+        }
+        
+        if (index + len == total) {
+            // Parse JSON
+            DynamicJsonDocument doc(512);
+            DeserializationError error = deserializeJson(doc, data, len);
+            
+            if (error) {
+                Serial.printf(" JSON parse error: %s\n", error.c_str());
+                request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+                return;
+            }
+            
+            // Extract device MAC
+            String macStr = doc["mac"].as<String>();
+            Serial.printf(" Unmapping device: %s\n", macStr.c_str());
+            
+            // Convert MAC string to bytes
+            uint8_t mac[6];
+            if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                      &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+                request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+                return;
+            }
+            
+            // Load devices.json
+            File devicesFile = LittleFS.open("/config/devices.json", "r");
+            if (!devicesFile) {
+                request->send(404, "application/json", "{\"success\":false,\"error\":\"Devices file not found\"}");
+                return;
+            }
+            
+            DynamicJsonDocument devicesDoc(8192);
+            deserializeJson(devicesDoc, devicesFile);
+            devicesFile.close();
+            
+            // Find and remove device
+            JsonArray devices = devicesDoc["devices"];
+            int foundIndex = -1;
+            JsonObject foundDevice;
+            
+            for (size_t i = 0; i < devices.size(); i++) {
+                if (devices[i]["mac"].as<String>() == macStr) {
+                    foundIndex = i;
+                    foundDevice = devices[i];
+                    break;
+                }
+            }
+            
+            if (foundIndex == -1) {
+                request->send(404, "application/json", "{\"success\":false,\"error\":\"Device not found\"}");
+                return;
+            }
+            
+            // Send UNMAP message to node
+            UnmapMessage unmapMsg = {};
+            unmapMsg.header.type = MessageType::UNMAP;
+            unmapMsg.header.tankId = 0;  // Reset to unmapped
+            unmapMsg.header.nodeType = NodeType::HUB;
+            unmapMsg.header.timestamp = millis();
+            unmapMsg.header.sequenceNum = 0;
+            unmapMsg.reason = 1;  // User-initiated unmap
+            
+            bool sent = ESPNowManager::getInstance().send(mac, (uint8_t*)&unmapMsg, sizeof(unmapMsg));
+            
+            if (sent) {
+                Serial.println(" UNMAP message sent to device");
+            } else {
+                Serial.println(" Warning: Failed to send UNMAP message (device may be offline)");
+            }
+            
+            // Remove from devices.json
+            devices.remove(foundIndex);
+            
+            devicesFile = LittleFS.open("/config/devices.json", "w");
+            serializeJson(devicesDoc, devicesFile);
+            devicesFile.close();
+            
+            // Add back to unmapped devices
+            File unmappedFile = LittleFS.open("/config/unmapped-devices.json", "r");
+            DynamicJsonDocument unmappedDoc(4096);
+            if (unmappedFile) {
+                deserializeJson(unmappedDoc, unmappedFile);
+                unmappedFile.close();
+            }
+            
+            JsonArray unmappedDevices = unmappedDoc["unmappedDevices"];
+            JsonObject newUnmapped = unmappedDevices.createNestedObject();
+            newUnmapped["mac"] = macStr;
+            newUnmapped["type"] = foundDevice["type"];
+            newUnmapped["firmwareVersion"] = foundDevice["firmwareVersion"];
+            newUnmapped["discoveredAt"] = millis();
+            newUnmapped["announceCount"] = 0;
+            
+            unmappedFile = LittleFS.open("/config/unmapped-devices.json", "w");
+            serializeJson(unmappedDoc, unmappedFile);
+            unmappedFile.close();
+            
+            Serial.printf(" Device unmapped: %s\n", macStr.c_str());
+            
+            // Send success response
+            String response = "{\"success\":true,\"message\":\"Device unmapped successfully\"}";
+            request->send(200, "application/json", response);
+        }
+    });
+    
     // 404 handler
     server.onNotFound([](AsyncWebServerRequest *request){
         request->send(404, "text/plain", "Not found");
@@ -886,7 +1045,7 @@ void setupWebServer() {
     // Start server
     server.begin();
     
-    Serial.println("✅ Web server started on port 80");
+    Serial.println(" Web server started on port 80");
     Serial.printf("   - Access: http://%s.local\n", config.mdnsHostname.c_str());
     Serial.printf("   - Or: http://%s\n", WiFi.localIP().toString().c_str());
 
@@ -931,15 +1090,15 @@ void setupWebServer() {
 
 void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
     if (config.debugESPNOW) {
-        Serial.println("╔════════════════════════════════════════════════════════╗");
-        Serial.printf("║ 📡 ANNOUNCE from %02X:%02X:%02X:%02X:%02X:%02X\n",
+        Serial.println("");
+        Serial.printf("  ANNOUNCE from %02X:%02X:%02X:%02X:%02X:%02X\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        Serial.printf("║ Type: %d | Tank: %d | FW: v%d\n",
+        Serial.printf(" Type: %d | Tank: %d | FW: v%d\n",
                       (int)msg.header.nodeType, msg.header.tankId, msg.firmwareVersion);
         if (msg.header.tankId == 0) {
-            Serial.println("║ ⚠️  UNMAPPED DEVICE (needs provisioning)");
+            Serial.println("   UNMAPPED DEVICE (needs provisioning)");
         }
-        Serial.println("╚════════════════════════════════════════════════════════╝");
+        Serial.println("");
     }
     
     // Forward to AquariumManager
@@ -960,13 +1119,13 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
     ESPNowManager::getInstance().send(mac, (uint8_t*)&ack, sizeof(ack));
     
     if (config.debugESPNOW) {
-        Serial.printf("✅ ACK sent to device\n\n");
+        Serial.printf(" ACK sent to device\n\n");
     }
 }
 
 void onHeartbeatReceived(const uint8_t* mac, const HeartbeatMessage& msg) {
     if (config.debugESPNOW) {
-        Serial.printf("💓 HEARTBEAT from %02X:%02X:%02X:%02X:%02X:%02X | "
+        Serial.printf(" HEARTBEAT from %02X:%02X:%02X:%02X:%02X:%02X | "
                       "Health: %d%% | Uptime: %dmin\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
                       msg.health, msg.uptimeMinutes);
@@ -981,12 +1140,12 @@ void onHeartbeatReceived(const uint8_t* mac, const HeartbeatMessage& msg) {
 
 void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
     if (config.debugESPNOW) {
-        Serial.println("╔════════════════════════════════════════════════════════╗");
-        Serial.printf("║ 📊 STATUS from %02X:%02X:%02X:%02X:%02X:%02X\n",
+        Serial.println("");
+        Serial.printf("  STATUS from %02X:%02X:%02X:%02X:%02X:%02X\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        Serial.printf("║ Command ID: %d | Status Code: %d\n",
+        Serial.printf(" Command ID: %d | Status Code: %d\n",
                       msg.commandId, msg.statusCode);
-        Serial.printf("║ Type: %d | Tank: %d\n",
+        Serial.printf(" Type: %d | Tank: %d\n",
                       (int)msg.header.nodeType, msg.header.tankId);
         
         // Print status data if present
@@ -999,14 +1158,14 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
         }
         
         if (hasData) {
-            Serial.print("║ Data: ");
+            Serial.print(" Data: ");
             for (int i = 0; i < 8; i++) {  // Print first 8 bytes
                 Serial.printf("%02X ", msg.statusData[i]);
             }
             Serial.println();
         }
         
-        Serial.println("╚════════════════════════════════════════════════════════╝");
+        Serial.println("");
     }
     
     // Forward to AquariumManager
@@ -1016,21 +1175,21 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
 void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
     // Hub doesn't receive commands (only sends them)
     if (config.debugESPNOW) {
-        Serial.printf("⚠️  Unexpected COMMAND received from %02X:%02X:%02X:%02X:%02X:%02X\n",
+        Serial.printf("  Unexpected COMMAND received from %02X:%02X:%02X:%02X:%02X:%02X\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
 }
 
 void setupESPNow() {
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.println("📡 Initializing ESPNowManager...");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("");
+    Serial.println(" Initializing ESPNowManager...");
+    Serial.println("");
     
     // Initialize ESPNowManager as hub
     bool success = ESPNowManager::getInstance().begin(config.espnowChannel, true);
     
     if (!success) {
-        Serial.println("❌ ESPNowManager initialization failed!");
+        Serial.println(" ESPNowManager initialization failed!");
         return;
     }
     
@@ -1040,16 +1199,16 @@ void setupESPNow() {
     ESPNowManager::getInstance().onStatusReceived(onStatusReceived);
     ESPNowManager::getInstance().onCommandReceived(onCommandReceived);
     
-    Serial.println("✅ ESPNowManager ready");
+    Serial.println(" ESPNowManager ready");
     Serial.printf("   - Channel: %d\n", config.espnowChannel);
     Serial.printf("   - Mode: HUB (FreeRTOS queue enabled)\n");
     Serial.printf("   - Debug: %s\n", config.debugESPNOW ? "ON" : "OFF");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("");
     
     // Print initial statistics
     if (config.debugESPNOW) {
         auto stats = ESPNowManager::getInstance().getStatistics();
-        Serial.println("📊 Initial Statistics:");
+        Serial.println(" Initial Statistics:");
         Serial.printf("   Messages sent/received: %u / %u\n", 
                       stats.messagesSent, stats.messagesReceived);
         Serial.printf("   Fragments sent/received: %u / %u\n",
@@ -1068,15 +1227,15 @@ void setup() {
     delay(1000);  // Wait for serial to stabilize
     
     Serial.println("\n\n");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("");
     Serial.println("   AQUARIUM MANAGEMENT SYSTEM - HUB");
     Serial.println("   ESP32-S3-N16R8 Central Controller");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("");
     Serial.println();
     
     // Initialize filesystem
     if (!setupFilesystem()) {
-        Serial.println("❌ CRITICAL: Filesystem failed, halting");
+        Serial.println(" CRITICAL: Filesystem failed, halting");
         while (1) delay(1000);
     }
     
@@ -1111,12 +1270,12 @@ void setup() {
         &watchdogTaskHandle,     // Task handle
         1                        // Core 1 (separate from main processing)
     );
-    Serial.printf("✅ Watchdog task created on Core 1 (priority 2)\n");
+    Serial.printf(" Watchdog task created on Core 1 (priority 2)\n");
     
     Serial.println();
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.println("✅ HUB READY");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("");
+    Serial.println(" HUB READY");
+    Serial.println("");
     Serial.println();
     
     // Print initial memory status
@@ -1139,13 +1298,31 @@ void loop() {
     // Note: Health checks and water monitoring run on Core 1 watchdog task
     AquariumManager::getInstance().updateSchedules();
     
+    // Print WiFi channel status periodically
+    static unsigned long lastChannelCheckTime = 0;
+    if (millis() - lastChannelCheckTime > 30000) {  // Every 30 seconds
+        lastChannelCheckTime = millis();
+        int currentChannel = WiFi.channel();
+        Serial.println("\n");
+        Serial.println(" WiFi/ESP-NOW Status:");
+        Serial.printf("   WiFi Channel: %d\n", currentChannel);
+        Serial.printf("   ESP-NOW Expected Channel: %d\n", config.espnowChannel);
+        if (currentChannel != config.espnowChannel) {
+            Serial.printf("   WARNING: Channel mismatch! ESP-NOW will NOT work!\n");
+            Serial.printf("   SOLUTION: Configure router to use channel %d\n", config.espnowChannel);
+        } else {
+            Serial.println("   Channel OK - ESP-NOW should work");
+        }
+        Serial.println("");
+    }
+    
     // Print ESP-NOW statistics periodically
     static unsigned long lastStatsTime = 0;
     if (config.debugESPNOW && (millis() - lastStatsTime > 60000)) {  // Every 60 seconds
         lastStatsTime = millis();
         auto stats = ESPNowManager::getInstance().getStatistics();
-        Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        Serial.println("📊 ESP-NOW Statistics (Last 60s):");
+        Serial.println("\n");
+        Serial.println(" ESP-NOW Statistics (Last 60s):");
         Serial.printf("   Messages: %u sent / %u received\n", 
                       stats.messagesSent, stats.messagesReceived);
         Serial.printf("   Fragments: %u sent / %u received\n",
@@ -1154,7 +1331,7 @@ void loop() {
                       stats.sendFailures, stats.reassemblyTimeouts);
         Serial.printf("   Duplicates ignored: %u\n", stats.duplicatesIgnored);
         Serial.printf("   Retries: %u\n", stats.retries);
-        Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        Serial.println("\n");
     }
     
     // Small delay to prevent watchdog issues

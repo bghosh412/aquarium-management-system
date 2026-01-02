@@ -25,14 +25,14 @@ Aquarium::Aquarium(uint8_t id, const String& name)
     , _currentTds(0)
     , _lastSensorUpdate(0)
 {
-    Serial.printf("📦 Created aquarium: %s (ID: %d)\n", _name.c_str(), _id);
+    Serial.printf(" Created aquarium: %s (ID: %d)\n", _name.c_str(), _id);
 }
 
 /**
  * @brief Destructor - cleans up all devices
  */
 Aquarium::~Aquarium() {
-    Serial.printf("🗑️  Destroying aquarium: %s (ID: %d)\n", _name.c_str(), _id);
+    Serial.printf("  Destroying aquarium: %s (ID: %d)\n", _name.c_str(), _id);
     
     // Delete all devices
     for (auto& pair : _devices) {
@@ -70,7 +70,7 @@ void Aquarium::updateTds(uint16_t tds) {
  */
 bool Aquarium::addDevice(Device* device) {
     if (!device) {
-        Serial.println("❌ Cannot add null device");
+        Serial.println(" Cannot add null device");
         return false;
     }
     
@@ -78,7 +78,7 @@ bool Aquarium::addDevice(Device* device) {
     
     // Check if already exists
     if (_devices.find(key) != _devices.end()) {
-        Serial.printf("⚠️  Device %s already exists in aquarium %s\n", 
+        Serial.printf("  Device %s already exists in aquarium %s\n", 
                      device->getMacString().c_str(), _name.c_str());
         return false;
     }
@@ -89,7 +89,7 @@ bool Aquarium::addDevice(Device* device) {
     // Add to registry
     _devices[key] = device;
     
-    Serial.printf("✅ Added device %s (%s) to aquarium %s\n", 
+    Serial.printf(" Added device %s (%s) to aquarium %s\n", 
                  device->getName().c_str(),
                  device->getMacString().c_str(),
                  _name.c_str());
@@ -105,12 +105,12 @@ bool Aquarium::removeDevice(const uint8_t* mac) {
     
     auto it = _devices.find(key);
     if (it == _devices.end()) {
-        Serial.println("⚠️  Device not found");
+        Serial.println("  Device not found");
         return false;
     }
     
     Device* device = it->second;
-    Serial.printf("🗑️  Removing device %s from aquarium %s\n",
+    Serial.printf("  Removing device %s from aquarium %s\n",
                  device->getName().c_str(), _name.c_str());
     
     delete device;
@@ -315,7 +315,7 @@ String Aquarium::toJson() const {
  */
 bool Aquarium::fromJson(const String& json) {
     // TODO: Implement JSON parsing
-    Serial.println("⚠️  fromJson not yet implemented");
+    Serial.println("  fromJson not yet implemented");
     return false;
 }
 
@@ -324,7 +324,7 @@ bool Aquarium::fromJson(const String& json) {
  */
 bool Aquarium::saveToFile(const String& filename) const {
     // TODO: Implement file saving
-    Serial.println("⚠️  saveToFile not yet implemented");
+    Serial.println("  saveToFile not yet implemented");
     return false;
 }
 
@@ -333,7 +333,7 @@ bool Aquarium::saveToFile(const String& filename) const {
  */
 bool Aquarium::loadFromFile(const String& filename) {
     // TODO: Implement file loading
-    Serial.println("⚠️  loadFromFile not yet implemented");
+    Serial.println("  loadFromFile not yet implemented");
     return false;
 }
 

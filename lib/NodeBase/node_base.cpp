@@ -34,7 +34,7 @@ void sendAnnounce() {
         esp_now_send(broadcastAddress, (uint8_t*)&msg, sizeof(msg));
     #endif
     
-    Serial.printf("📡 ANNOUNCE sent (attempt %lu)\n", announceAttempts++);
+    Serial.printf("[TX] ANNOUNCE sent (attempt %lu)\n", announceAttempts++);
 }
 
 void sendHeartbeat() {
@@ -56,7 +56,7 @@ void sendHeartbeat() {
     #endif
     
     lastHeartbeatSent = millis();
-    Serial.println("💓 Heartbeat sent");
+    Serial.println("[HB] Heartbeat sent");
 }
 
 void sendStatus(uint8_t commandId, uint8_t statusCode, const uint8_t* data, size_t dataLen) {
@@ -83,7 +83,7 @@ void sendStatus(uint8_t commandId, uint8_t statusCode, const uint8_t* data, size
         esp_now_send(hubMacAddress, (uint8_t*)&msg, sizeof(msg));
     #endif
     
-    Serial.printf("📤 STATUS sent (cmdId=%d, status=%d)\n", commandId, statusCode);
+    Serial.printf("[TX] STATUS sent (cmdId=%d, status=%d)\n", commandId, statusCode);
 }
 
 // ============================================================================
@@ -122,7 +122,7 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
             AckMessage* msg = (AckMessage*)data;
             
             if (msg->accepted && currentState == NodeState::WAITING_FOR_ACK) {
-                Serial.printf("✓ ACK received - Assigned Node ID: %d\n", msg->assignedNodeId);
+                Serial.printf("[OK] ACK received - Assigned Node ID: %d\n", msg->assignedNodeId);
                 
                 if (!hubDiscovered) {
                     memcpy(hubMacAddress, mac, 6);
@@ -138,7 +138,7 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
                         esp_now_add_peer(&peerInfo);
                     #endif
                     
-                    Serial.println("✓ Hub peer added - switching to unicast mode");
+                    Serial.println("[OK] Hub peer added - switching to unicast mode");
                 }
                 
                 currentState = NodeState::CONNECTED;
@@ -218,10 +218,10 @@ void setupESPNow() {
     #else
         if (esp_now_init() != ESP_OK) {
     #endif
-        Serial.println("✗ ESP-NOW init failed!");
+        Serial.println("[ERR] ESP-NOW init failed!");
         return;
     }
-    Serial.println("✓ ESP-NOW initialized");
+    Serial.println("[OK] ESP-NOW initialized");
     
     #ifdef ESP8266
         esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
@@ -252,7 +252,7 @@ void nodeLoop() {
             }
             
             if (now - lastHeartbeatReceived > CONNECTION_TIMEOUT_MS) {
-                Serial.println("⚠️ Connection timeout - hub not responding");
+                Serial.println("[WARN] Connection timeout - hub not responding");
                 enterFailSafeMode();  // Call node-specific fail-safe
                 currentState = NodeState::LOST_CONNECTION;
             }

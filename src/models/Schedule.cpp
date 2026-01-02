@@ -17,7 +17,7 @@ Schedule::Schedule(uint32_t id, const String& name, Type type)
     , _commandLength(0)
 {
     memset(_commandData, 0, sizeof(_commandData));
-    Serial.printf("📦 Created schedule: %s (ID: %d, Type: %d)\n", 
+    Serial.printf(" Created schedule: %s (ID: %d, Type: %d)\n", 
                  _name.c_str(), _id, (int)_type);
 }
 
@@ -25,7 +25,7 @@ Schedule::Schedule(uint32_t id, const String& name, Type type)
  * @brief Destructor
  */
 Schedule::~Schedule() {
-    Serial.printf("🗑️  Destroying schedule: %s (ID: %d)\n", _name.c_str(), _id);
+    Serial.printf("  Destroying schedule: %s (ID: %d)\n", _name.c_str(), _id);
 }
 
 /**
@@ -33,7 +33,7 @@ Schedule::~Schedule() {
  */
 void Schedule::setCommandData(const uint8_t* data, size_t length) {
     if (!data || length == 0) {
-        Serial.println("❌ Invalid command data");
+        Serial.println(" Invalid command data");
         return;
     }
     
@@ -41,7 +41,7 @@ void Schedule::setCommandData(const uint8_t* data, size_t length) {
     _commandLength = (length > 32) ? 32 : length;
     memcpy(_commandData, data, _commandLength);
     
-    Serial.printf("✅ Set command data (%d bytes) for schedule %s\n", 
+    Serial.printf(" Set command data (%d bytes) for schedule %s\n", 
                  _commandLength, _name.c_str());
 }
 
@@ -89,7 +89,7 @@ void Schedule::markExecuted(uint32_t currentTime) {
     // Calculate next execution time
     _nextExecution = calculateNextExecution(currentTime);
     
-    Serial.printf("✅ Executed schedule '%s' (count: %d)\n", 
+    Serial.printf(" Executed schedule '%s' (count: %d)\n", 
                  _name.c_str(), _executionCount);
 }
 
@@ -121,13 +121,13 @@ uint32_t Schedule::calculateNextExecution(uint32_t currentTime) const {
 bool Schedule::validate() const {
     // Check if name is set
     if (_name.length() == 0) {
-        Serial.println("❌ Schedule name is empty");
+        Serial.println(" Schedule name is empty");
         return false;
     }
     
     // Check if command data is set
     if (_commandLength == 0) {
-        Serial.println("❌ Schedule has no command data");
+        Serial.println(" Schedule has no command data");
         return false;
     }
     
@@ -135,7 +135,7 @@ bool Schedule::validate() const {
     switch (_type) {
         case Type::ONE_TIME:
             if (_nextExecution == 0) {
-                Serial.println("❌ One-time schedule has no execution time");
+                Serial.println(" One-time schedule has no execution time");
                 return false;
             }
             break;
@@ -143,14 +143,14 @@ bool Schedule::validate() const {
         case Type::DAILY:
         case Type::WEEKLY:
             if (_times.empty()) {
-                Serial.println("❌ Daily/Weekly schedule has no execution times");
+                Serial.println(" Daily/Weekly schedule has no execution times");
                 return false;
             }
             break;
             
         case Type::INTERVAL:
             if (_intervalSeconds == 0) {
-                Serial.println("❌ Interval schedule has zero interval");
+                Serial.println(" Interval schedule has zero interval");
                 return false;
             }
             break;
@@ -195,7 +195,7 @@ String Schedule::toJson() const {
  */
 bool Schedule::fromJson(const String& json) {
     // TODO: Implement JSON parsing
-    Serial.println("⚠️  Schedule::fromJson not yet implemented");
+    Serial.println("  Schedule::fromJson not yet implemented");
     return false;
 }
 

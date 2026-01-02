@@ -8,9 +8,9 @@
 // ============================================================================
 
 // Node configuration
-const uint8_t NODE_TANK_ID = 1;              // ⚠️ CONFIGURE PER DEPLOYMENT
+const uint8_t NODE_TANK_ID = 1;              //  CONFIGURE PER DEPLOYMENT
 const NodeType NODE_TYPE = NodeType::SENSOR;
-const char* NODE_NAME = "WaterQualityNode01"; // ⚠️ CONFIGURE PER DEPLOYMENT
+const char* NODE_NAME = "WaterQualityNode01"; //  CONFIGURE PER DEPLOYMENT
 const uint8_t FIRMWARE_VERSION = 1;
 
 // Global state variables
@@ -31,7 +31,7 @@ uint8_t messageSequence = 0;
 struct SensorData {
     float pH;
     float tds;           // Total dissolved solids (ppm)
-    float temperature;   // °C
+    float temperature;   // C
     uint32_t lastReadTime;
 } sensorData = {7.0, 0.0, 25.0, 0};
 
@@ -46,11 +46,11 @@ void setupHardware() {
     pinMode(PIN_TDS_SENSOR, INPUT);
     pinMode(PIN_TEMP_SENSOR, INPUT);
     
-    Serial.println("✓ Water quality sensors initialized");
+    Serial.println(" Water quality sensors initialized");
 }
 
 void enterFailSafeMode() {
-    Serial.println("⚠️ FAIL-SAFE: Continuing sensor readings (read-only, safe)");
+    Serial.println(" FAIL-SAFE: Continuing sensor readings (read-only, safe)");
     // Sensors can continue operating safely
 }
 
@@ -109,7 +109,7 @@ void sendSensorData() {
     // Send as STATUS message (commandId=0 means unsolicited sensor reading)
     sendStatus(0, 0, sensorDataPayload, 6);
     
-    Serial.printf("📊 Sensors: pH=%.2f, TDS=%.0f ppm, Temp=%.1f°C\n", 
+    Serial.printf(" Sensors: pH=%.2f, TDS=%.0f ppm, Temp=%.1fC\n", 
                  sensorData.pH, sensorData.tds, sensorData.temperature);
 }
 
@@ -134,16 +134,16 @@ void setup() {
     delay(1000);
     
     Serial.println("\n\n");
-    Serial.println("╔═══════════════════════════════════════════════════════════╗");
-    Serial.println("║      WATER QUALITY NODE - Aquarium Management             ║");
-    Serial.println("╚═══════════════════════════════════════════════════════════╝");
+    Serial.println("");
+    Serial.println("      WATER QUALITY NODE - Aquarium Management             ");
+    Serial.println("");
     Serial.printf("Tank ID: %d | Node: %s\n\n", NODE_TANK_ID, NODE_NAME);
     
     setupHardware();
     setupESPNow();
     
     currentState = NodeState::ANNOUNCING;
-    Serial.println("✓ Water quality node ready\n");
+    Serial.println(" Water quality node ready\n");
 }
 
 void loop() {

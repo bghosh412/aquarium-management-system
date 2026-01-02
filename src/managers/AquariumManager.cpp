@@ -45,7 +45,7 @@ bool AquariumManager::initialize() {
     _lastHealthCheck = millis();
     _lastWaterCheck = millis();
     
-    Serial.println("🎮 AquariumManager initialized");
+    Serial.println(" AquariumManager initialized");
     return true;
 }
 
@@ -81,7 +81,7 @@ void AquariumManager::update() {
 
 bool AquariumManager::addAquarium(Aquarium* aquarium) {
     if (!aquarium) {
-        Serial.println("❌ Cannot add null aquarium");
+        Serial.println(" Cannot add null aquarium");
         return false;
     }
     
@@ -89,12 +89,12 @@ bool AquariumManager::addAquarium(Aquarium* aquarium) {
     
     // Check for duplicate ID
     if (_aquariums.find(id) != _aquariums.end()) {
-        Serial.printf("❌ Aquarium with ID %d already exists\n", id);
+        Serial.printf(" Aquarium with ID %d already exists\n", id);
         return false;
     }
     
     _aquariums[id] = aquarium;
-    Serial.printf("✅ Added aquarium: %s (ID: %d)\n", 
+    Serial.printf(" Added aquarium: %s (ID: %d)\n", 
                   aquarium->getName().c_str(), id);
     return true;
 }
@@ -102,7 +102,7 @@ bool AquariumManager::addAquarium(Aquarium* aquarium) {
 bool AquariumManager::removeAquarium(uint8_t id) {
     auto it = _aquariums.find(id);
     if (it == _aquariums.end()) {
-        Serial.printf("❌ Aquarium ID %d not found\n", id);
+        Serial.printf(" Aquarium ID %d not found\n", id);
         return false;
     }
     
@@ -118,7 +118,7 @@ bool AquariumManager::removeAquarium(uint8_t id) {
     delete aquarium;
     _aquariums.erase(it);
     
-    Serial.printf("✅ Removed aquarium ID: %d\n", id);
+    Serial.printf(" Removed aquarium ID: %d\n", id);
     return true;
 }
 
@@ -148,7 +148,7 @@ std::vector<Aquarium*> AquariumManager::getAllAquariums() const {
 void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& msg) {
     uint64_t macKey = _macToKey(mac);
     
-    Serial.printf("📢 ANNOUNCE from %02X:%02X:%02X:%02X:%02X:%02X\n",
+    Serial.printf(" ANNOUNCE from %02X:%02X:%02X:%02X:%02X:%02X\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     Serial.printf("   - Type: %d, Tank: %d, FW: v%d\n",
                   (int)msg.header.nodeType, msg.header.tankId, msg.firmwareVersion);
@@ -163,7 +163,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
     
     // Check if device is unmapped (tankId == 0)
     if (msg.header.tankId == 0) {
-        Serial.println("   - ⚠️  Unmapped device (tankId=0), storing for provisioning");
+        Serial.println("   -   Unmapped device (tankId=0), storing for provisioning");
         
         // Load unmapped devices JSON
         File file = LittleFS.open("/config/unmapped-devices.json", "r");
@@ -223,7 +223,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
             
             doc["metadata"]["totalDiscovered"] = doc["metadata"]["totalDiscovered"].as<int>() + 1;
             
-            Serial.printf("   - ✅ Added to unmapped devices: %s (%s)\n", macStr, typeStr);
+            Serial.printf("   -  Added to unmapped devices: %s (%s)\n", macStr, typeStr);
         }
         
         // Save back to file
@@ -241,7 +241,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
     // Check if aquarium exists
     Aquarium* aquarium = getAquarium(msg.header.tankId);
     if (!aquarium) {
-        Serial.printf("   - ⚠️  Aquarium ID %d not found, rejecting device\n", msg.header.tankId);
+        Serial.printf("   -   Aquarium ID %d not found, rejecting device\n", msg.header.tankId);
         _sendAck(mac, msg.header.tankId, false);
         _stats.totalMessagesReceived++;
         _stats.totalErrors++;
@@ -252,7 +252,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
     const char* deviceName = "UnknownDevice";  // TODO: Load from devices.json by MAC
     Device* device = _createDevice(mac, msg.header.nodeType, deviceName);
     if (!device) {
-        Serial.println("   - ❌ Failed to create device");
+        Serial.println("   -  Failed to create device");
         _sendAck(mac, msg.header.tankId, false);
         _stats.totalMessagesReceived++;
         _stats.totalErrors++;
@@ -264,7 +264,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
     
     // Add to aquarium
     if (!aquarium->addDevice(device)) {
-        Serial.println("   - ❌ Failed to add device to aquarium");
+        Serial.println("   -  Failed to add device to aquarium");
         delete device;
         _sendAck(mac, msg.header.tankId, false);
         _stats.totalMessagesReceived++;
@@ -283,7 +283,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
         _wsCallback("deviceDiscovered", device->toJson());
     }
     
-    Serial.printf("   - ✅ Device registered successfully\n");
+    Serial.printf("   -  Device registered successfully\n");
     _stats.totalMessagesReceived++;
 }
 
@@ -383,7 +383,7 @@ void AquariumManager::updateSchedules() {
                 device->sendCommand(cmdData, cmdLen);
                 schedule->markExecuted(now);
                 
-                Serial.printf("📅 Executed schedule: %s for device %s\n",
+                Serial.printf(" Executed schedule: %s for device %s\n",
                              schedule->getName().c_str(),
                              device->getName().c_str());
                 
@@ -423,7 +423,7 @@ void AquariumManager::checkDeviceHealth() {
         
         if (device->getStatus() == Device::Status::ONLINE) {
             if (device->hasHeartbeatTimedOut(HEARTBEAT_TIMEOUT_MS)) {
-                Serial.printf("⚠️  Device %s heartbeat timeout!\n", 
+                Serial.printf("  Device %s heartbeat timeout!\n", 
                              device->getName().c_str());
                 
                 // Trigger fail-safe
@@ -447,7 +447,7 @@ void AquariumManager::checkWaterParameters() {
         
         // Check temperature
         if (!aquarium->isTemperatureSafe()) {
-            Serial.printf("⚠️  Aquarium %s temperature unsafe: %.1f°C\n",
+            Serial.printf("  Aquarium %s temperature unsafe: %.1fC\n",
                          aquarium->getName().c_str(),
                          aquarium->getCurrentTemperature());
             
@@ -458,7 +458,7 @@ void AquariumManager::checkWaterParameters() {
         
         // Check pH
         if (!aquarium->isPhSafe()) {
-            Serial.printf("⚠️  Aquarium %s pH unsafe: %.2f\n",
+            Serial.printf("  Aquarium %s pH unsafe: %.2f\n",
                          aquarium->getName().c_str(),
                          aquarium->getCurrentPh());
             
@@ -470,7 +470,7 @@ void AquariumManager::checkWaterParameters() {
 }
 
 void AquariumManager::emergencyShutdown(const String& reason) {
-    Serial.println("🚨 EMERGENCY SHUTDOWN: " + reason);
+    Serial.println(" EMERGENCY SHUTDOWN: " + reason);
     
     // Trigger fail-safe on all devices
     for (auto& pair : _globalDeviceRegistry) {
@@ -517,13 +517,13 @@ uint8_t AquariumManager::getSystemHealth() const {
 
 bool AquariumManager::loadConfiguration(const String& filename) {
     // TODO: Implement JSON configuration loading
-    Serial.println("⚠️  Configuration loading not yet implemented");
+    Serial.println("  Configuration loading not yet implemented");
     return false;
 }
 
 bool AquariumManager::saveConfiguration(const String& filename) {
     // TODO: Implement JSON configuration saving
-    Serial.println("⚠️  Configuration saving not yet implemented");
+    Serial.println("  Configuration saving not yet implemented");
     return false;
 }
 
@@ -596,13 +596,13 @@ Device* AquariumManager::_createDevice(const uint8_t* mac, NodeType type, const 
             // return new RepeaterDevice(mac, name);
             break;
         default:
-            Serial.printf("❌ Unknown device type: %d\n", (int)type);
+            Serial.printf(" Unknown device type: %d\n", (int)type);
             return nullptr;
     }
     
     // Temporary: Create a basic device instance
     // This will be replaced when concrete device classes are implemented
-    Serial.printf("⚠️  Device type %d not yet implemented, skipping\n", (int)type);
+    Serial.printf("  Device type %d not yet implemented, skipping\n", (int)type);
     return nullptr;
 }
 
@@ -622,7 +622,7 @@ void AquariumManager::_sendAck(const uint8_t* mac, uint8_t tankId, bool accepted
         Serial.println("   - ACK sent successfully");
         _stats.totalMessagesSent++;
     } else {
-        Serial.printf("   - ❌ ACK send failed: %d\n", result);
+        Serial.printf("   -  ACK send failed: %d\n", result);
         _stats.totalErrors++;
     }
 }

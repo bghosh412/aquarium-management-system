@@ -34,6 +34,7 @@ struct NodeConfig {
 NodeConfig config;
 
 // Global state variables
+bool isConnectedToHub = false;  // Flag to track hub connection
 uint32_t lastHeartbeatSent = 0;
 uint8_t messageSequence = 0;
 
@@ -55,9 +56,9 @@ struct LightingState {
 // ============================================================================
 
 void loadConfiguration() {
-    // Set defaults
-    config.tankId = 1;
-    config.nodeName = "LightingNode01";
+    // Set defaults (TEMPORARY: hardcoded to 0 for unmapped state)
+    config.tankId = 0;  // Changed from 1 to 0 - unmapped device
+    config.nodeName = "UnmappedLight";
     config.firmwareVersion = 1;
     config.espnowChannel = 6;
     config.debugSerial = true;
@@ -69,22 +70,22 @@ void loadConfiguration() {
     
     // Load from filesystem if available
     if (!LittleFS.begin()) {
-        Serial.println("⚠️  LittleFS mount failed, using defaults");
+        Serial.println("[WARN]  LittleFS mount failed, using defaults");
         return;
     }
     
     if (!LittleFS.exists("/node_config.txt")) {
-        Serial.println("⚠️  Config file not found, using defaults");
+        Serial.println("[WARN]  Config file not found, using defaults");
         return;
     }
     
     File file = LittleFS.open("/node_config.txt", "r");
     if (!file) {
-        Serial.println("❌ Failed to open config file");
+        Serial.println("[ERROR] Failed to open config file");
         return;
     }
     
-    Serial.println("📄 Loading configuration...");
+    Serial.println("[FILE] Loading configuration...");
     
     while (file.available()) {
         String line = file.readStringUntil('\n');
@@ -118,7 +119,8 @@ void loadConfiguration() {
         } else if (key == "DEBUG_SERIAL") {
             config.debugSerial = (value == "true");
         } else if (key == "DEBUG_ESPNOW") {
-            config.debugESPNOW = (value == "true");
+            // Force ESP-NOW debug ON regardless of config file
+            config.debugESPNOW = true;
         } else if (key == "DEBUG_HARDWARE") {
             config.debugHardware = (value == "true");
         } else if (key == "ANNOUNCE_INTERVAL_MS") {
@@ -132,7 +134,7 @@ void loadConfiguration() {
     
     file.close();
     
-    Serial.println("✅ Configuration loaded");
+    Serial.println("[OK] Configuration loaded");
     Serial.printf("   - Node: %s (Tank %d)\n", config.nodeName.c_str(), config.tankId);
     Serial.printf("   - FW Version: v%d\n", config.firmwareVersion);
     Serial.printf("   - ESP-NOW Channel: %d\n", config.espnowChannel);
@@ -157,13 +159,13 @@ void setupHardware() {
     analogWrite(PIN_LED_RED, 0);
     
     if (config.debugSerial) {
-        Serial.println("✓ Lighting hardware initialized");
+        Serial.println("[OK] Lighting hardware initialized");
     }
 }
 
 void enterFailSafeMode() {
     if (config.debugSerial) {
-        Serial.println("⚠️ FAIL-SAFE: Holding last lighting state (safe for lights)");
+        Serial.println("[WARN] FAIL-SAFE: Holding last lighting state (safe for lights)");
     }
     // Lights can safely maintain last state or gradually dim
     // Optionally: slowly fade to off
@@ -172,17 +174,17 @@ void enterFailSafeMode() {
 
 void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
     if (config.debugESPNOW) {
-        Serial.println("╔════════════════════════════════════════════════════════╗");
-        Serial.printf("║ 📥 COMMAND received (%d bytes)\n", len);
-        Serial.printf("║ From: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        Serial.println("+========================================================+");
+        Serial.printf("| [RX] COMMAND received (%d bytes)\n", len);
+        Serial.printf("| From: %02X:%02X:%02X:%02X:%02X:%02X\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
     
     // Parse as raw command data (already reassembled by ESPNowManager)
     if (len < 1) {
         if (config.debugESPNOW) {
-            Serial.println("║ ❌ Command too short");
-            Serial.println("╚════════════════════════════════════════════════════════╝");
+            Serial.println("| [ERROR] Command too short");
+            Serial.println("+========================================================+");
         }
         return;
     }
@@ -190,7 +192,7 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
     uint8_t commandType = data[0];
     
     if (config.debugESPNOW) {
-        Serial.printf("║ Command Type: %d\n", commandType);
+        Serial.printf("| Command Type: %d\n", commandType);
     }
     
     bool success = true;
@@ -202,7 +204,7 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
             lightState.redLevel = 0;
             lightState.enabled = false;
             if (config.debugESPNOW) {
-                Serial.println("║ ✓ All channels OFF");
+                Serial.println("| [OK] All channels OFF");
             }
             break;
             
@@ -220,7 +222,7 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
             }
             lightState.enabled = true;
             if (config.debugESPNOW) {
-                Serial.printf("║ ✓ All channels ON: W=%d B=%d R=%d\n",
+                Serial.printf("| [OK] All channels ON: W=%d B=%d R=%d\n",
                               lightState.whiteLevel, lightState.blueLevel, lightState.redLevel);
             }
             break;
@@ -228,7 +230,7 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
         case 10: // Channel 1 (White) OFF
             lightState.whiteLevel = 0;
             if (config.debugESPNOW) {
-                Serial.println("║ ✓ Channel 1 (White) OFF");
+                Serial.println("| [OK] Channel 1 (White) OFF");
             }
             break;
             
@@ -239,14 +241,14 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
                 lightState.whiteLevel = 255;  // Default to max
             }
             if (config.debugESPNOW) {
-                Serial.printf("║ ✓ Channel 1 (White) ON: %d\n", lightState.whiteLevel);
+                Serial.printf("| [OK] Channel 1 (White) ON: %d\n", lightState.whiteLevel);
             }
             break;
             
         case 20: // Channel 2 (Blue) OFF
             lightState.blueLevel = 0;
             if (config.debugESPNOW) {
-                Serial.println("║ ✓ Channel 2 (Blue) OFF");
+                Serial.println("| [OK] Channel 2 (Blue) OFF");
             }
             break;
             
@@ -257,14 +259,14 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
                 lightState.blueLevel = 255;  // Default to max
             }
             if (config.debugESPNOW) {
-                Serial.printf("║ ✓ Channel 2 (Blue) ON: %d\n", lightState.blueLevel);
+                Serial.printf("| [OK] Channel 2 (Blue) ON: %d\n", lightState.blueLevel);
             }
             break;
             
         case 30: // Channel 3 (Red) OFF
             lightState.redLevel = 0;
             if (config.debugESPNOW) {
-                Serial.println("║ ✓ Channel 3 (Red) OFF");
+                Serial.println("| [OK] Channel 3 (Red) OFF");
             }
             break;
             
@@ -275,20 +277,20 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
                 lightState.redLevel = 255;  // Default to max
             }
             if (config.debugESPNOW) {
-                Serial.printf("║ ✓ Channel 3 (Red) ON: %d\n", lightState.redLevel);
+                Serial.printf("| [OK] Channel 3 (Red) ON: %d\n", lightState.redLevel);
             }
             break;
             
         default:
             if (config.debugESPNOW) {
-                Serial.printf("║ ❌ Unknown command type: %d\n", commandType);
+                Serial.printf("| [ERROR] Unknown command type: %d\n", commandType);
             }
             success = false;
             break;
     }
     
     if (config.debugESPNOW) {
-        Serial.println("╚════════════════════════════════════════════════════════╝");
+        Serial.println("+========================================================+");
     }
     
     // Send STATUS acknowledgment (placeholder structure for future use)
@@ -314,7 +316,7 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len) {
     ESPNowManager::getInstance().send(mac, (uint8_t*)&status, sizeof(status));
     
     if (config.debugESPNOW) {
-        Serial.printf("📤 STATUS sent (code=%d)\n\n", status.statusCode);
+        Serial.printf("[TX] STATUS sent (code=%d)\n\n", status.statusCode);
     }
 }
 
@@ -335,7 +337,7 @@ void updateHardware() {
         static unsigned long lastDebug = 0;
         if (millis() - lastDebug > 5000) {
             lastDebug = millis();
-            Serial.printf("💡 Light State: %s | W=%d B=%d R=%d\n",
+            Serial.printf("[LIGHT] Light State: %s | W=%d B=%d R=%d\n",
                           lightState.enabled ? "ON" : "OFF",
                           lightState.whiteLevel, lightState.blueLevel, lightState.redLevel);
         }
@@ -348,30 +350,34 @@ void updateHardware() {
 
 void onAckReceived(const uint8_t* mac, const AckMessage& msg) {
     if (config.debugESPNOW) {
-        Serial.println("╔════════════════════════════════════════════════════════╗");
-        Serial.printf("║ ✅ ACK received from %02X:%02X:%02X:%02X:%02X:%02X\n",
+        Serial.println("+========================================================+");
+        Serial.printf("| [ACK] ACK received from %02X:%02X:%02X:%02X:%02X:%02X\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        Serial.printf("║ Assigned Node ID: %d\n", msg.assignedNodeId);
-        Serial.printf("║ Accepted: %s\n", msg.accepted ? "YES" : "NO");
-        Serial.println("╚════════════════════════════════════════════════════════╝");
+        Serial.printf("| Assigned Node ID: %d\n", msg.assignedNodeId);
+        Serial.printf("| Accepted: %s\n", msg.accepted ? "YES" : "NO");
+        Serial.println("+========================================================+");
     }
     
-    // Add hub as peer
+    // Add hub as peer (addPeer now checks if already exists)
     ESPNowManager::getInstance().addPeer(mac);
     
-    if (config.debugSerial) {
-        Serial.println("✅ Connected to hub - ready for commands\n");
+    // Mark as connected to hub to stop announcement flooding
+    if (msg.accepted) {
+        isConnectedToHub = true;
+        if (config.debugSerial) {
+            Serial.println("[OK] Connected to hub - ready for commands\n");
+        }
     }
 }
 
 void onConfigReceived(const uint8_t* mac, const ConfigMessage& msg) {
     if (config.debugESPNOW) {
-        Serial.println("╔════════════════════════════════════════════════════════╗");
-        Serial.printf("║ ⚙️  CONFIG received from %02X:%02X:%02X:%02X:%02X:%02X\n",
+        Serial.println("+========================================================+");
+        Serial.printf("| [CFG]  CONFIG received from %02X:%02X:%02X:%02X:%02X:%02X\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        Serial.printf("║ Assigned Tank ID: %d\n", msg.header.tankId);
-        Serial.printf("║ Device Name: %s\n", msg.deviceName);
-        Serial.println("╚════════════════════════════════════════════════════════╝");
+        Serial.printf("| Assigned Tank ID: %d\n", msg.header.tankId);
+        Serial.printf("| Device Name: %s\n", msg.deviceName);
+        Serial.println("+========================================================+");
     }
     
     // Update runtime configuration
@@ -395,9 +401,9 @@ void onConfigReceived(const uint8_t* mac, const ConfigMessage& msg) {
         file.printf("CONNECTION_TIMEOUT_MS=%u\n", config.connectionTimeoutMs);
         file.close();
         
-        Serial.println("✅ Configuration saved to /node_config.txt");
+        Serial.println("[OK] Configuration saved to /node_config.txt");
     } else {
-        Serial.println("❌ Failed to save configuration to file");
+        Serial.println("[ERROR] Failed to save configuration to file");
     }
     
     // Send STATUS acknowledgment
@@ -412,8 +418,42 @@ void onConfigReceived(const uint8_t* mac, const ConfigMessage& msg) {
     
     ESPNowManager::getInstance().send(mac, (uint8_t*)&statusMsg, sizeof(statusMsg));
     
-    Serial.printf("✅ Node provisioned: Tank %d, Name '%s'\n", config.tankId, config.nodeName.c_str());
-    Serial.println("🔄 Restarting in 2 seconds to apply configuration...\n");
+    Serial.printf("[OK] Node provisioned: Tank %d, Name '%s'\n", config.tankId, config.nodeName.c_str());
+    Serial.println("[RST] Restarting in 2 seconds to apply configuration...\n");
+    
+    delay(2000);
+    ESP.restart();
+}
+
+void onUnmapReceived(const uint8_t* mac, const UnmapMessage& msg) {
+    if (config.debugESPNOW) {
+        Serial.println("+========================================================+");
+        Serial.printf("| [UNMAP] UNMAP received from %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        Serial.printf("| Reason: %d\n", msg.reason);
+        Serial.println("+========================================================+");
+    }
+    
+    // Reset to discovery mode
+    config.tankId = 0;  // Unmapped
+    config.nodeName = "UnmappedLight";
+    isConnectedToHub = false;
+    
+    // Delete configuration file to force discovery mode on restart
+    if (LittleFS.exists("/node_config.txt")) {
+        LittleFS.remove("/node_config.txt");
+        Serial.println("[OK] Configuration file deleted");
+    }
+    
+    // Turn off all lights (safe state)
+    lightState.whiteLevel = 0;
+    lightState.blueLevel = 0;
+    lightState.redLevel = 0;
+    lightState.enabled = false;
+    updateHardware();
+    
+    Serial.println("[RST] Device unmapped - restarting in 2 seconds...\n");
+    Serial.println("[INFO] Device will enter discovery mode and start announcing\n");
     
     delay(2000);
     ESP.restart();
@@ -434,7 +474,7 @@ void sendHeartbeat() {
     ESPNowManager::getInstance().send(broadcast, (uint8_t*)&msg, sizeof(msg));
     
     if (config.debugESPNOW) {
-        Serial.printf("💓 Heartbeat sent (uptime: %dmin)\n", msg.uptimeMinutes);
+        Serial.printf("[HB] Heartbeat sent (uptime: %dmin)\n", msg.uptimeMinutes);
     }
 }
 
@@ -444,32 +484,51 @@ void sendHeartbeat() {
 
 void setup() {
     Serial.begin(115200);
-    delay(1000);
+    delay(2000);  // Longer delay to ensure serial is ready
+    
+    Serial.println("\n\n\n");
+    Serial.println("================================");
+    Serial.println("ESP8266 BOOT - Serial Working!");
+    Serial.println("================================");
+    Serial.flush();
     
     Serial.println("\n\n");
-    Serial.println("╔═══════════════════════════════════════════════════════════╗");
-    Serial.println("║          LIGHTING NODE - Aquarium Management              ║");
-    Serial.println("╚═══════════════════════════════════════════════════════════╝");
+    Serial.println("+===========================================================+");
+    Serial.println("|          LIGHTING NODE - Aquarium Management              |");
+    Serial.println("+===========================================================+");
     
     // Load configuration from filesystem
+    Serial.println("[1] Loading configuration...");
+    Serial.flush();
     loadConfiguration();
+    Serial.println("[1] Configuration loaded OK");
+    Serial.flush();
     
     Serial.printf("Tank ID: %d | Node: %s | FW: v%d\n\n", 
                   config.tankId, config.nodeName.c_str(), config.firmwareVersion);
     
     // Initialize hardware
+    Serial.println("[2] Initializing hardware...");
+    Serial.flush();
     setupHardware();
+    Serial.println("[2] Hardware initialized OK");
+    Serial.flush();
     
     // Initialize ESPNowManager
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.println("📡 Initializing ESPNowManager...");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("[3] Starting ESP-NOW initialization...");
+    Serial.flush();
+    Serial.println("-----------------------------------------");
+    Serial.println("[TX] Initializing ESPNowManager...");
+    Serial.println("-----------------------------------------");
+    Serial.flush();
     
     bool success = ESPNowManager::getInstance().begin(config.espnowChannel, false);
+    Serial.printf("[3] ESP-NOW init returned: %s\n", success ? "SUCCESS" : "FAILED");
+    Serial.flush();
     
     if (!success) {
-        Serial.println("❌ ESPNowManager initialization failed!");
-        Serial.println("⚠️  Entering fail-safe mode");
+        Serial.println("[ERROR] ESPNowManager initialization failed!");
+        Serial.println("[WARN]  Entering fail-safe mode");
         enterFailSafeMode();
         while(1) delay(1000);
     }
@@ -478,14 +537,17 @@ void setup() {
     ESPNowManager::getInstance().onAckReceived(onAckReceived);
     ESPNowManager::getInstance().onCommandReceived(onCommandReceived);
     ESPNowManager::getInstance().onConfigReceived(onConfigReceived);
+    ESPNowManager::getInstance().onUnmapReceived(onUnmapReceived);
     
-    Serial.println("✅ ESPNowManager ready");
+    Serial.println("[OK] ESPNowManager ready");
     Serial.printf("   - Channel: %d\n", config.espnowChannel);
     Serial.printf("   - Mode: NODE (std::queue for ESP8266)\n");
     Serial.printf("   - Debug ESP-NOW: %s\n", config.debugESPNOW ? "ON" : "OFF");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("-----------------------------------------");
     
     // Send initial ANNOUNCE (unmapped if tankId=0)
+    Serial.println("[4] Preparing to send initial ANNOUNCE...");
+    Serial.flush();
     AnnounceMessage announce = {};
     announce.header.type = MessageType::ANNOUNCE;
     announce.header.tankId = config.tankId;  // 0 = unmapped, >0 = provisioned
@@ -499,13 +561,13 @@ void setup() {
     ESPNowManager::getInstance().send(broadcast, (uint8_t*)&announce, sizeof(announce));
     
     if (config.debugSerial) {
-        Serial.printf("📡 ANNOUNCE sent (tankId=%d, FW=v%d)\n", config.tankId, config.firmwareVersion);
+        Serial.printf("[TX] ANNOUNCE sent (tankId=%d, FW=v%d)\n", config.tankId, config.firmwareVersion);
         if (config.tankId == 0) {
-            Serial.println("⚠️  Node is UNMAPPED - waiting for provisioning from hub");
+            Serial.println("[WARN]  Node is UNMAPPED - waiting for provisioning from hub");
         }
     }
     
-    Serial.println("\n✓ Lighting node ready\n");
+    Serial.println("\n[OK] Lighting node ready\n");
     lastHeartbeatSent = millis();
 }
 
@@ -518,8 +580,38 @@ void loop() {
     
     // Send periodic heartbeat
     if (millis() - lastHeartbeatSent >= config.heartbeatIntervalMs) {
-        sendHeartbeat();
         lastHeartbeatSent = millis();
+        sendHeartbeat();
+    }
+    
+    // Print heartbeat and memory every 60 seconds
+    static unsigned long lastMemoryPrint = 0;
+    if (millis() - lastMemoryPrint >= 60000) {
+        lastMemoryPrint = millis();
+        Serial.printf("[HEARTBEAT] Free heap: %u bytes\n", ESP.getFreeHeap());
+    }
+    
+    // Send periodic ANNOUNCE for node discovery (every 5 seconds)
+    // Stop announcing once connected to hub
+    static unsigned long lastAnnounce = 0;
+    if (!isConnectedToHub && (millis() - lastAnnounce >= config.announceIntervalMs)) {
+        lastAnnounce = millis();
+        
+        AnnounceMessage announce = {};
+        announce.header.type = MessageType::ANNOUNCE;
+        announce.header.tankId = config.tankId;
+        announce.header.nodeType = NodeType::LIGHT;
+        announce.header.timestamp = millis();
+        announce.header.sequenceNum = messageSequence++;
+        announce.firmwareVersion = config.firmwareVersion;
+        announce.capabilities = 0;
+        
+        uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        ESPNowManager::getInstance().send(broadcast, (uint8_t*)&announce, sizeof(announce));
+        
+        if (config.debugESPNOW) {
+            Serial.printf("[TX] ANNOUNCE sent (tankId=%d, FW=v%d)\n", config.tankId, config.firmwareVersion);
+        }
     }
     
     // Print statistics periodically
@@ -528,8 +620,8 @@ void loop() {
         if (millis() - lastStatsTime > 60000) {  // Every 60 seconds
             lastStatsTime = millis();
             auto stats = ESPNowManager::getInstance().getStatistics();
-            Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            Serial.println("📊 ESP-NOW Statistics (Last 60s):");
+            Serial.println("\n-----------------------------------------");
+            Serial.println("[STATS] ESP-NOW Statistics (Last 60s):");
             Serial.printf("   Messages: %u sent / %u received\n", 
                           stats.messagesSent, stats.messagesReceived);
             Serial.printf("   Fragments: %u sent / %u received\n",
@@ -537,7 +629,7 @@ void loop() {
             Serial.printf("   Errors: %u send failures / %u reassembly timeouts\n",
                           stats.sendFailures, stats.reassemblyTimeouts);
             Serial.printf("   Duplicates ignored: %u\n", stats.duplicatesIgnored);
-            Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            Serial.println("-----------------------------------------\n");
         }
     }
     

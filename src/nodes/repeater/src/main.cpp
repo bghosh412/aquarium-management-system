@@ -73,12 +73,12 @@ void onDataReceived(uint8_t *senderMAC, uint8_t *data, uint8_t len) {
         // If message is from hub, broadcast it (for nodes to receive)
         if (memcmp(senderMAC, hubMAC, 6) == 0) {
             esp_now_send(NULL, data, len);  // Broadcast
-            Serial.println("[FWD] Hub → Nodes (broadcast)");
+            Serial.println("[FWD] Hub  Nodes (broadcast)");
         }
         // If message is from node, send to hub
         else {
             esp_now_send(hubMAC, data, len);
-            Serial.println("[FWD] Node → Hub");
+            Serial.println("[FWD] Node  Hub");
         }
         
         messagesForwarded++;

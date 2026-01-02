@@ -8,30 +8,64 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDevices();
     loadTankFilter();
     
-    // Request device list from hub
-    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
-        sendCommand({ type: 'getAllDevices' });
-    }
+    // Refresh device list every 5 seconds
+    setInterval(loadDevices, 5000);
 });
 
 function loadDevices() {
-    // Load from localStorage
-    allDevices = JSON.parse(localStorage.getItem('devices') || '[]');
-    filteredDevices = [...allDevices];
-    updateStatistics();
-    renderDevices();
+    // Load from backend API
+    fetch('/api/devices')
+        .then(response => response.json())
+        .then(data => {
+            if (data.devices && Array.isArray(data.devices)) {
+                allDevices = data.devices;
+                // Store in localStorage as backup
+                localStorage.setItem('devices', JSON.stringify(allDevices));
+                filteredDevices = [...allDevices];
+                updateStatistics();
+                renderDevices();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading devices:', error);
+            // Fallback to localStorage
+            allDevices = JSON.parse(localStorage.getItem('devices') || '[]');
+            filteredDevices = [...allDevices];
+            updateStatistics();
+            renderDevices();
+        });
 }
 
 function loadTankFilter() {
-    const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
-    const tankFilter = document.getElementById('tankFilter');
-    
-    aquariums.forEach(tank => {
-        const option = document.createElement('option');
-        option.value = tank.tankId;
-        option.textContent = `Tank ${tank.tankId} - ${tank.name}`;
-        tankFilter.appendChild(option);
-    });
+    // Load from backend API
+    fetch('/api/aquariums')
+        .then(response => response.json())
+        .then(data => {
+            if (data.aquariums && Array.isArray(data.aquariums)) {
+                const tankFilter = document.getElementById('tankFilter');
+                tankFilter.innerHTML = '<option value="all">All Tanks</option>';
+                
+                data.aquariums.forEach(tank => {
+                    const option = document.createElement('option');
+                    option.value = tank.tankId;
+                    option.textContent = `Tank ${tank.tankId} - ${tank.name}`;
+                    tankFilter.appendChild(option);
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Error loading tanks:', error);
+            // Fallback to localStorage
+            const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
+            const tankFilter = document.getElementById('tankFilter');
+            
+            aquariums.forEach(tank => {
+                const option = document.createElement('option');
+                option.value = tank.tankId;
+                option.textContent = `Tank ${tank.tankId} - ${tank.name}`;
+                tankFilter.appendChild(option);
+            });
+        });
 }
 
 function filterDevices() {
@@ -128,6 +162,9 @@ function renderDevices() {
                     </button>
                     <button class="btn btn-secondary" style="flex: 1;" onclick="setupDevice('${device.mac}')">
                         ⚙️ Setup
+                    </button>
+                    <button class="btn btn-danger" style="flex: 1;" onclick="unmapDevice('${device.mac}', '${device.name}')">
+                        🗑️ Unmap
                     </button>
                 </div>
             </div>
@@ -265,6 +302,43 @@ function viewDevice(mac) {
 function setupDevice(mac) {
     localStorage.setItem('selectedDeviceMac', mac);
     window.location.href = `device-setup.html?mac=${mac}`;
+}
+
+function unmapDevice(mac, name) {
+    if (!confirm(`Are you sure you want to unmap "${name}"?\n\nThis will:\n• Remove device from hub registry\n• Reset device to discovery mode\n• Device will start announcing again\n\nThis action cannot be undone.`)) {
+        return;
+    }
+    
+    showNotification('Unmapping device...', 'info');
+    
+    fetch('/api/unmap-device', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ mac: mac })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showNotification(`Device "${name}" unmapped successfully!`, 'success');
+            
+            // Remove from local list
+            allDevices = allDevices.filter(d => d.mac !== mac);
+            localStorage.setItem('devices', JSON.stringify(allDevices));
+            
+            // Reload device list
+            setTimeout(() => {
+                loadDevices();
+            }, 500);
+        } else {
+            showNotification('Error unmapping device: ' + (data.error || 'Unknown error'), 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error unmapping device:', error);
+        showNotification('Failed to unmap device. Check console for details.', 'error');
+    });
 }
 
 function showNotification(message, type) {

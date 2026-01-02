@@ -8,9 +8,9 @@
 // ============================================================================
 
 // Node configuration
-const uint8_t NODE_TANK_ID = 1;              // ⚠️ CONFIGURE PER DEPLOYMENT
+const uint8_t NODE_TANK_ID = 1;              //  CONFIGURE PER DEPLOYMENT
 const NodeType NODE_TYPE = NodeType::HEATER;
-const char* NODE_NAME = "HeaterNode01";       // ⚠️ CONFIGURE PER DEPLOYMENT
+const char* NODE_NAME = "HeaterNode01";       //  CONFIGURE PER DEPLOYMENT
 const uint8_t FIRMWARE_VERSION = 1;
 
 // Global state variables
@@ -45,11 +45,11 @@ void setupHardware() {
     // TODO: Initialize temperature sensor
     // oneWire.begin(PIN_TEMP_SENSOR);
     
-    Serial.println("✓ Heater hardware initialized - HEATER OFF");
+    Serial.println(" Heater hardware initialized - HEATER OFF");
 }
 
 void enterFailSafeMode() {
-    Serial.println("⚠️ FAIL-SAFE: TURNING OFF HEATER");
+    Serial.println(" FAIL-SAFE: TURNING OFF HEATER");
     digitalWrite(PIN_HEATER_RELAY, LOW);
     heaterState.heaterOn = false;
     heaterState.autoMode = false;
@@ -64,7 +64,7 @@ void handleCommand(const CommandMessage* msg) {
                 float temp = *((float*)msg->commandData);
                 if (temp >= 18.0 && temp <= 32.0) {  // Reasonable aquarium range
                     heaterState.targetTemp = temp;
-                    Serial.printf("  Target temp set to: %.1f°C\n", temp);
+                    Serial.printf("  Target temp set to: %.1fC\n", temp);
                 }
             }
             break;
@@ -117,16 +117,16 @@ void setup() {
     delay(1000);
     
     Serial.println("\n\n");
-    Serial.println("╔═══════════════════════════════════════════════════════════╗");
-    Serial.println("║          HEATER NODE - Aquarium Management                ║");
-    Serial.println("╚═══════════════════════════════════════════════════════════╝");
+    Serial.println("");
+    Serial.println("          HEATER NODE - Aquarium Management                ");
+    Serial.println("");
     Serial.printf("Tank ID: %d | Node: %s\n\n", NODE_TANK_ID, NODE_NAME);
     
     setupHardware();
     setupESPNow();
     
     currentState = NodeState::ANNOUNCING;
-    Serial.println("✓ Heater node ready\n");
+    Serial.println(" Heater node ready\n");
 }
 
 void loop() {

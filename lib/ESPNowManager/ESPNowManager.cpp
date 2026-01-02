@@ -23,6 +23,7 @@ ESPNowManager::ESPNowManager()
     , _announceCallback(nullptr)
     , _ackCallback(nullptr)
     , _configCallback(nullptr)
+    , _unmapCallback(nullptr)
 {
     s_instance = this;
     memset(&_reassembly, 0, sizeof(_reassembly));
@@ -43,27 +44,48 @@ ESPNowManager::~ESPNowManager() {
 
 bool ESPNowManager::begin(uint8_t channel, bool isHub) {
     if (_initialized) {
-        Serial.println("⚠️  ESPNowManager already initialized");
+        Serial.println("[WARN]  ESPNowManager already initialized");
         return true;
     }
     
     _channel = channel;
     _isHub = isHub;
     
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.printf("🚀 ESPNowManager: Initializing as %s\n", isHub ? "HUB" : "NODE");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("-----------------------------------------");
+    Serial.printf(" ESPNowManager: Initializing as %s\n", isHub ? "HUB" : "NODE");
+    Serial.println("-----------------------------------------");
+    
+    // CRITICAL: Set WiFi mode before ESP-NOW init
+    // ESP-NOW requires WiFi to be in STA or AP_STA mode
+    // Hub: WiFi should already be initialized by WiFiManager (WIFI_STA or WIFI_AP_STA)
+    // Nodes: Need to explicitly set WIFI_STA mode
+    if (!isHub) {
+        WiFi.mode(WIFI_STA);
+        WiFi.disconnect();  // Disconnect from any AP
+        Serial.println("[OK] WiFi mode set to STA");
+    } else {
+        // Hub: Verify WiFi is already initialized
+#ifdef ESP32
+        wifi_mode_t currentMode = WiFi.getMode();
+        Serial.printf("[OK] WiFi already initialized (mode: %s)\n",
+                     currentMode == WIFI_STA ? "STA" : 
+                     currentMode == WIFI_AP ? "AP" : 
+                     currentMode == WIFI_AP_STA ? "AP_STA" : "OFF");
+#else
+        Serial.println("[OK] WiFi already initialized");
+#endif
+    }
     
     // Create RX queue
 #ifdef ESP32
     _rxQueue = xQueueCreate(ESPNOW_RX_QUEUE_SIZE, sizeof(RxQueueEntry));
     if (!_rxQueue) {
-        Serial.println("❌ Failed to create RX queue");
+        Serial.println("[ERR] Failed to create RX queue");
         return false;
     }
-    Serial.printf("✅ RX Queue created (%d entries)\n", ESPNOW_RX_QUEUE_SIZE);
+    Serial.printf("[OK] RX Queue created (%d entries)\n", ESPNOW_RX_QUEUE_SIZE);
 #else
-    Serial.printf("✅ RX Queue initialized (ESP8266 std::queue)\n");
+    Serial.printf("[OK] RX Queue initialized (ESP8266 std::queue)\n");
 #endif
     
     // Set WiFi channel
@@ -72,7 +94,7 @@ bool ESPNowManager::begin(uint8_t channel, bool isHub) {
 #else
     esp_wifi_set_channel(_channel, WIFI_SECOND_CHAN_NONE);
 #endif
-    Serial.printf("✅ WiFi Channel: %d\n", _channel);
+    Serial.printf("[OK] WiFi Channel: %d\n", _channel);
     
     // Initialize ESP-NOW
 #ifdef ESP8266
@@ -80,10 +102,10 @@ bool ESPNowManager::begin(uint8_t channel, bool isHub) {
 #else
     if (esp_now_init() != ESP_OK) {
 #endif
-        Serial.println("❌ ESP-NOW init failed");
+        Serial.println("[ERR] ESP-NOW init failed");
         return false;
     }
-    Serial.println("✅ ESP-NOW initialized");
+    Serial.println("[OK] ESP-NOW initialized");
     
     // Register callbacks
 #ifdef ESP8266
@@ -94,13 +116,23 @@ bool ESPNowManager::begin(uint8_t channel, bool isHub) {
     esp_now_register_recv_cb(onReceiveStatic);
     esp_now_register_send_cb(onSendStatic);
 #endif
-    Serial.println("✅ Callbacks registered");
+    Serial.println("[OK] Callbacks registered");
     
     _initialized = true;
     
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.println("✅ ESPNowManager Ready");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    // Add broadcast peer (required for both hub and nodes)
+    // Hub needs it to receive broadcast ANNOUNCE messages from nodes
+    // Nodes need it to send broadcast ANNOUNCE during discovery
+    uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    if (addPeer(broadcastMac)) {
+        Serial.println("[OK] Broadcast peer added");
+    } else {
+        Serial.println("[WARN] Failed to add broadcast peer");
+    }
+    
+    Serial.println("-----------------------------------------");
+    Serial.println("[OK] ESPNowManager Ready");
+    Serial.println("-----------------------------------------");
     
     return true;
 }
@@ -108,19 +140,33 @@ bool ESPNowManager::begin(uint8_t channel, bool isHub) {
 bool ESPNowManager::addPeer(const uint8_t* mac) {
     if (!_initialized) return false;
     
+    // Check if peer already exists to avoid errors
 #ifdef ESP8266
-    if (esp_now_add_peer((uint8_t*)mac, ESP_NOW_ROLE_COMBO, _channel, NULL, 0) != 0) {
-        Serial.printf("❌ Failed to add peer %02X:%02X:...\n", mac[0], mac[1]);
+    // ESP8266: Check if peer exists by attempting to add (returns -1 if exists)
+    int result = esp_now_add_peer((uint8_t*)mac, ESP_NOW_ROLE_COMBO, _channel, NULL, 0);
+    if (result == -1) {
+        // Peer already exists - this is fine, not an error
+        return true;
+    }
+    if (result != 0) {
+        Serial.printf("[ERR] Failed to add peer %02X:%02X:...\n", mac[0], mac[1]);
         return false;
     }
 #else
+    // ESP32: Check if peer exists
+    if (esp_now_is_peer_exist(mac)) {
+        // Peer already exists - this is fine, not an error
+        return true;
+    }
+    
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, mac, 6);
     peerInfo.channel = _channel;
     peerInfo.encrypt = false;
     
-    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-        Serial.printf("❌ Failed to add peer %02X:%02X:...\n", mac[0], mac[1]);
+    esp_err_t result = esp_now_add_peer(&peerInfo);
+    if (result != ESP_OK) {
+        Serial.printf("[ERR] Failed to add peer %02X:%02X:... (error %d)\n", mac[0], mac[1], result);
         return false;
     }
 #endif
@@ -135,7 +181,7 @@ bool ESPNowManager::addPeer(const uint8_t* mac) {
         peer.lastSeqReceived = 0;
     }
     
-    Serial.printf("✅ Added peer %02X:%02X:%02X:%02X:%02X:%02X\n",
+    Serial.printf("[OK] Added peer %02X:%02X:%02X:%02X:%02X:%02X\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     
     return true;
@@ -158,7 +204,7 @@ bool ESPNowManager::removePeer(const uint8_t* mac) {
         _peers.erase(key);
     }
     
-    Serial.printf("🗑️  Removed peer %02X:%02X:...\n", mac[0], mac[1]);
+    Serial.printf("  Removed peer %02X:%02X:...\n", mac[0], mac[1]);
     return true;
 }
 
@@ -168,18 +214,18 @@ bool ESPNowManager::removePeer(const uint8_t* mac) {
 
 bool ESPNowManager::send(const uint8_t* mac, const uint8_t* data, size_t len, bool checkOnline) {
     if (!_initialized) {
-        Serial.println("❌ ESPNowManager not initialized");
+        Serial.println("[ERR] ESPNowManager not initialized");
         return false;
     }
     
     if (len > ESPNOW_MAX_DATA_LEN) {
-        Serial.printf("❌ Message too large: %d bytes (max %d)\n", len, ESPNOW_MAX_DATA_LEN);
+        Serial.printf("[ERR] Message too large: %d bytes (max %d)\n", len, ESPNOW_MAX_DATA_LEN);
         return false;
     }
     
     // Check if peer is online (hub only)
     if (_isHub && checkOnline && !isPeerOnline(mac)) {
-        Serial.println("⚠️  Peer offline, message not sent");
+        Serial.println("[WARN]  Peer offline, message not sent");
         return false;
     }
     
@@ -196,7 +242,7 @@ bool ESPNowManager::send(const uint8_t* mac, const uint8_t* data, size_t len, bo
         _stats.messagesSent++;
     } else {
         _stats.sendFailures++;
-        Serial.printf("❌ Send failed: %d\n", result);
+        Serial.printf("[ERR] Send failed: %d\n", result);
     }
     
     return success;
@@ -207,17 +253,17 @@ bool ESPNowManager::sendFragmented(const uint8_t* mac, uint8_t commandId,
     if (!_initialized) return false;
     
     if (len > ESPNOW_MAX_MESSAGE_SIZE) {
-        Serial.printf("❌ Message too large: %d bytes (max %d)\n", len, ESPNOW_MAX_MESSAGE_SIZE);
+        Serial.printf("[ERR] Message too large: %d bytes (max %d)\n", len, ESPNOW_MAX_MESSAGE_SIZE);
         return false;
     }
     
     // Check if peer is online
     if (_isHub && checkOnline && !isPeerOnline(mac)) {
-        Serial.println("⚠️  Peer offline, fragmented message not sent");
+        Serial.println("[WARN]  Peer offline, fragmented message not sent");
         return false;
     }
     
-    Serial.printf("📦 Fragmenting message: %d bytes into %d-byte chunks\n", 
+    Serial.printf(" Fragmenting message: %d bytes into %d-byte chunks\n", 
                   len, ESPNOW_FRAGMENT_SIZE);
     
     size_t offset = 0;
@@ -245,13 +291,13 @@ bool ESPNowManager::sendFragmented(const uint8_t* mac, uint8_t commandId,
         
         // Send fragment
         if (!send(mac, (uint8_t*)&cmd, sizeof(cmd), false)) {
-            Serial.printf("❌ Failed to send fragment %d\n", seqID);
+            Serial.printf("[ERR] Failed to send fragment %d\n", seqID);
             return false;
         }
         
         _stats.fragmentsSent++;
         
-        Serial.printf("  📤 Sent fragment %d/%d (%d bytes)%s\n", 
+        Serial.printf("  [TX] Sent fragment %d/%d (%d bytes)%s\n", 
                       seqID + 1, 
                       (len + ESPNOW_FRAGMENT_SIZE - 1) / ESPNOW_FRAGMENT_SIZE,
                       chunkSize,
@@ -264,7 +310,7 @@ bool ESPNowManager::sendFragmented(const uint8_t* mac, uint8_t commandId,
         delay(10);
     }
     
-    Serial.printf("✅ Sent %d fragments successfully\n", seqID);
+    Serial.printf("[OK] Sent %d fragments successfully\n", seqID);
     return true;
 }
 
@@ -275,19 +321,19 @@ bool ESPNowManager::sendWithRetry(const uint8_t* mac, const uint8_t* data, size_
         if (attempt > 0) {
             _stats.retries++;
             uint32_t delayMs = ESPNOW_RETRY_BASE_DELAY_MS * (1 << (attempt - 1));  // Exponential backoff
-            Serial.printf("🔄 Retry %d/%d (delay %dms)\n", attempt, maxRetries, delayMs);
+            Serial.printf("[RST] Retry %d/%d (delay %dms)\n", attempt, maxRetries, delayMs);
             delay(delayMs);
         }
         
         if (send(mac, data, len, false)) {
             if (attempt > 0) {
-                Serial.printf("✅ Sent successfully after %d retries\n", attempt);
+                Serial.printf("[OK] Sent successfully after %d retries\n", attempt);
             }
             return true;
         }
     }
     
-    Serial.printf("❌ Failed after %d retries\n", maxRetries);
+    Serial.printf("[ERR] Failed after %d retries\n", maxRetries);
     return false;
 }
 
@@ -348,6 +394,10 @@ void ESPNowManager::onConfigReceived(void (*callback)(const uint8_t* mac, const 
     _configCallback = callback;
 }
 
+void ESPNowManager::onUnmapReceived(void (*callback)(const uint8_t* mac, const UnmapMessage& unmap)) {
+    _unmapCallback = callback;
+}
+
 // ============================================================================
 // PEER STATUS (HUB-SIDE)
 // ============================================================================
@@ -363,9 +413,9 @@ void ESPNowManager::setPeerOnline(const uint8_t* mac, bool online) {
         it->second.online = online;
         
         if (online && !wasOnline) {
-            Serial.printf("✅ Peer %02X:%02X:... is now ONLINE\n", mac[0], mac[1]);
+            Serial.printf("[OK] Peer %02X:%02X:... is now ONLINE\n", mac[0], mac[1]);
         } else if (!online && wasOnline) {
-            Serial.printf("⚠️  Peer %02X:%02X:... is now OFFLINE\n", mac[0], mac[1]);
+            Serial.printf("[WARN]  Peer %02X:%02X:... is now OFFLINE\n", mac[0], mac[1]);
         }
     }
 }
@@ -418,21 +468,21 @@ int ESPNowManager::checkPeerTimeouts(uint32_t timeoutMs) {
 // ============================================================================
 
 void ESPNowManager::printStatistics() const {
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.println("📊 ESPNowManager Statistics");
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.printf("📤 Messages Sent:        %u\n", _stats.messagesSent);
-    Serial.printf("📥 Messages Received:    %u\n", _stats.messagesReceived);
-    Serial.printf("❌ Send Failures:        %u\n", _stats.sendFailures);
-    Serial.printf("🔄 Retries:              %u\n", _stats.retries);
-    Serial.printf("📦 Fragments Sent:       %u\n", _stats.fragmentsSent);
-    Serial.printf("🧩 Fragments Received:   %u\n", _stats.fragmentsReceived);
-    Serial.printf("⏱️  Reassembly Timeouts:  %u\n", _stats.reassemblyTimeouts);
-    Serial.printf("🚫 Duplicates Ignored:   %u\n", _stats.duplicatesIgnored);
+    Serial.println("-----------------------------------------");
+    Serial.println("[STATS] ESPNowManager Statistics");
+    Serial.println("-----------------------------------------");
+    Serial.printf("[TX] Messages Sent:        %u\n", _stats.messagesSent);
+    Serial.printf("[RX] Messages Received:    %u\n", _stats.messagesReceived);
+    Serial.printf("[ERR] Send Failures:        %u\n", _stats.sendFailures);
+    Serial.printf("[RST] Retries:              %u\n", _stats.retries);
+    Serial.printf(" Fragments Sent:       %u\n", _stats.fragmentsSent);
+    Serial.printf(" Fragments Received:   %u\n", _stats.fragmentsReceived);
+    Serial.printf("  Reassembly Timeouts:  %u\n", _stats.reassemblyTimeouts);
+    Serial.printf(" Duplicates Ignored:   %u\n", _stats.duplicatesIgnored);
     
     if (_isHub) {
-        Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        Serial.printf("👥 Tracked Peers:        %d\n", _peers.size());
+        Serial.println("-----------------------------------------");
+        Serial.printf(" Tracked Peers:        %d\n", _peers.size());
         
         int onlineCount = 0;
         for (const auto& pair : _peers) {
@@ -442,7 +492,7 @@ void ESPNowManager::printStatistics() const {
         Serial.printf("   - Offline:            %d\n", _peers.size() - onlineCount);
     }
     
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("-----------------------------------------");
 }
 
 // ============================================================================
@@ -463,6 +513,10 @@ void ESPNowManager::onReceiveStatic(uint8_t* mac, uint8_t* data, uint8_t len) {
 void ESPNowManager::onReceiveStatic(const uint8_t* mac, const uint8_t* data, int len) {
 #endif
     if (!s_instance || !s_instance->_initialized) return;
+    
+    // Debug: Log every received message
+    Serial.printf("[RX] Got %d bytes from %02X:%02X:%02X:%02X:%02X:%02X\n",
+                 len, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     
     // Queue message for processing in main loop (ISR-safe)
     RxQueueEntry entry;
@@ -498,7 +552,7 @@ void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* da
     
     // Validate minimum size
     if (len < sizeof(MessageHeader)) {
-        Serial.println("❌ Message too small");
+        Serial.println("[ERR] Message too small");
         return;
     }
     
@@ -507,7 +561,7 @@ void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* da
     // Check for duplicate (sequence number validation)
     if (isDuplicate(mac, header->sequenceNum)) {
         _stats.duplicatesIgnored++;
-        Serial.printf("🚫 Duplicate message ignored (seq %d)\n", header->sequenceNum);
+        Serial.printf(" Duplicate message ignored (seq %d)\n", header->sequenceNum);
         return;
     }
     
@@ -557,8 +611,18 @@ void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* da
             }
             break;
             
+        case MessageType::UNMAP:
+            // Node receives UNMAP from hub (reset to discovery mode)
+            if (len >= sizeof(UnmapMessage)) {
+                const UnmapMessage* unmap = (const UnmapMessage*)data;
+                if (_unmapCallback) {
+                    _unmapCallback(mac, *unmap);
+                }
+            }
+            break;
+            
         default:
-            Serial.printf("⚠️  Unknown message type: 0x%02X\n", (uint8_t)header->type);
+            Serial.printf("[WARN]  Unknown message type: 0x%02X\n", (uint8_t)header->type);
             break;
     }
 }
@@ -566,7 +630,7 @@ void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* da
 void ESPNowManager::processCommand(const uint8_t* mac, const CommandMessage& cmd) {
     // Commands are for nodes only
     if (_isHub) {
-        Serial.println("⚠️  Hub received COMMAND (unexpected)");
+        Serial.println("[WARN]  Hub received COMMAND (unexpected)");
         return;
     }
     
@@ -585,7 +649,7 @@ void ESPNowManager::processCommand(const uint8_t* mac, const CommandMessage& cmd
     
     // Check timeout on active reassembly
     if (_reassembly.active && (millis() - _reassembly.startTime > ESPNOW_REASSEMBLY_TIMEOUT_MS)) {
-        Serial.println("⏱️  Reassembly timeout, dropping partial message");
+        Serial.println("  Reassembly timeout, dropping partial message");
         _stats.reassemblyTimeouts++;
         resetReassembly();
     }
@@ -593,11 +657,11 @@ void ESPNowManager::processCommand(const uint8_t* mac, const CommandMessage& cmd
     // Start new reassembly
     if (!_reassembly.active) {
         if (cmd.commandSeqID != 0) {
-            Serial.println("⚠️  Fragment doesn't start at 0, ignoring");
+            Serial.println("[WARN]  Fragment doesn't start at 0, ignoring");
             return;
         }
         
-        Serial.printf("🧩 Starting reassembly for command %d\n", cmd.commandId);
+        Serial.printf(" Starting reassembly for command %d\n", cmd.commandId);
         _reassembly.active = true;
         _reassembly.commandId = cmd.commandId;
         _reassembly.expectedSeqID = 0;
@@ -608,13 +672,13 @@ void ESPNowManager::processCommand(const uint8_t* mac, const CommandMessage& cmd
     
     // Validate sequence
     if (cmd.commandId != _reassembly.commandId) {
-        Serial.println("⚠️  Command ID mismatch, dropping reassembly");
+        Serial.println("[WARN]  Command ID mismatch, dropping reassembly");
         resetReassembly();
         return;
     }
     
     if (cmd.commandSeqID != _reassembly.expectedSeqID) {
-        Serial.printf("⚠️  Sequence mismatch: expected %d, got %d\n", 
+        Serial.printf("[WARN]  Sequence mismatch: expected %d, got %d\n", 
                      _reassembly.expectedSeqID, cmd.commandSeqID);
         resetReassembly();
         return;
@@ -622,7 +686,7 @@ void ESPNowManager::processCommand(const uint8_t* mac, const CommandMessage& cmd
     
     // Append fragment
     if (_reassembly.offset + ESPNOW_FRAGMENT_SIZE > ESPNOW_MAX_MESSAGE_SIZE) {
-        Serial.println("❌ Reassembly buffer overflow");
+        Serial.println("[ERR] Reassembly buffer overflow");
         resetReassembly();
         return;
     }
@@ -631,12 +695,12 @@ void ESPNowManager::processCommand(const uint8_t* mac, const CommandMessage& cmd
     _reassembly.offset += ESPNOW_FRAGMENT_SIZE;
     _reassembly.expectedSeqID++;
     
-    Serial.printf("  🧩 Fragment %d appended (%d bytes total)\n", 
+    Serial.printf("   Fragment %d appended (%d bytes total)\n", 
                  cmd.commandSeqID, _reassembly.offset);
     
     // Check if complete
     if (cmd.finalCommand) {
-        Serial.printf("✅ Reassembly complete: %d bytes\n", _reassembly.offset);
+        Serial.printf("[OK] Reassembly complete: %d bytes\n", _reassembly.offset);
         
         if (_commandCallback) {
             _commandCallback(_reassembly.senderMac, _reassembly.buffer, _reassembly.offset);
@@ -664,14 +728,21 @@ void ESPNowManager::processHeartbeat(const uint8_t* mac, const HeartbeatMessage&
 }
 
 void ESPNowManager::processAnnounce(const uint8_t* mac, const AnnounceMessage& announce) {
+    Serial.printf("[ANNOUNCE] Received from %02X:%02X:%02X:%02X:%02X:%02X\n",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    Serial.printf("           Type: %d, FW: v%d, Capabilities: 0x%02X\n", 
+                 (int)announce.header.nodeType, announce.firmwareVersion, announce.capabilities);
+    
     if (_announceCallback) {
         _announceCallback(mac, announce);
+    } else {
+        Serial.println("[WARN]  No ANNOUNCE callback registered!");
     }
 }
 
 void ESPNowManager::checkReassemblyTimeout() {
     if (_reassembly.active && (millis() - _reassembly.startTime > ESPNOW_REASSEMBLY_TIMEOUT_MS)) {
-        Serial.println("⏱️  Reassembly timeout");
+        Serial.println("  Reassembly timeout");
         _stats.reassemblyTimeouts++;
         resetReassembly();
     }
@@ -722,7 +793,7 @@ void ESPNowManager::processRetries() {
                 // Retry send
                 if (send(ctx.destMac, ctx.data, ctx.len, false)) {
                     // Success - remove from retry queue
-                    Serial.printf("✅ Retry successful for %02X:%02X:...\n", 
+                    Serial.printf("[OK] Retry successful for %02X:%02X:...\n", 
                                  ctx.destMac[0], ctx.destMac[1]);
                     it = _retryQueue.erase(it);
                     continue;
@@ -735,12 +806,12 @@ void ESPNowManager::processRetries() {
                     uint32_t delayMs = ESPNOW_RETRY_BASE_DELAY_MS * (1 << attemptNum);
                     ctx.nextRetryTime = now + delayMs;
                     
-                    Serial.printf("🔄 Retry %d/%d scheduled in %dms\n", 
+                    Serial.printf("[RST] Retry %d/%d scheduled in %dms\n", 
                                  attemptNum, ESPNOW_MAX_RETRIES, delayMs);
                 }
             } else {
                 // No more retries - give up
-                Serial.printf("❌ Retry failed after %d attempts\n", ESPNOW_MAX_RETRIES);
+                Serial.printf("[ERR] Retry failed after %d attempts\n", ESPNOW_MAX_RETRIES);
                 it = _retryQueue.erase(it);
                 continue;
             }
@@ -762,5 +833,5 @@ void ESPNowManager::addToRetryQueue(const uint8_t* mac, const uint8_t* data, siz
     ctx.active = true;
     
     _retryQueue.push_back(ctx);
-    Serial.println("📋 Message added to retry queue");
+    Serial.println(" Message added to retry queue");
 }

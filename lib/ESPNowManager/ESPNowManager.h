@@ -201,6 +201,12 @@ public:
      */
     void onConfigReceived(void (*callback)(const uint8_t* mac, const ConfigMessage& config));
     
+    /**
+     * @brief Set callback for received UNMAP messages
+     * @param callback Function to call when UNMAP received
+     */
+    void onUnmapReceived(void (*callback)(const uint8_t* mac, const UnmapMessage& unmap));
+    
     // ========================================================================
     // PEER STATUS (HUB-SIDE)
     // ========================================================================
@@ -293,6 +299,7 @@ private:
     void (*_ackCallback)(const uint8_t* mac, const AckMessage& ack);
     void (*_announceCallback)(const uint8_t* mac, const AnnounceMessage& announce);
     void (*_configCallback)(const uint8_t* mac, const ConfigMessage& config);
+    void (*_unmapCallback)(const uint8_t* mac, const UnmapMessage& unmap);
     
     // Statistics
     Statistics _stats;

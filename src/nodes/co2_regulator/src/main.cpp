@@ -8,9 +8,9 @@
 // ============================================================================
 
 // Node configuration
-const uint8_t NODE_TANK_ID = 1;              // ⚠️ CONFIGURE PER DEPLOYMENT
+const uint8_t NODE_TANK_ID = 1;              //  CONFIGURE PER DEPLOYMENT
 const NodeType NODE_TYPE = NodeType::CO2;
-const char* NODE_NAME = "CO2RegulatorNode01"; // ⚠️ CONFIGURE PER DEPLOYMENT
+const char* NODE_NAME = "CO2RegulatorNode01"; //  CONFIGURE PER DEPLOYMENT
 const uint8_t FIRMWARE_VERSION = 1;
 
 // Global state variables
@@ -40,11 +40,11 @@ void setupHardware() {
     pinMode(PIN_CO2_SOLENOID, OUTPUT);
     digitalWrite(PIN_CO2_SOLENOID, LOW);  // Solenoid closed (CO2 OFF)
     
-    Serial.println("✓ CO2 hardware initialized - SOLENOID CLOSED");
+    Serial.println(" CO2 hardware initialized - SOLENOID CLOSED");
 }
 
 void enterFailSafeMode() {
-    Serial.println("⚠️ FAIL-SAFE: CLOSING CO2 SOLENOID");
+    Serial.println(" FAIL-SAFE: CLOSING CO2 SOLENOID");
     digitalWrite(PIN_CO2_SOLENOID, LOW);
     co2State.solenoidOpen = false;
     co2State.onDurationMs = 0;
@@ -101,16 +101,16 @@ void setup() {
     delay(1000);
     
     Serial.println("\n\n");
-    Serial.println("╔═══════════════════════════════════════════════════════════╗");
-    Serial.println("║        CO2 REGULATOR NODE - Aquarium Management           ║");
-    Serial.println("╚═══════════════════════════════════════════════════════════╝");
+    Serial.println("");
+    Serial.println("        CO2 REGULATOR NODE - Aquarium Management           ");
+    Serial.println("");
     Serial.printf("Tank ID: %d | Node: %s\n\n", NODE_TANK_ID, NODE_NAME);
     
     setupHardware();
     setupESPNow();
     
     currentState = NodeState::ANNOUNCING;
-    Serial.println("✓ CO2 regulator node ready\n");
+    Serial.println(" CO2 regulator node ready\n");
 }
 
 void loop() {

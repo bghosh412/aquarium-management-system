@@ -13,14 +13,17 @@ document.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
     setupEventListeners();
     updateUptime();
-    updateSystemStats();
+    loadDashboardData();  // Load data from backend
     addActivityLog('System initialized', 'success');
     
     // Update uptime every second
     uptimeInterval = setInterval(updateUptime, 1000);
     
     // Update stats every 5 seconds
-    setInterval(updateSystemStats, 5000);
+    setInterval(() => {
+        updateSystemStats();
+        loadDashboardData();  // Refresh dashboard data
+    }, 5000);
 });
 
 // WebSocket connection management
@@ -352,4 +355,110 @@ function getTimeAgo() {
 function logMessage(message, type = 'info') {
     console.log(`[${type.toUpperCase()}] ${message}`);
     addActivityLog(message, type);
+}
+
+// ============================================================================
+// DASHBOARD API INTEGRATION
+// ============================================================================
+
+function updateSystemStats() {
+    // Fetch aquarium count
+    fetch('/api/aquariums')
+        .then(response => response.json())
+        .then(data => {
+            const count = (data.aquariums && data.aquariums.length) || 0;
+            const elem = document.getElementById('aquarium-count');
+            if (elem) elem.textContent = count;
+        })
+        .catch(error => console.error('Error fetching aquariums:', error));
+    
+    // Fetch device count
+    fetch('/api/devices')
+        .then(response => response.json())
+        .then(data => {
+            const count = (data.devices && data.devices.length) || 0;
+            const elem = document.getElementById('device-count');
+            if (elem) elem.textContent = count;
+        })
+        .catch(error => console.error('Error fetching devices:', error));
+    
+    // Update memory status
+    fetch('/api/status')
+        .then(response => response.json())
+        .then(data => {
+            const elem = document.getElementById('memory-status');
+            if (elem && data.memory) {
+                const usedPct = ((data.memory.heapUsed / data.memory.heapTotal) * 100).toFixed(1);
+                elem.textContent = `${usedPct}%`;
+                
+                // Update badge color based on usage
+                elem.className = 'badge';
+                if (usedPct < 50) {
+                    elem.classList.add('badge-success');
+                } else if (usedPct < 75) {
+                    elem.classList.add('badge-warning');
+                } else {
+                    elem.classList.add('badge-danger');
+                }
+            }
+            
+            // Update WiFi status
+            const wifiElem = document.getElementById('wifi-status');
+            if (wifiElem && data.wifi) {
+                const rssi = data.wifi.rssi || -50;
+                if (rssi > -50) {
+                    wifiElem.textContent = 'Excellent';
+                    wifiElem.className = 'badge badge-success';
+                } else if (rssi > -70) {
+                    wifiElem.textContent = 'Good';
+                    wifiElem.className = 'badge badge-success';
+                } else if (rssi > -85) {
+                    wifiElem.textContent = 'Fair';
+                    wifiElem.className = 'badge badge-warning';
+                } else {
+                    wifiElem.textContent = 'Weak';
+                    wifiElem.className = 'badge badge-danger';
+                }
+            }
+        })
+        .catch(error => console.error('Error fetching status:', error));
+}
+
+// Load dashboard data from backend
+function loadDashboardData() {
+    // Load aquariums
+    fetch('/api/aquariums')
+        .then(response => response.json())
+        .then(data => {
+            if (data.aquariums && Array.isArray(data.aquariums)) {
+                const totalAquariums = data.aquariums.length;
+                const activeAquariums = data.aquariums.filter(a => a.enabled).length;
+                
+                // Update dashboard stats if elements exist
+                const totalElem = document.getElementById('total-aquariums');
+                if (totalElem) totalElem.textContent = totalAquariums;
+                
+                const activeElem = document.getElementById('active-aquariums');
+                if (activeElem) activeElem.textContent = activeAquariums;
+            }
+        })
+        .catch(error => console.error('Error loading aquariums:', error));
+    
+    // Load devices
+    fetch('/api/devices')
+        .then(response => response.json())
+        .then(data => {
+            if (data.devices && Array.isArray(data.devices)) {
+                const totalDevices = data.devices.length;
+                const onlineDevices = data.devices.filter(d => d.status === 'ONLINE' || d.enabled).length;
+                
+                // Update dashboard stats if elements exist
+                const totalElem = document.getElementById('total-devices');
+                if (totalElem) totalElem.textContent = totalDevices;
+                
+                const onlineElem = document.getElementById('online-devices');
+                if (onlineElem) onlineElem.textContent = onlineDevices;
+            }
+        })
+        .catch(error => console.error('Error loading devices:', error));
 }

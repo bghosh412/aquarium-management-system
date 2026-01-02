@@ -22,14 +22,14 @@ Device::Device(const uint8_t* mac, NodeType type, const String& name)
     , _errorCount(0)
 {
     memcpy(_mac, mac, 6);
-    Serial.printf("📦 Created device: %s (%s)\n", _name.c_str(), getMacString().c_str());
+    Serial.printf(" Created device: %s (%s)\n", _name.c_str(), getMacString().c_str());
 }
 
 /**
  * @brief Virtual destructor
  */
 Device::~Device() {
-    Serial.printf("🗑️  Destroying device: %s\n", _name.c_str());
+    Serial.printf("  Destroying device: %s\n", _name.c_str());
     
     // Delete all schedules
     for (Schedule* schedule : _schedules) {
@@ -92,7 +92,7 @@ void Device::updateHeartbeat(uint8_t health, uint16_t uptime) {
     // Update status to online
     if (_status != Status::ONLINE) {
         _status = Status::ONLINE;
-        Serial.printf("✅ Device %s is now ONLINE\n", _name.c_str());
+        Serial.printf(" Device %s is now ONLINE\n", _name.c_str());
     }
 }
 
@@ -113,7 +113,7 @@ bool Device::hasHeartbeatTimedOut(uint32_t timeoutMs) const {
  */
 bool Device::sendCommand(const uint8_t* commandData, size_t length) {
     if (!commandData || length == 0) {
-        Serial.println("❌ Invalid command data");
+        Serial.println(" Invalid command data");
         return false;
     }
     
@@ -135,7 +135,7 @@ bool Device::sendCommand(const uint8_t* commandData, size_t length) {
     
     // Check if peer is online before sending
     if (!ESPNowManager::getInstance().isPeerOnline(_mac)) {
-        Serial.printf("⚠️  Device %s is OFFLINE, command not sent\n", _name.c_str());
+        Serial.printf("  Device %s is OFFLINE, command not sent\n", _name.c_str());
         _errorCount++;
         return false;
     }
@@ -147,10 +147,10 @@ bool Device::sendCommand(const uint8_t* commandData, size_t length) {
         _lastCommandSent = millis();
         _commandsSent++;
         _messagesSent++;
-        Serial.printf("📤 Sent command to %s (online check passed)\n", _name.c_str());
+        Serial.printf(" Sent command to %s (online check passed)\n", _name.c_str());
     } else {
         _errorCount++;
-        Serial.printf("❌ Failed to send command to %s\n", _name.c_str());
+        Serial.printf(" Failed to send command to %s\n", _name.c_str());
     }
     
     return success;
@@ -163,7 +163,7 @@ void Device::handleStatus(const StatusMessage& status) {
     _lastStatusReceived = millis();
     _messagesReceived++;
     
-    Serial.printf("📥 Received status from %s: code=%d\n", 
+    Serial.printf(" Received status from %s: code=%d\n", 
                  _name.c_str(), status.statusCode);
 }
 
@@ -172,20 +172,20 @@ void Device::handleStatus(const StatusMessage& status) {
  */
 bool Device::addSchedule(Schedule* schedule) {
     if (!schedule) {
-        Serial.println("❌ Cannot add null schedule");
+        Serial.println(" Cannot add null schedule");
         return false;
     }
     
     // Check if schedule already exists
     for (Schedule* existing : _schedules) {
         if (existing->getId() == schedule->getId()) {
-            Serial.printf("⚠️  Schedule %d already exists\n", schedule->getId());
+            Serial.printf("  Schedule %d already exists\n", schedule->getId());
             return false;
         }
     }
     
     _schedules.push_back(schedule);
-    Serial.printf("✅ Added schedule '%s' to device %s\n", 
+    Serial.printf(" Added schedule '%s' to device %s\n", 
                  schedule->getName().c_str(), _name.c_str());
     
     return true;
@@ -199,12 +199,12 @@ bool Device::removeSchedule(uint32_t scheduleId) {
         if ((*it)->getId() == scheduleId) {
             delete *it;
             _schedules.erase(it);
-            Serial.printf("🗑️  Removed schedule %d\n", scheduleId);
+            Serial.printf("  Removed schedule %d\n", scheduleId);
             return true;
         }
     }
     
-    Serial.printf("⚠️  Schedule %d not found\n", scheduleId);
+    Serial.printf("  Schedule %d not found\n", scheduleId);
     return false;
 }
 
@@ -285,6 +285,6 @@ String Device::toJson() const {
  */
 bool Device::fromJson(const String& json) {
     // TODO: Implement JSON parsing
-    Serial.println("⚠️  Device::fromJson not yet implemented");
+    Serial.println("  Device::fromJson not yet implemented");
     return false;
 }

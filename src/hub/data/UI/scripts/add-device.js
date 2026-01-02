@@ -275,7 +275,7 @@ function addDeviceManually() {
     })
     .then(response => response.json())
     .then(data => {
-        if (data.status === 'success') {
+        if (data.success) {
             showNotification('Device provisioned successfully!', 'success');
             
             // Remove from discovered devices display
@@ -295,7 +295,7 @@ function addDeviceManually() {
                 window.location.href = 'manage-devices.html';
             }, 1500);
         } else {
-            showNotification('Error provisioning device: ' + (data.message || 'Unknown error'), 'error');
+            showNotification('Error provisioning device: ' + (data.error || 'Unknown error'), 'error');
         }
     })
     .catch(error => {

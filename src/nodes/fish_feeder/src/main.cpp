@@ -8,9 +8,9 @@
 // ============================================================================
 
 // Node configuration
-const uint8_t NODE_TANK_ID = 1;              // ⚠️ CONFIGURE PER DEPLOYMENT
+const uint8_t NODE_TANK_ID = 1;              //  CONFIGURE PER DEPLOYMENT
 const NodeType NODE_TYPE = NodeType::FISH_FEEDER;
-const char* NODE_NAME = "FishFeederNode01";   // ⚠️ CONFIGURE PER DEPLOYMENT
+const char* NODE_NAME = "FishFeederNode01";   //  CONFIGURE PER DEPLOYMENT
 const uint8_t FIRMWARE_VERSION = 1;
 
 // Global state variables
@@ -42,11 +42,11 @@ void setupHardware() {
     // servo.attach(PIN_SERVO);
     // servo.write(0);  // Home position
     
-    Serial.println("✓ Feeder hardware initialized");
+    Serial.println(" Feeder hardware initialized");
 }
 
 void enterFailSafeMode() {
-    Serial.println("⚠️ FAIL-SAFE: Feeder disabled (safe - skip feeding)");
+    Serial.println(" FAIL-SAFE: Feeder disabled (safe - skip feeding)");
     feederState.feedInProgress = false;
     // Better to miss one feeding than to overfeed
 }
@@ -95,16 +95,16 @@ void setup() {
     delay(1000);
     
     Serial.println("\n\n");
-    Serial.println("╔═══════════════════════════════════════════════════════════╗");
-    Serial.println("║        FISH FEEDER NODE - Aquarium Management             ║");
-    Serial.println("╚═══════════════════════════════════════════════════════════╝");
+    Serial.println("");
+    Serial.println("        FISH FEEDER NODE - Aquarium Management             ");
+    Serial.println("");
     Serial.printf("Tank ID: %d | Node: %s\n\n", NODE_TANK_ID, NODE_NAME);
     
     setupHardware();
     setupESPNow();
     
     currentState = NodeState::ANNOUNCING;
-    Serial.println("✓ Fish feeder node ready\n");
+    Serial.println(" Fish feeder node ready\n");
 }
 
 void loop() {

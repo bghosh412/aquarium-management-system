@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Manage Aquarium - Aquarium Hub</title>
+    <link rel="stylesheet" href="../styles/styles.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="../images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Manage Aquarium</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="aquarium-selection.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Navigation</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="../index.html" class="nav-item">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+                <a href="aquarium-selection.html" class="nav-item active">
+                    <span class="nav-icon">🐠</span>
+                    <span class="nav-label">Aquariums</span>
+                </a>
+                <a href="../device/manage-devices.html" class="nav-item">
+                    <span class="nav-icon">🔌</span>
+                    <span class="nav-label">Devices</span>
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <p>&copy; 2026 Aquarium Hub</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1 id="aquariumTitle">Manage Aquarium</h1>
+                <p class="page-description">Update aquarium settings and thresholds</p>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Aquarium Settings</h3>
+                    <span class="badge badge-online" id="statusBadge">Active</span>
+                </div>
+                <div class="card-body">
+                    <form id="manageAquariumForm">
+                        <!-- Tank ID (Read-only) -->
+                        <div class="form-group">
+                            <label for="tankId" class="form-label">Tank ID</label>
+                            <input type="number" id="tankId" class="form-input" readonly style="background: var(--color-bg); cursor: not-allowed;">
+                            <small class="form-help">Tank ID cannot be changed</small>
+                        </div>
+
+                        <!-- Tank Name -->
+                        <div class="form-group">
+                            <label for="tankName" class="form-label">Aquarium Name</label>
+                            <input type="text" id="tankName" class="form-input" placeholder="e.g., Living Room Tank" required>
+                        </div>
+
+                        <!-- Volume -->
+                        <div class="form-group">
+                            <label for="volume" class="form-label">Volume (Liters)</label>
+                            <input type="number" id="volume" class="form-input" placeholder="Enter tank volume" required min="1">
+                        </div>
+
+                        <!-- Location -->
+                        <div class="form-group">
+                            <label for="location" class="form-label">Location</label>
+                            <input type="text" id="location" class="form-input" placeholder="e.g., Living Room">
+                        </div>
+
+                        <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--color-border);">
+
+                        <h3 style="margin-bottom: 1.5rem;">Water Parameter Thresholds</h3>
+
+                        <!-- Temperature Range -->
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="form-group">
+                                <label for="tempMin" class="form-label">Min Temperature (°C)</label>
+                                <input type="number" id="tempMin" class="form-input" step="0.1" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="tempMax" class="form-label">Max Temperature (°C)</label>
+                                <input type="number" id="tempMax" class="form-input" step="0.1" required>
+                            </div>
+                        </div>
+
+                        <!-- pH Range -->
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="form-group">
+                                <label for="phMin" class="form-label">Min pH</label>
+                                <input type="number" id="phMin" class="form-input" step="0.1" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="phMax" class="form-label">Max pH</label>
+                                <input type="number" id="phMax" class="form-input" step="0.1" required>
+                            </div>
+                        </div>
+
+                        <!-- TDS Range -->
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="form-group">
+                                <label for="tdsMin" class="form-label">Min TDS (ppm)</label>
+                                <input type="number" id="tdsMin" class="form-input" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="tdsMax" class="form-label">Max TDS (ppm)</label>
+                                <input type="number" id="tdsMax" class="form-input" required>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div style="display: flex; gap: 1rem; margin-top: 2rem; flex-wrap: wrap;">
+                            <button type="submit" class="btn btn-primary" style="flex: 1; min-width: 150px;">
+                                <span>💾</span> Save Changes
+                            </button>
+                            <a href="aquarium-devices.html" class="btn btn-success" style="flex: 1; min-width: 150px; text-align: center; text-decoration: none;">
+                                <span>🔌</span> View Devices
+                            </a>
+                            <a href="aquarium-selection.html" class="btn btn-secondary" style="flex: 1; min-width: 150px; text-align: center; text-decoration: none;">
+                                Cancel
+                            </a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Danger Zone -->
+            <div class="card" style="border: 2px solid var(--color-accent-danger); margin-top: 2rem;">
+                <div class="card-header" style="background: rgba(239, 68, 68, 0.1);">
+                    <h3 style="color: var(--color-accent-danger);">Danger Zone</h3>
+                </div>
+                <div class="card-body">
+                    <p style="margin-bottom: 1rem;">Once you delete an aquarium, there is no going back. Please be certain.</p>
+                    <button type="button" class="btn btn-danger" onclick="deleteAquarium()">
+                        <span>🗑️</span> Delete This Aquarium
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../scripts/app.js"></script>
+    <script src="../scripts/manage-aquarium.js"></script>
+</body>
+</html>

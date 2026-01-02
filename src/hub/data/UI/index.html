@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0c4a6e">
+  <title>Aquarium Management System - Dashboard</title>
+  <link rel="stylesheet" href="./styles/styles.css">
+</head>
+<body>
+  <!-- Top Navigation Bar -->
+  <nav class="navbar">
+    <div class="navbar-content">
+      <div class="navbar-brand">
+        <img src="./images/logo.png" alt="AMS Logo" class="navbar-logo">
+        <div class="brand-info">
+          <h1 class="brand-title">Aquarium Management System</h1>
+          <span class="brand-subtitle">Smart Control & Monitoring</span>
+        </div>
+      </div>
+      <div class="navbar-status">
+        <div class="status-indicator">
+          <span class="status-dot online"></span>
+          <span class="status-text">System Online</span>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Container -->
+  <div class="main-container">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h3>Navigation</h3>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="index.html" class="nav-item active">
+          <span class="nav-icon">🏠</span>
+          <span class="nav-label">Dashboard</span>
+        </a>
+        <a href="aquarium/aquarium-selection.html" class="nav-item">
+          <span class="nav-icon">🐠</span>
+          <span class="nav-label">Aquariums</span>
+        </a>
+        <a href="device/manage-devices.html" class="nav-item">
+          <span class="nav-icon">🔌</span>
+          <span class="nav-label">Devices</span>
+        </a>
+        <a href="#" class="nav-item">
+          <span class="nav-icon">⏰</span>
+          <span class="nav-label">Schedules</span>
+        </a>
+        <a href="troubleshooting.html" class="nav-item">
+          <span class="nav-icon">🔧</span>
+          <span class="nav-label">Troubleshooting</span>
+        </a>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <div class="system-info">
+          <div class="info-item">
+            <span class="info-label">Uptime</span>
+            <span class="info-value" id="uptime">--:--:--</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Version</span>
+            <span class="info-value">v1.0.0</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content" style="margin-top:2.5rem;">
+      <!-- Dashboard Header -->
+      <div class="page-header">
+        <h2 class="page-title">Dashboard Overview</h2>
+        <p class="page-subtitle">Monitor and control your aquarium ecosystem</p>
+      </div>
+
+      <!-- Stats Cards -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+              <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <div class="stat-label">Active Aquariums</div>
+            <div class="stat-value" id="aquarium-count">0</div>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon green">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
+              <line x1="12" y1="18" x2="12.01" y2="18"></line>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <div class="stat-label">Connected Devices</div>
+            <div class="stat-value" id="device-count">0</div>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon orange">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <div class="stat-label">Active Schedules</div>
+            <div class="stat-value" id="schedule-count">0</div>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon red">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <div class="stat-label">Alerts</div>
+            <div class="stat-value" id="alert-count">0</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Content Grid -->
+      <div class="content-grid">
+        <!-- Recent Activity -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">Recent Activity</h3>
+            <button class="btn-icon" title="Refresh">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="card-content">
+            <div class="activity-list" id="activity-list">
+              <div class="activity-item">
+                <div class="activity-icon">
+                  <span class="activity-dot"></span>
+                </div>
+                <div class="activity-details">
+                  <div class="activity-title">System Initialized</div>
+                  <div class="activity-time">Just now</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Status -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">System Status</h3>
+          </div>
+          <div class="card-content">
+            <div class="status-list">
+              <div class="status-item">
+                <span class="status-label">ESP-NOW</span>
+                <span class="badge badge-success">Active</span>
+              </div>
+              <div class="status-item">
+                <span class="status-label">WebSocket</span>
+                <span class="badge badge-success">Connected</span>
+              </div>
+              <div class="status-item">
+                <span class="status-label">Memory</span>
+                <span class="badge badge-info" id="memory-status">--</span>
+              </div>
+              <div class="status-item">
+                <span class="status-label">WiFi Signal</span>
+                <span class="badge badge-success" id="wifi-status">Strong</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">Quick Actions</h3>
+          </div>
+          <div class="card-content">
+            <div class="action-grid">
+              <a href="aquarium/add-new-aquarium.html" class="action-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="8" x2="12" y2="16"></line>
+                  <line x1="8" y1="12" x2="16" y2="12"></line>
+                </svg>
+                <span>Add Aquarium</span>
+              </a>
+              <a href="device/add-device.html" class="action-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="8" x2="12" y2="16"></line>
+                  <line x1="8" y1="12" x2="16" y2="12"></line>
+                </svg>
+                <span>Add Device</span>
+              </a>
+              <a href="aquarium/aquarium-selection.html" class="action-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <span>View Aquariums</span>
+              </a>
+              <a href="device/manage-devices.html" class="action-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+                </svg>
+                <span>Manage Devices</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="./scripts/app.js"></script>
+</body>
+</html>

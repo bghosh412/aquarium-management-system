@@ -1,0 +1,16 @@
+{
+  "name": "NodeBase",
+  "version": "1.0.0",
+  "description": "Shared ESP-NOW communication base for all aquarium nodes",
+  "keywords": ["esp-now", "esp8266", "node", "communication"],
+  "authors": [
+    {
+      "name": "Aquarium Management System"
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": ["espressif8266", "espressif32"],
+  "build": {
+    "flags": "-I../../include"
+  }
+}

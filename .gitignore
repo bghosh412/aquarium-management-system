@@ -1,0 +1,26 @@
+# PlatformIO
+.pio/
+.vscode/
+*.pio
+.pioenvs
+.piolibdeps
+
+# Build artifacts
+*.o
+*.elf
+*.bin
+*.hex
+
+# IDE
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+.git-corrupt-backup/

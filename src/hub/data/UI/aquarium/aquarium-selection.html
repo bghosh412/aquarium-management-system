@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Aquarium Selection - Aquarium Hub</title>
+    <link rel="stylesheet" href="../styles/styles.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="../images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Select Aquarium</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="add-new-aquarium.html" class="btn btn-primary">
+                    <span>➕</span> Add New
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Navigation</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="../index.html" class="nav-item">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+                <a href="aquarium-selection.html" class="nav-item active">
+                    <span class="nav-icon">🐠</span>
+                    <span class="nav-label">Aquariums</span>
+                </a>
+                <a href="../device/manage-devices.html" class="nav-item">
+                    <span class="nav-icon">🔌</span>
+                    <span class="nav-label">Devices</span>
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <p>&copy; 2026 Aquarium Hub</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="card">
+                <div class="card-header">
+                    <h1 class="card-title">My Aquariums</h1>
+                </div>
+                <div class="card-content">
+                    <p class="page-description">Select an aquarium to view details and manage devices</p>
+
+                    <!-- Quick Actions: Select + Go, then Add Aquarium -->
+                    <div class="action-row" style="margin-bottom: 1rem; display:flex; gap:0.75rem; align-items:center;">
+                        <select id="selectAquarium" class="form-select" style="flex:1;">
+                            <option value="aquarium-1">Aquarium-1</option>
+                            <option value="aquarium-2">Aquarium-2</option>
+                            <option value="aquarium-3">Aquarium-3</option>
+                        </select>
+                        <button id="btnGoAquarium" class="btn btn-create-aquarium">Go</button>
+                    </div>
+
+                    <!-- Add Aquarium action -->
+                    <div style="margin-bottom: 0.5rem;">
+                        <div class="action-grid">
+                            <a href="add-new-aquarium.html" class="action-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="12" y1="8" x2="12" y2="16"></line>
+                                    <line x1="8" y1="12" x2="16" y2="12"></line>
+                                </svg>
+                                <span>Add Aquarium</span>
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- Aquarium Grid -->
+                    <div class="content-grid" id="aquariumGrid">
+                        <!-- Aquarium cards will be dynamically loaded here -->
+                    </div>
+
+                    <!-- Empty State -->
+                    <div id="emptyState" style="display: none; text-align: center; padding: 3rem;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem;">🐠</div>
+                        <h2>No Aquariums Yet</h2>
+                        <p style="color: var(--color-text-secondary); margin: 1rem 0 2rem;">Get started by adding your first aquarium</p>
+                        <a href="add-new-aquarium.html" class="btn btn-primary">
+                            <span>➕</span> Add Your First Aquarium
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Aquarium Grid -->
+            <div class="content-grid" id="aquariumGrid">
+                <!-- Aquarium cards will be dynamically loaded here -->
+            </div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="card" style="display: none; text-align: center; padding: 3rem;">
+                <div style="font-size: 4rem; margin-bottom: 1rem;">🐠</div>
+                <h2>No Aquariums Yet</h2>
+                <p style="color: var(--color-text-secondary); margin: 1rem 0 2rem;">Get started by adding your first aquarium</p>
+                <a href="add-new-aquarium.html" class="btn btn-primary">
+                    <span>➕</span> Add Your First Aquarium
+                </a>
+            </div>
+        </main>
+    </div>
+
+    <script src="../scripts/app.js"></script>
+    <script src="../scripts/aquarium-selection.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Lighting Node Configuration
+# Format: KEY=VALUE (no spaces around =)
+# Hub will update NODE_TANK_ID and NODE_NAME during provisioning
+
+# Node Identity (0 = unmapped, waiting for hub provisioning)
+NODE_TANK_ID=0
+NODE_NAME=UnmappedLight
+FIRMWARE_VERSION=1
+
+# ESP-NOW Settings
+ESPNOW_CHANNEL=6
+
+# Debug Settings
+DEBUG_SERIAL=true
+DEBUG_ESPNOW=true
+DEBUG_HARDWARE=false
+
+# Timing Settings
+ANNOUNCE_INTERVAL_MS=5000
+HEARTBEAT_INTERVAL_MS=30000
+CONNECTION_TIMEOUT_MS=90000

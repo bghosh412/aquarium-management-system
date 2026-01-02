@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Light Device Details - Aquarium Hub</title>
+    <link rel="stylesheet" href="../../styles/styles.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="../../images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Light Device Details</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <button class="btn btn-success" onclick="toggleLight()">
+                    <span id="powerIcon">💡</span> <span id="powerText">Turn On</span>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Navigation</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="../../index.html" class="nav-item">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+                <a href="../aquarium-selection.html" class="nav-item active">
+                    <span class="nav-icon">🐠</span>
+                    <span class="nav-label">Aquariums</span>
+                </a>
+                <a href="../../device/manage-devices.html" class="nav-item">
+                    <span class="nav-icon">🔌</span>
+                    <span class="nav-label">Devices</span>
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <p>&copy; 2026 Aquarium Hub</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Device Info Card -->
+            <div class="card" style="margin-bottom: 2rem;">
+                <div class="card-body" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div style="flex: 1;">
+                        <h2 id="deviceName" style="margin: 0 0 0.5rem 0;">Light Controller</h2>
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+                            <span class="badge badge-online" id="statusBadge">Online</span>
+                            <span style="color: var(--color-text-secondary);">
+                                <strong>MAC:</strong> <span id="deviceMac">--:--:--:--:--:--</span>
+                            </span>
+                            <span style="color: var(--color-text-secondary);">
+                                <strong>Tank:</strong> <span id="tankId">-</span>
+                            </span>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <a href="../../device/schedule/light-schedule.html" class="btn btn-primary">
+                            <span>📅</span> Schedule
+                        </a>
+                        <a href="../aquarium-devices.html" class="btn btn-secondary">
+                            <span>←</span> Back
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Presets -->
+            <div class="card" style="margin-bottom: 2rem;">
+                <div class="card-header">
+                    <h3>Quick Presets</h3>
+                </div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
+                        <button class="btn btn-secondary" onclick="applyPreset('morning')">
+                            <span>🌅</span> Morning
+                        </button>
+                        <button class="btn btn-secondary" onclick="applyPreset('noon')">
+                            <span>☀️</span> Noon
+                        </button>
+                        <button class="btn btn-secondary" onclick="applyPreset('evening')">
+                            <span>🌆</span> Evening
+                        </button>
+                        <button class="btn btn-secondary" onclick="applyPreset('night')">
+                            <span>🌙</span> Night
+                        </button>
+                        <button class="btn btn-secondary" onclick="applyPreset('off')">
+                            <span>⚫</span> Off
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Manual Control -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Manual Control</h3>
+                    <label class="checkbox-label">
+                        <input type="checkbox" class="checkbox" id="manualMode">
+                        <span>Manual Mode</span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <!-- White Channel -->
+                    <div class="form-group">
+                        <label for="whiteLevel" class="form-label">
+                            White Channel
+                            <span style="float: right; font-weight: 700; color: var(--color-primary);">
+                                <span id="whiteValue">0</span>%
+                            </span>
+                        </label>
+                        <input type="range" id="whiteLevel" class="form-range" min="0" max="100" value="0" oninput="updateChannel('white', this.value)">
+                    </div>
+
+                    <!-- Blue Channel -->
+                    <div class="form-group">
+                        <label for="blueLevel" class="form-label">
+                            Blue Channel
+                            <span style="float: right; font-weight: 700; color: #3b82f6;">
+                                <span id="blueValue">0</span>%
+                            </span>
+                        </label>
+                        <input type="range" id="blueLevel" class="form-range" min="0" max="100" value="0" oninput="updateChannel('blue', this.value)">
+                    </div>
+
+                    <!-- Red Channel -->
+                    <div class="form-group">
+                        <label for="redLevel" class="form-label">
+                            Red Channel
+                            <span style="float: right; font-weight: 700; color: #ef4444;">
+                                <span id="redValue">0</span>%
+                            </span>
+                        </label>
+                        <input type="range" id="redLevel" class="form-range" min="0" max="100" value="0" oninput="updateChannel('red', this.value)">
+                    </div>
+
+                    <!-- Color Preview -->
+                    <div style="margin-top: 2rem;">
+                        <label class="form-label">Color Preview</label>
+                        <div id="colorPreview" style="
+                            height: 100px;
+                            border-radius: var(--radius-md);
+                            background: rgb(0, 0, 0);
+                            border: 2px solid var(--color-border);
+                            transition: background 0.3s ease;
+                        "></div>
+                    </div>
+
+                    <!-- Apply Button -->
+                    <div style="margin-top: 2rem;">
+                        <button class="btn btn-primary" style="width: 100%;" onclick="applyManualSettings()">
+                            <span>✓</span> Apply Settings
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Device Statistics -->
+            <div class="card" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h3>Device Statistics</h3>
+                </div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+                        <div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.875rem; margin-bottom: 0.25rem;">Uptime</div>
+                            <div style="font-size: 1.5rem; font-weight: 700;" id="uptime">--</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.875rem; margin-bottom: 0.25rem;">Last Update</div>
+                            <div style="font-size: 1.5rem; font-weight: 700;" id="lastUpdate">--</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.875rem; margin-bottom: 0.25rem;">Commands Sent</div>
+                            <div style="font-size: 1.5rem; font-weight: 700;" id="commandCount">0</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.875rem; margin-bottom: 0.25rem;">Health</div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-accent);" id="health">100%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Custom Styles for Range Input -->
+    <style>
+        .form-range {
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            background: var(--color-border);
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .form-range::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--color-primary);
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .form-range::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--color-primary);
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+        }
+
+        .checkbox {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+    </style>
+
+    <script src="../../scripts/app.js"></script>
+    <script src="../../scripts/light-details.js"></script>
+</body>
+</html>

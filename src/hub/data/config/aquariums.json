@@ -1,0 +1,97 @@
+{
+  "aquariums": [
+    {
+      "id": 1,
+      "name": "Living Room Tank",
+      "volumeLiters": 100,
+      "tankType": "Planted",
+      "location": "Living Room",
+      "description": "Community planted tank with tetras and rasboras",
+      "enabled": true,
+      "waterParameters": {
+        "temperature": {
+          "target": 25.0,
+          "min": 24.0,
+          "max": 26.0
+        },
+        "ph": {
+          "target": 7.0,
+          "min": 6.5,
+          "max": 7.5
+        },
+        "tds": {
+          "min": 150,
+          "max": 300
+        }
+      },
+      "currentReadings": {
+        "temperature": 25.2,
+        "ph": 7.1,
+        "tds": 220,
+        "lastUpdate": 0
+      }
+    },
+    {
+      "id": 2,
+      "name": "Bedroom Shrimp Tank",
+      "volumeLiters": 40,
+      "tankType": "Shrimp",
+      "location": "Master Bedroom",
+      "description": "Red cherry shrimp breeding tank",
+      "enabled": true,
+      "waterParameters": {
+        "temperature": {
+          "target": 23.0,
+          "min": 22.0,
+          "max": 24.0
+        },
+        "ph": {
+          "target": 6.8,
+          "min": 6.5,
+          "max": 7.2
+        },
+        "tds": {
+          "min": 180,
+          "max": 250
+        }
+      },
+      "currentReadings": {
+        "temperature": 23.1,
+        "ph": 6.9,
+        "tds": 210,
+        "lastUpdate": 0
+      }
+    },
+    {
+      "id": 3,
+      "name": "Office Cichlid Tank",
+      "volumeLiters": 200,
+      "tankType": "Cichlids",
+      "location": "Home Office",
+      "description": "African cichlid community",
+      "enabled": true,
+      "waterParameters": {
+        "temperature": {
+          "target": 26.0,
+          "min": 25.0,
+          "max": 27.0
+        },
+        "ph": {
+          "target": 8.0,
+          "min": 7.5,
+          "max": 8.5
+        },
+        "tds": {
+          "min": 250,
+          "max": 400
+        }
+      },
+      "currentReadings": {
+        "temperature": 26.3,
+        "ph": 7.9,
+        "tds": 310,
+        "lastUpdate": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Manage Devices - Aquarium Hub</title>
+    <link rel="stylesheet" href="../styles/styles.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="../images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Device Management</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="add-device.html" class="btn btn-primary">
+                    <span>➕</span> Add Device
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Navigation</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="../index.html" class="nav-item">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+                <a href="../aquarium/aquarium-selection.html" class="nav-item">
+                    <span class="nav-icon">🐠</span>
+                    <span class="nav-label">Aquariums</span>
+                </a>
+                <a href="manage-devices.html" class="nav-item active">
+                    <span class="nav-icon">🔌</span>
+                    <span class="nav-label">Devices</span>
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <p>&copy; 2026 Aquarium Hub</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>All Devices</h1>
+                <p class="page-description">Manage all devices across all aquariums</p>
+            </div>
+
+            <!-- Filter Section -->
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="card-body">
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+                        <!-- Tank Filter -->
+                        <div style="flex: 1; min-width: 200px;">
+                            <label for="tankFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Tank</label>
+                            <select id="tankFilter" class="form-input" onchange="filterDevices()">
+                                <option value="all">All Tanks</option>
+                            </select>
+                        </div>
+
+                        <!-- Device Type Filter -->
+                        <div style="flex: 1; min-width: 200px;">
+                            <label for="typeFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Type</label>
+                            <select id="typeFilter" class="form-input" onchange="filterDevices()">
+                                <option value="all">All Types</option>
+                                <option value="light">💡 Light</option>
+                                <option value="co2">🫧 CO₂</option>
+                                <option value="heater">🔥 Heater</option>
+                                <option value="feeder">🐟 Feeder</option>
+                                <option value="sensor">📊 Sensor</option>
+                                <option value="repeater">📡 Repeater</option>
+                            </select>
+                        </div>
+
+                        <!-- Status Filter -->
+                        <div style="flex: 1; min-width: 200px;">
+                            <label for="statusFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Status</label>
+                            <select id="statusFilter" class="form-input" onchange="filterDevices()">
+                                <option value="all">All Status</option>
+                                <option value="online">Online</option>
+                                <option value="offline">Offline</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Statistics Cards -->
+            <div class="stats-grid" style="margin-bottom: 2rem;">
+                <div class="stat-card">
+                    <div class="stat-icon stat-icon-online">
+                        <span>🔌</span>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="totalDevices">0</div>
+                        <div class="stat-label">Total Devices</div>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon stat-icon-online">
+                        <span>✓</span>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="onlineDevices">0</div>
+                        <div class="stat-label">Online</div>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(239, 68, 68, 0.1) 100%);">
+                        <span>⚠️</span>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="offlineDevices">0</div>
+                        <div class="stat-label">Offline</div>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(245, 158, 11, 0.1) 100%);">
+                        <span>⏰</span>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="scheduledDevices">0</div>
+                        <div class="stat-label">With Schedules</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Devices Grid -->
+            <div class="content-grid" id="devicesGrid">
+                <!-- Devices will be dynamically loaded here -->
+            </div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="card" style="display: none; text-align: center; padding: 3rem;">
+                <div style="font-size: 4rem; margin-bottom: 1rem;">🔌</div>
+                <h2>No Devices Found</h2>
+                <p style="color: var(--color-text-secondary); margin: 1rem 0 2rem;">
+                    No devices match your current filters, or no devices have been added yet.
+                </p>
+                <a href="add-device.html" class="btn btn-primary">
+                    <span>➕</span> Add Your First Device
+                </a>
+            </div>
+
+            <!-- Bulk Actions -->
+            <div class="card" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h3>Bulk Actions</h3>
+                    <span id="selectedCount" style="color: var(--color-text-secondary); font-size: 0.875rem;">0 selected</span>
+                </div>
+                <div class="card-body">
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                        <button class="btn btn-secondary" onclick="selectAll()">
+                            <span>☑️</span> Select All
+                        </button>
+                        <button class="btn btn-secondary" onclick="deselectAll()">
+                            <span>◻️</span> Deselect All
+                        </button>
+                        <button class="btn btn-success" onclick="bulkEnable()" id="bulkEnableBtn" disabled>
+                            <span>✓</span> Enable Selected
+                        </button>
+                        <button class="btn btn-warning" onclick="bulkDisable()" id="bulkDisableBtn" disabled>
+                            <span>⏸️</span> Disable Selected
+                        </button>
+                        <button class="btn btn-danger" onclick="bulkDelete()" id="bulkDeleteBtn" disabled>
+                            <span>🗑️</span> Delete Selected
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../scripts/app.js"></script>
+    <script src="../scripts/manage-devices.js"></script>
+</body>
+</html>

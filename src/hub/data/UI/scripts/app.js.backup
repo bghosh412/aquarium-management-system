@@ -1,0 +1,317 @@
+// Aquarium Management System - Web UI JavaScript
+// Communicates with ESP32 hub via WebSocket
+
+let ws = null;
+let currentTankId = 1;
+let nodes = {};
+let reconnectInterval = null;
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+    initWebSocket();
+    setupEventListeners();
+    logMessage('Web UI loaded');
+});
+
+// WebSocket connection management
+function initWebSocket() {
+    const wsUrl = `ws://${window.location.hostname}/ws`;
+    logMessage(`Connecting to ${wsUrl}...`);
+    
+    ws = new WebSocket(wsUrl);
+    
+    ws.onopen = () => {
+        logMessage('Connected to hub', 'success');
+        updateConnectionStatus(true);
+        clearInterval(reconnectInterval);
+        
+        // Request initial node list
+        sendCommand({ type: 'GET_NODES', tankId: currentTankId });
+    };
+    
+    ws.onclose = () => {
+        logMessage('Disconnected from hub', 'error');
+        updateConnectionStatus(false);
+        
+        // Attempt reconnection every 5 seconds
+        if (!reconnectInterval) {
+            reconnectInterval = setInterval(() => {
+                logMessage('Attempting to reconnect...');
+                initWebSocket();
+            }, 5000);
+        }
+    };
+    
+    ws.onerror = (error) => {
+        logMessage(`WebSocket error: ${error}`, 'error');
+    };
+    
+    ws.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            handleMessage(data);
+        } catch (e) {
+            logMessage(`Failed to parse message: ${e}`, 'error');
+        }
+    };
+}
+
+// Handle incoming WebSocket messages
+function handleMessage(data) {
+    switch(data.type) {
+        case 'NODE_LIST':
+            updateNodesList(data.nodes);
+            break;
+        case 'NODE_STATUS':
+            updateNodeStatus(data.nodeType, data.status);
+            break;
+        case 'SENSOR_DATA':
+            updateSensorData(data.data);
+            break;
+        case 'COMMAND_ACK':
+            logMessage(`Command acknowledged: ${data.commandId}`, 'success');
+            break;
+        case 'HUB_STATUS':
+            updateHubStatus(data.uptime);
+            break;
+        case 'ERROR':
+            logMessage(`Error: ${data.message}`, 'error');
+            break;
+        default:
+            logMessage(`Unknown message type: ${data.type}`, 'warning');
+    }
+}
+
+// Send command to hub
+function sendCommand(command) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(command));
+        logMessage(`Sent: ${command.type}`);
+    } else {
+        logMessage('Cannot send command: not connected', 'error');
+    }
+}
+
+// Update connection status indicator
+function updateConnectionStatus(connected) {
+    const statusBadge = document.getElementById('connection-status');
+    if (connected) {
+        statusBadge.textContent = 'Connected';
+        statusBadge.classList.remove('disconnected');
+        statusBadge.classList.add('connected');
+    } else {
+        statusBadge.textContent = 'Disconnected';
+        statusBadge.classList.remove('connected');
+        statusBadge.classList.add('disconnected');
+    }
+}
+
+// Update hub uptime display
+function updateHubStatus(uptime) {
+    const uptimeEl = document.getElementById('hub-uptime');
+    const hours = Math.floor(uptime / 60);
+    const minutes = uptime % 60;
+    uptimeEl.textContent = `Uptime: ${hours}h ${minutes}m`;
+}
+
+// Update nodes grid
+function updateNodesList(nodeList) {
+    nodes = {};
+    const grid = document.getElementById('nodes-grid');
+    grid.innerHTML = '';
+    
+    nodeList.forEach(node => {
+        nodes[node.type] = node;
+        
+        const card = document.createElement('div');
+        card.className = `node-card ${node.online ? 'online' : 'offline'}`;
+        card.innerHTML = `
+            <h3>${getNodeIcon(node.type)} ${node.name}</h3>
+            <p class="node-status ${node.online ? 'online' : 'offline'}">
+                ${node.online ? '● Online' : '○ Offline'}
+            </p>
+            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">
+                Last seen: ${node.lastSeen || 'Never'}
+            </p>
+        `;
+        
+        card.addEventListener('click', () => showNodePanel(node.type));
+        grid.appendChild(card);
+    });
+}
+
+// Update individual node status
+function updateNodeStatus(nodeType, status) {
+    if (nodes[nodeType]) {
+        nodes[nodeType].online = status.online;
+        nodes[nodeType].lastSeen = status.lastSeen;
+        updateNodesList(Object.values(nodes));
+    }
+}
+
+// Show control panel for selected node
+function showNodePanel(nodeType) {
+    // Hide all panels
+    document.querySelectorAll('.control-panel').forEach(panel => {
+        panel.style.display = 'none';
+    });
+    
+    // Show selected panel
+    const panelMap = {
+        'LIGHT': 'lighting-panel',
+        'CO2': 'co2-panel',
+        'FISH_FEEDER': 'feeder-panel',
+        'HEATER': 'heater-panel',
+        'SENSOR': 'sensor-panel'
+    };
+    
+    const panelId = panelMap[nodeType];
+    if (panelId) {
+        document.getElementById(panelId).style.display = 'block';
+        logMessage(`Opened ${nodeType} control panel`);
+    }
+}
+
+// Get emoji icon for node type
+function getNodeIcon(nodeType) {
+    const icons = {
+        'LIGHT': '💡',
+        'CO2': '🫧',
+        'FISH_FEEDER': '🐟',
+        'HEATER': '🌡️',
+        'SENSOR': '💧',
+        'DOSER': '💊',
+        'FILTER': '🌀'
+    };
+    return icons[nodeType] || '📦';
+}
+
+// Update sensor data display
+function updateSensorData(data) {
+    if (data.ph !== undefined) {
+        document.getElementById('sensor-ph').textContent = data.ph.toFixed(2);
+    }
+    if (data.tds !== undefined) {
+        document.getElementById('sensor-tds').textContent = data.tds;
+    }
+    if (data.temp !== undefined) {
+        document.getElementById('sensor-temp').textContent = data.temp.toFixed(1);
+        document.getElementById('heater-current-temp').textContent = data.temp.toFixed(1);
+    }
+}
+
+// Log message to system log
+function logMessage(message, type = 'info') {
+    const logContent = document.getElementById('system-log');
+    const entry = document.createElement('p');
+    entry.className = `log-entry ${type}`;
+    
+    const timestamp = new Date().toLocaleTimeString();
+    entry.textContent = `[${timestamp}] ${message}`;
+    
+    logContent.appendChild(entry);
+    logContent.scrollTop = logContent.scrollHeight;
+    
+    // Limit log entries to 100
+    while (logContent.children.length > 100) {
+        logContent.removeChild(logContent.firstChild);
+    }
+}
+
+// Setup event listeners for UI controls
+function setupEventListeners() {
+    // Tank selector
+    document.getElementById('tank-select').addEventListener('change', (e) => {
+        currentTankId = parseInt(e.target.value);
+        logMessage(`Switched to Tank ${currentTankId}`);
+        sendCommand({ type: 'GET_NODES', tankId: currentTankId });
+    });
+    
+    // Lighting controls
+    const sliders = ['white', 'blue', 'red'];
+    sliders.forEach(color => {
+        const slider = document.getElementById(`${color}-slider`);
+        const valueDisplay = document.getElementById(`${color}-value`);
+        
+        slider.addEventListener('input', (e) => {
+            const percent = Math.round((e.target.value / 255) * 100);
+            valueDisplay.textContent = percent;
+        });
+    });
+    
+    document.getElementById('light-apply').addEventListener('click', () => {
+        const white = document.getElementById('white-slider').value;
+        const blue = document.getElementById('blue-slider').value;
+        const red = document.getElementById('red-slider').value;
+        
+        sendCommand({
+            type: 'COMMAND',
+            tankId: currentTankId,
+            nodeType: 'LIGHT',
+            command: 'SET_LEVELS',
+            data: { white: parseInt(white), blue: parseInt(blue), red: parseInt(red) }
+        });
+    });
+    
+    // CO2 controls
+    document.getElementById('co2-start').addEventListener('click', () => {
+        const duration = document.getElementById('co2-duration').value;
+        sendCommand({
+            type: 'COMMAND',
+            tankId: currentTankId,
+            nodeType: 'CO2',
+            command: 'START',
+            data: { duration: parseInt(duration) }
+        });
+    });
+    
+    document.getElementById('co2-stop').addEventListener('click', () => {
+        sendCommand({
+            type: 'COMMAND',
+            tankId: currentTankId,
+            nodeType: 'CO2',
+            command: 'STOP'
+        });
+    });
+    
+    // Fish feeder controls
+    document.getElementById('feeder-feed').addEventListener('click', () => {
+        const portions = document.getElementById('feeder-portions').value;
+        sendCommand({
+            type: 'COMMAND',
+            tankId: currentTankId,
+            nodeType: 'FISH_FEEDER',
+            command: 'FEED',
+            data: { portions: parseInt(portions) }
+        });
+    });
+    
+    // Heater controls
+    document.getElementById('heater-apply').addEventListener('click', () => {
+        const mode = document.getElementById('heater-mode').value;
+        const temp = document.getElementById('heater-temp').value;
+        
+        sendCommand({
+            type: 'COMMAND',
+            tankId: currentTankId,
+            nodeType: 'HEATER',
+            command: 'SET_TEMP',
+            data: { mode: mode, target: parseFloat(temp) }
+        });
+    });
+    
+    // Sensor refresh
+    document.getElementById('sensor-refresh').addEventListener('click', () => {
+        sendCommand({
+            type: 'COMMAND',
+            tankId: currentTankId,
+            nodeType: 'SENSOR',
+            command: 'READ'
+        });
+    });
+    
+    // Clear log
+    document.getElementById('log-clear').addEventListener('click', () => {
+        document.getElementById('system-log').innerHTML = '<p class="log-entry">Log cleared</p>';
+    });
+}

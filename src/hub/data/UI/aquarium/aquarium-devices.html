@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Aquarium Devices - Aquarium Hub</title>
+    <link rel="stylesheet" href="../styles/styles.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="../images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Aquarium Devices</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="../device/add-device.html" class="btn btn-primary">
+                    <span>➕</span> Add Device
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Navigation</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="../index.html" class="nav-item">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+                <a href="aquarium-selection.html" class="nav-item active">
+                    <span class="nav-icon">🐠</span>
+                    <span class="nav-label">Aquariums</span>
+                </a>
+                <a href="../device/manage-devices.html" class="nav-item">
+                    <span class="nav-icon">🔌</span>
+                    <span class="nav-label">Devices</span>
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <p>&copy; 2026 Aquarium Hub</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Aquarium Info Header -->
+            <div class="card" style="margin-bottom: 2rem;">
+                <div class="card-body" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <h2 id="aquariumName" style="margin: 0 0 0.5rem 0;">Loading...</h2>
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                            <span style="color: var(--color-text-secondary);">
+                                <strong>ID:</strong> <span id="tankId">-</span>
+                            </span>
+                            <span style="color: var(--color-text-secondary);">
+                                <strong>Volume:</strong> <span id="volume">-</span>L
+                            </span>
+                            <span style="color: var(--color-text-secondary);">
+                                <strong>Location:</strong> <span id="location">-</span>
+                            </span>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <a href="manage-aquarium.html" class="btn btn-secondary">
+                            <span>⚙️</span> Settings
+                        </a>
+                        <a href="aquarium-selection.html" class="btn btn-secondary">
+                            <span>←</span> Back
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="page-header">
+                <h1>Devices in This Aquarium</h1>
+                <p class="page-description">Monitor and control all connected devices</p>
+            </div>
+
+            <!-- Device Type Filters -->
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="card-body">
+                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                        <button class="btn btn-secondary device-filter active" data-filter="all">All Devices</button>
+                        <button class="btn btn-secondary device-filter" data-filter="light">💡 Lights</button>
+                        <button class="btn btn-secondary device-filter" data-filter="co2">🫧 CO₂</button>
+                        <button class="btn btn-secondary device-filter" data-filter="heater">🔥 Heater</button>
+                        <button class="btn btn-secondary device-filter" data-filter="feeder">🐟 Feeder</button>
+                        <button class="btn btn-secondary device-filter" data-filter="sensor">📊 Sensors</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Devices Grid -->
+            <div class="content-grid" id="devicesGrid">
+                <!-- Devices will be dynamically loaded here -->
+            </div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="card" style="display: none; text-align: center; padding: 3rem;">
+                <div style="font-size: 4rem; margin-bottom: 1rem;">🔌</div>
+                <h2>No Devices Found</h2>
+                <p style="color: var(--color-text-secondary); margin: 1rem 0 2rem;">Add devices to this aquarium to get started</p>
+                <a href="../device/add-device.html" class="btn btn-primary">
+                    <span>➕</span> Add Your First Device
+                </a>
+            </div>
+
+            <!-- Current Water Parameters -->
+            <div class="card" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h3>Current Water Parameters</h3>
+                    <span class="badge badge-online" id="sensorStatus">Live</span>
+                </div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+                        <!-- Temperature -->
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <span style="font-size: 1.5rem;">🌡️</span>
+                                <span style="font-weight: 600;">Temperature</span>
+                            </div>
+                            <div style="font-size: 2rem; font-weight: 700; color: var(--color-primary);" id="currentTemp">--°C</div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
+                                Range: <span id="tempRange">24-26°C</span>
+                            </div>
+                        </div>
+
+                        <!-- pH -->
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <span style="font-size: 1.5rem;">💧</span>
+                                <span style="font-weight: 600;">pH Level</span>
+                            </div>
+                            <div style="font-size: 2rem; font-weight: 700; color: var(--color-accent);" id="currentPh">--</div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
+                                Range: <span id="phRange">6.5-7.5</span>
+                            </div>
+                        </div>
+
+                        <!-- TDS -->
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <span style="font-size: 1.5rem;">📊</span>
+                                <span style="font-weight: 600;">TDS</span>
+                            </div>
+                            <div style="font-size: 2rem; font-weight: 700; color: var(--color-primary-dark);" id="currentTds">-- ppm</div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
+                                Range: <span id="tdsRange">150-300 ppm</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../scripts/app.js"></script>
+    <script src="../scripts/aquarium-devices.js"></script>
+</body>
+</html>

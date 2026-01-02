@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Add New Device - Aquarium Hub</title>
+    <link rel="stylesheet" href="../styles/styles.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="../images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Add New Device</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Navigation</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="../index.html" class="nav-item">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+                <a href="../aquarium/aquarium-selection.html" class="nav-item">
+                    <span class="nav-icon">🐠</span>
+                    <span class="nav-label">Aquariums</span>
+                </a>
+                <a href="manage-devices.html" class="nav-item active">
+                    <span class="nav-icon">🔌</span>
+                    <span class="nav-label">Devices</span>
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <p>&copy; 2026 Aquarium Hub</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Add New Device</h1>
+                <p class="page-description">Register a new device to your aquarium system</p>
+            </div>
+
+            <!-- Discovery Mode Card -->
+            <div class="card" style="margin-bottom: 2rem; border: 2px solid var(--color-primary);">
+                <div class="card-header" style="background: rgba(14, 165, 233, 0.1);">
+                    <h3>Discovery Mode</h3>
+                    <span class="badge badge-online" id="discoveryStatus">Listening</span>
+                </div>
+                <div class="card-body">
+                    <p style="margin-bottom: 1rem;">
+                        The hub is automatically listening for device announcements on ESP-NOW Channel 6.
+                        Power on your device to have it discovered automatically.
+                    </p>
+                    <div style="display: flex; gap: 1rem; align-items: center; padding: 1rem; background: var(--color-bg); border-radius: var(--radius-md);">
+                        <div class="spinner" style="width: 24px; height: 24px;"></div>
+                        <span style="font-weight: 500;">Waiting for device announcements...</span>
+                    </div>
+                    <div id="discoveredDevices" style="margin-top: 1rem;">
+                        <!-- Discovered devices will appear here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Manual Registration Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Manual Registration</h3>
+                    <span style="color: var(--color-text-secondary); font-size: 0.875rem;">
+                        For devices that don't auto-announce
+                    </span>
+                </div>
+                <div class="card-body">
+                    <form id="addDeviceForm">
+                        <!-- Device Name -->
+                        <div class="form-group">
+                            <label for="deviceName" class="form-label">Device Name</label>
+                            <input type="text" id="deviceName" class="form-input" placeholder="e.g., Main Tank Light" required>
+                            <small class="form-help">A friendly name to identify this device</small>
+                        </div>
+
+                        <!-- MAC Address -->
+                        <div class="form-group">
+                            <label for="deviceMac" class="form-label">MAC Address</label>
+                            <input type="text" id="deviceMac" class="form-input" placeholder="AA:BB:CC:DD:EE:FF" required pattern="[A-Fa-f0-9]{2}:[A-Fa-f0-9]{2}:[A-Fa-f0-9]{2}:[A-Fa-f0-9]{2}:[A-Fa-f0-9]{2}:[A-Fa-f0-9]{2}">
+                            <small class="form-help">Device MAC address in format AA:BB:CC:DD:EE:FF</small>
+                        </div>
+
+                        <!-- Device Type -->
+                        <div class="form-group">
+                            <label for="deviceType" class="form-label">Device Type</label>
+                            <select id="deviceType" class="form-input" required onchange="updateDeviceIcon()">
+                                <option value="">Select device type...</option>
+                                <option value="light">💡 Light Controller</option>
+                                <option value="co2">🫧 CO₂ Regulator</option>
+                                <option value="heater">🔥 Heater</option>
+                                <option value="feeder">🐟 Fish Feeder</option>
+                                <option value="sensor">📊 Water Quality Sensor</option>
+                                <option value="repeater">📡 Repeater</option>
+                            </select>
+                        </div>
+
+                        <!-- Tank Assignment -->
+                        <div class="form-group">
+                            <label for="tankId" class="form-label">Assign to Tank</label>
+                            <select id="tankId" class="form-input" required>
+                                <option value="">Select aquarium...</option>
+                            </select>
+                            <small class="form-help">Which aquarium does this device belong to?</small>
+                        </div>
+
+                        <!-- Device Icon Preview -->
+                        <div id="devicePreview" style="display: none; padding: 1.5rem; background: var(--color-bg); border-radius: var(--radius-md); margin-bottom: 1.5rem; text-align: center;">
+                            <div style="font-size: 4rem; margin-bottom: 0.5rem;" id="previewIcon">🔌</div>
+                            <div style="font-size: 1.25rem; font-weight: 600;" id="previewName">Device Name</div>
+                            <div style="color: var(--color-text-secondary); margin-top: 0.25rem;" id="previewType">Device Type</div>
+                        </div>
+
+                        <!-- Advanced Settings (Collapsible) -->
+                        <details style="margin: 2rem 0;">
+                            <summary style="cursor: pointer; font-weight: 600; padding: 1rem; background: var(--color-bg); border-radius: var(--radius-md);">
+                                Advanced Settings (Optional)
+                            </summary>
+                            <div style="padding: 1rem; border: 1px solid var(--color-border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md);">
+                                <!-- Firmware Version -->
+                                <div class="form-group">
+                                    <label for="firmwareVersion" class="form-label">Firmware Version</label>
+                                    <input type="text" id="firmwareVersion" class="form-input" placeholder="1.0.0">
+                                </div>
+
+                                <!-- Custom Configuration -->
+                                <div class="form-group">
+                                    <label for="customConfig" class="form-label">Custom Configuration (JSON)</label>
+                                    <textarea id="customConfig" class="form-input" rows="4" placeholder='{"key": "value"}'></textarea>
+                                    <small class="form-help">Advanced device-specific configuration in JSON format</small>
+                                </div>
+                            </div>
+                        </details>
+
+                        <!-- Submit Buttons -->
+                        <div style="display: flex; gap: 1rem;">
+                            <button type="submit" class="btn btn-primary" style="flex: 1;">
+                                <span>➕</span> Add Device
+                            </button>
+                            <a href="manage-devices.html" class="btn btn-secondary" style="flex: 1; text-align: center; text-decoration: none;">
+                                Cancel
+                            </a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Help Card -->
+            <div class="card" style="margin-top: 2rem; background: linear-gradient(135deg, rgba(14, 165, 233, 0.05) 0%, rgba(14, 165, 233, 0.02) 100%);">
+                <div class="card-header">
+                    <h3>📘 Setup Guide</h3>
+                </div>
+                <div class="card-body">
+                    <ol style="margin: 0; padding-left: 1.5rem;">
+                        <li style="margin-bottom: 0.5rem;">Power on your ESP8266 device</li>
+                        <li style="margin-bottom: 0.5rem;">The device will automatically send an ANNOUNCE message</li>
+                        <li style="margin-bottom: 0.5rem;">Hub will detect and register the device</li>
+                        <li style="margin-bottom: 0.5rem;">Assign a friendly name and tank ID</li>
+                        <li>Start using your device!</li>
+                    </ol>
+                    <div style="margin-top: 1rem; padding: 1rem; background: rgba(245, 158, 11, 0.1); border-left: 4px solid var(--color-accent-warning); border-radius: var(--radius-sm);">
+                        <strong>⚠️ Important:</strong> All devices must be on ESP-NOW Channel 6 to communicate with the hub.
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Custom Styles -->
+    <style>
+        .spinner {
+            border: 3px solid rgba(14, 165, 233, 0.2);
+            border-top-color: var(--color-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        details[open] summary {
+            border-radius: var(--radius-md) var(--radius-md) 0 0;
+        }
+    </style>
+
+    <script src="../scripts/app.js"></script>
+    <script src="../scripts/add-device.js"></script>
+</body>
+</html>

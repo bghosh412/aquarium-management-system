@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Light Schedule - Aquarium Hub</title>
+    <link rel="stylesheet" href="../../styles/styles.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="../../images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Light Schedule</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="../../aquarium/aquarium-selection.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>Navigation</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="../../index.html" class="nav-item">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+                <a href="../../aquarium/aquarium-selection.html" class="nav-item active">
+                    <span class="nav-icon">🐠</span>
+                    <span class="nav-label">Aquariums</span>
+                </a>
+                <a href="../../device/manage-devices.html" class="nav-item">
+                    <span class="nav-icon">🔌</span>
+                    <span class="nav-label">Devices</span>
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">Settings</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <p>&copy; 2026 Aquarium Hub</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Light Schedule</h1>
+                <p class="page-description">Configure the lighting schedule for your aquarium</p>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Device Information</h3>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">Aquarium 1</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;" id="deviceType">Lighting</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">Lighting_12</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Schedule</h3>
+                </div>
+                <div class="card-content">
+                    <form id="lightScheduleForm">
+                        <!-- Morning Photo Period -->
+                        <div class="form-group">
+                            <h4 style="margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600;">Morning Photo Period</h4>
+                            
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                                <div class="form-group">
+                                    <label for="morningStartHour" class="form-label">Start Time</label>
+                                    <div style="display: flex; gap: 0.5rem;">
+                                        <select id="morningStartHour" class="form-input"></select>
+                                        <select id="morningStartMinute" class="form-input"></select>
+                                        <select id="morningStartAMPM" class="form-input"></select>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="morningDurationHour" class="form-label">Duration</label>
+                                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                        <select id="morningDurationHour" class="form-input"></select>
+                                        <span>h</span>
+                                        <select id="morningDurationMinute" class="form-input"></select>
+                                        <span>m</span>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="morningRamp" class="form-label">Enable Ramp</label>
+                                    <select id="morningRamp" class="form-input">
+                                        <option value="yes">Yes</option>
+                                        <option value="no">No</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                        <!-- Evening Photo Period -->
+                        <div class="form-group">
+                            <h4 style="margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600;">Evening Photo Period</h4>
+                            
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                                <div class="form-group">
+                                    <label for="eveningStartHour" class="form-label">Start Time</label>
+                                    <div style="display: flex; gap: 0.5rem;">
+                                        <select id="eveningStartHour" class="form-input"></select>
+                                        <select id="eveningStartMinute" class="form-input"></select>
+                                        <select id="eveningStartAMPM" class="form-input"></select>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="eveningDurationHour" class="form-label">Duration</label>
+                                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                        <select id="eveningDurationHour" class="form-input"></select>
+                                        <span>h</span>
+                                        <select id="eveningDurationMinute" class="form-input"></select>
+                                        <span>m</span>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="eveningRamp" class="form-label">Enable Ramp</label>
+                                    <select id="eveningRamp" class="form-input">
+                                        <option value="yes">Yes</option>
+                                        <option value="no">No</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Submit Buttons -->
+                        <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+                            <button type="submit" class="btn btn-create-aquarium" id="saveScheduleBtn">
+                                <span>✓</span> Save
+                            </button>
+                            <button type="button" class="btn btn-cancel" id="cancelScheduleBtn">
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Populate dropdowns for time and duration
+        function populateDropdown(id, values, pad = true) {
+            const sel = document.getElementById(id);
+            sel.innerHTML = '';
+            for (let i = 0; i < values.length; i++) {
+                let val = values[i];
+                let text = pad ? String(val).padStart(2, '0') : val;
+                let opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = text;
+                sel.appendChild(opt);
+            }
+        }
+        
+        function populateAMPM(id) {
+            const sel = document.getElementById(id);
+            sel.innerHTML = '';
+            ['AM', 'PM'].forEach(val => {
+                let opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = val;
+                sel.appendChild(opt);
+            });
+        }
+        
+        // Morning Start Time: hour (0-11), minute (0,15,30,45), AM/PM
+        populateDropdown('morningStartHour', Array.from({length: 12}, (_, i) => i), false);
+        populateDropdown('morningStartMinute', [0, 15, 30, 45]);
+        populateAMPM('morningStartAMPM');
+        populateDropdown('morningDurationHour', Array.from({length: 13}, (_, i) => i), false);
+        populateDropdown('morningDurationMinute', Array.from({length: 60}, (_, i) => i));
+        
+        // Evening Start Time: hour (0-11), minute (0,15,30,45), AM/PM
+        populateDropdown('eveningStartHour', Array.from({length: 12}, (_, i) => i), false);
+        populateDropdown('eveningStartMinute', [0, 15, 30, 45]);
+        populateAMPM('eveningStartAMPM');
+        populateDropdown('eveningDurationHour', Array.from({length: 13}, (_, i) => i), false);
+        populateDropdown('eveningDurationMinute', Array.from({length: 60}, (_, i) => i));
+
+        // Button handlers
+        document.getElementById('saveScheduleBtn').onclick = function(e) {
+            e.preventDefault();
+            alert('Save not implemented (stub)');
+        };
+        
+        document.getElementById('cancelScheduleBtn').onclick = function() {
+            document.getElementById('lightScheduleForm').reset();
+        };
+    </script>
+</body>
+</html>

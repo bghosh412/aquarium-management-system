@@ -68,6 +68,18 @@ void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len);
 // Web server
 AsyncWebServer server(80);
 
+// Simple in-memory recent-missing list (keeps last N missing asset requests)
+static const size_t MISSING_ASSETS_LIMIT = 64;
+std::vector<String> recentMissingAssets;
+
+void recordMissingAsset(const String &url) {
+    String entry = String(millis()) + ": " + url;
+    recentMissingAssets.push_back(entry);
+    if (recentMissingAssets.size() > MISSING_ASSETS_LIMIT) {
+        recentMissingAssets.erase(recentMissingAssets.begin());
+    }
+}
+
 // WiFiManager
 WiFiManager wifiManager;
 
@@ -729,6 +741,20 @@ void setupWebServer() {
         json += "}";
         request->send(200, "application/json", json);
     });
+
+    // GET recent missing assets (for monitoring 404s)
+    server.on("/api/missing-assets", HTTP_GET, [](AsyncWebServerRequest *request){
+        DynamicJsonDocument doc(2048);
+        JsonArray arr = doc.createNestedArray("missing");
+        for (const String &entry : recentMissingAssets) {
+            arr.add(entry);
+        }
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
+    });
+
+    // NOTE: temporary debug endpoints removed for security — use PlatformIO uploadfs or secure shell methods to modify filesystem
     
     server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest *request){
         request->send(200, "text/plain", "Rebooting...");
@@ -1420,14 +1446,49 @@ void setupWebServer() {
     ws.onEvent(onWebSocketEvent);
     server.addHandler(&ws);
 
-    // Serve static files from LittleFS
+    // Explicit static handlers for resource directories to ensure correct mapping
+    server.serveStatic("/styles", LittleFS, "/UI/styles");
+    server.serveStatic("/images", LittleFS, "/UI/images");
+    server.serveStatic("/scripts", LittleFS, "/UI/scripts");
+    server.serveStatic("/fonts", LittleFS, "/UI/fonts");
+    // Fallback: map root to UI directory and serve index.html by default
     server.serveStatic("/", LittleFS, "/UI/").setDefaultFile("index.html");
 
     // Serve config directory (read-only)
     server.serveStatic("/config", LittleFS, "/config/");
 
-    // 404 handler
+    // 404 handler: attempt to serve files directly from /UI if present
     server.onNotFound([](AsyncWebServerRequest *request){
+        String url = request->url();
+        String fsPath = "/UI" + url;
+
+        // Normalize directory requests to index.html
+        if (url.endsWith("/")) {
+            fsPath += "index.html";
+        }
+
+        // Try to serve the file from LittleFS
+        if (LittleFS.exists(fsPath)) {
+            // Simple mime type guessing
+            String contentType = "text/plain";
+            if (url.endsWith(".html") || url == "/") contentType = "text/html";
+            else if (url.endsWith(".css")) contentType = "text/css";
+            else if (url.endsWith(".js")) contentType = "application/javascript";
+            else if (url.endsWith(".png")) contentType = "image/png";
+            else if (url.endsWith(".woff2")) contentType = "font/woff2";
+            else if (url.endsWith(".svg")) contentType = "image/svg+xml";
+            if (config.debugSerial) {
+                Serial.printf(" UI fallback: %s -> %s (type: %s)\n", url.c_str(), fsPath.c_str(), contentType.c_str());
+            }
+
+            request->send(LittleFS, fsPath.c_str(), contentType.c_str());
+            return;
+        }
+        if (config.debugSerial) {
+            Serial.printf(" 404 Not Found: %s\n", url.c_str());
+        }
+        // Record in recent missing list
+        recordMissingAsset(url);
         request->send(404, "text/plain", "Not found");
     });
 

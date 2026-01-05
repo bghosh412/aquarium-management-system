@@ -4,62 +4,93 @@
 #include <Arduino.h>
 #ifdef ESP8266
     #include <ESP8266WiFi.h>
-    #include <espnow.h>
+    #include <LittleFS.h>
 #else
     #include <WiFi.h>
-    #include <esp_now.h>
-    #include <esp_wifi.h>
+    #include <LITTLEFS.h>
+    #define LittleFS LITTLEFS
 #endif
 #include "protocol/messages.h"
 
-// State machine for all nodes
-enum class NodeState : uint8_t {
-    INITIALIZING,
-    ANNOUNCING,
-    WAITING_FOR_ACK,
-    CONNECTED,
-    LOST_CONNECTION
+// ============================================================================
+// NODEBASE - Shared functionality for all node types
+// ============================================================================
+// Handles: Configuration, Provisioning, Announcements, Heartbeats, ACK handling
+// Each node implements: setupHardware(), enterFailSafeMode(), handleCommand(), updateHardware()
+// ============================================================================
+
+// Configuration structure used by all nodes
+struct NodeConfig {
+    uint8_t tankId;              // 0 = unmapped, >0 = assigned tank
+    String nodeName;             // Human-readable name
+    NodeType nodeType;           // Type of node (LIGHT, CO2, etc)
+    uint8_t firmwareVersion;
+    uint8_t espnowChannel;
+    bool debugSerial;
+    bool debugESPNOW;
+    bool debugHardware;
+    uint32_t announceIntervalMs;
+    uint32_t heartbeatIntervalMs;
+    uint32_t connectionTimeoutMs;
 };
 
-// Global state (extern declarations - defined in node implementation)
-extern NodeState currentState;
-extern uint8_t hubMacAddress[6];
-extern bool hubDiscovered;
+// Global configuration (implemented in node_base.cpp)
+extern NodeConfig nodeConfig;
+
+// Connection state
+extern bool isConnectedToHub;
 extern uint32_t lastHeartbeatSent;
-extern uint32_t lastHeartbeatReceived;
-extern uint32_t announceAttempts;
 extern uint8_t messageSequence;
+extern uint32_t nodeUnixTime;  // Node's synchronized Unix timestamp
+extern uint32_t nodeBootMillis;  // millis() when time was last synced
 
-// Node configuration (defined by each specific node)
-extern const uint8_t NODE_TANK_ID;
-extern const NodeType NODE_TYPE;
-extern const char* NODE_NAME;
-extern const uint8_t FIRMWARE_VERSION;
+// ============================================================================
+// CONFIGURATION MANAGEMENT
+// ============================================================================
 
-// Timing constants
-const uint32_t ANNOUNCE_INTERVAL_MS = 5000;
-const uint32_t HEARTBEAT_INTERVAL_MS = 30000;
-const uint32_t CONNECTION_TIMEOUT_MS = 90000;
+// Load configuration from LittleFS (/node_config.txt)
+void loadNodeConfiguration(NodeType defaultType, const char* defaultName);
 
-// Functions that must be implemented by each specific node
-void setupHardware();           // Initialize hardware-specific pins/peripherals
-void enterFailSafeMode();       // Put hardware in safe state
-void handleCommand(const CommandMessage* msg);  // Process commands from hub
-void updateHardware();          // Called in main loop when connected
+// Save configuration to LittleFS (called during provisioning)
+void saveNodeConfiguration();
 
-// Shared ESP-NOW functions (implemented in node_base.cpp)
-void sendAnnounce();
+// ============================================================================
+// MESSAGE HANDLERS (Base implementations - nodes can override if needed)
+// ============================================================================
+
+// Handles ACK messages from hub (marks node as connected)
+void onAckReceived(const uint8_t* mac, const AckMessage& msg);
+
+// Handles CONFIG messages from hub (provisions node with tank assignment)
+void onConfigReceived(const uint8_t* mac, const ConfigMessage& msg);
+
+// Handles UNMAP messages from hub (removes tank assignment)
+void onUnmapReceived(const uint8_t* mac, const UnmapMessage& msg);
+
+// Sends heartbeat to hub (called periodically)
 void sendHeartbeat();
-void sendStatus(uint8_t commandId, uint8_t statusCode, const uint8_t* data, size_t dataLen);
-void setupESPNow();
-void nodeLoop();
 
-#ifdef ESP8266
-void onDataReceived(uint8_t* mac, uint8_t* data, uint8_t len);
-void onDataSent(uint8_t* mac, uint8_t status);
-#else
-void onDataReceived(const uint8_t* mac, const uint8_t* data, int len);
-void onDataSent(const uint8_t* mac, esp_now_send_status_t status);
-#endif
+// Sends ANNOUNCE message (called when unmapped or disconnected)
+void sendAnnounce();
+
+// Sends STATUS acknowledgment after command processing
+void sendStatusAck(const uint8_t* mac, uint8_t commandId, uint8_t statusCode, const uint8_t* data = nullptr, size_t dataLen = 0);
+
+// ============================================================================
+// FUNCTIONS THAT MUST BE IMPLEMENTED BY EACH NODE TYPE
+// ============================================================================
+
+// Initialize hardware-specific pins/peripherals
+void setupHardware();
+
+// Put hardware in safe state (on timeout or error)
+void enterFailSafeMode();
+
+// Process command data received from hub
+// data[0] = command type, data[1..n] = parameters
+void handleCommand(const uint8_t* mac, const uint8_t* data, size_t len);
+
+// Update hardware state (called every loop iteration)
+void updateHardware();
 
 #endif // NODE_BASE_H

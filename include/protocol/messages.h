@@ -56,6 +56,8 @@ struct AckMessage {
     MessageHeader header;
     uint8_t assignedNodeId;  // Hub-assigned unique ID
     bool accepted;           // Whether node is accepted into network
+    uint32_t unixTimestamp;  // Current Unix timestamp from hub
+    uint8_t reserved[8];     // Reserved for future use
 } __attribute__((packed));
 
 // CONFIG message - hub sends configuration to node (provisioning)
@@ -87,6 +89,7 @@ struct HeartbeatMessage {
     MessageHeader header;
     uint8_t health;  // 0-100 health indicator
     uint16_t uptimeMinutes;
+    uint32_t nodeUnixTime;  // Node's current Unix timestamp
 } __attribute__((packed));
 
 // UNMAP message - hub to node (reset device to discovery mode)

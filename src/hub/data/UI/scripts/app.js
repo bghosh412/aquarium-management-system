@@ -254,6 +254,7 @@ function updateSensorData(data) {
 // Log message to system log
 function logMessage(message, type = 'info') {
     const logContent = document.getElementById('system-log');
+    if (!logContent) return; // Avoid errors on pages without a system log element
     const entry = document.createElement('p');
     entry.className = `log-entry ${type}`;
     

@@ -1,0 +1,11 @@
+Screen Name,File Path,Backend Integration,Status,Pending Items
+Dashboard,/src/hub/data/UI/index.html,"✅ /api/devices (GET) + /api/aquariums (GET) - Loads every 5s, stores in localStorage",✅ FIXED,"Filesystem uploaded - Dashboard now correctly shows 3 aquariums and 11 devices"
+Add New Device,/src/hub/data/UI/device/add-device.html,"✅ /api/unmapped-devices (GET) + /api/provision-device (POST) + /api/aquariums (GET)",✅ Complete,None
+Manage Devices,/src/hub/data/UI/device/manage-devices.html,"✅ /api/devices (GET) + /api/aquariums (GET) + /api/unmap-device (POST)",✅ Complete,None
+Device Setup,/src/hub/data/UI/device/device-setup.html,"⚠️ localStorage + WebSocket only",⚠️ Partial,"Missing PUT /api/devices/:mac endpoint for device configuration updates"
+Light Schedule,/src/hub/data/UI/device/schedule/light-schedule.html,"❌ Minimal fallback only",❌ Not Integrated,"Missing POST/GET /api/schedules endpoint, No save/load functionality"
+Aquarium Selection,/src/hub/data/UI/aquarium/aquarium-selection.html,"✅ /api/aquariums (GET) - Loads every 5s",✅ FIXED,"Used tankId instead of id field - Fixed to use correct API response format"
+Add New Aquarium,/src/hub/data/UI/aquarium/add-new-aquarium.html,"✅ /api/aquariums (POST)",✅ Complete,None
+Aquarium Devices,/src/hub/data/UI/aquarium/aquarium-devices.html,"✅ /api/devices (GET) + /api/aquariums (GET) with tank filtering",✅ FIXED,"Fixed to load from API instead of localStorage, corrected field names (id vs tankId, volumeLiters vs volume, waterParameters vs thresholds)"
+Manage Aquarium,/src/hub/data/UI/aquarium/manage-aquarium.html,"✅ /api/aquariums (GET) | ❌ No save endpoint",⚠️ Partial,"Fixed to load from API, but missing PUT /api/aquariums/:id endpoint for updates"
+Light Details,/src/hub/data/UI/aquarium/details/light-details.html,"⚠️ localStorage + WebSocket only",⚠️ Partial,"Missing POST /api/devices/:mac/command endpoint for manual light control"

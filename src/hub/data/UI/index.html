@@ -41,23 +41,38 @@
       </div>
       <nav class="sidebar-nav">
         <a href="index.html" class="nav-item active">
-          <span class="nav-icon">🏠</span>
+          <span class="nav-icon">
+            <!-- Dashboard SVG -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+          </span>
           <span class="nav-label">Dashboard</span>
         </a>
         <a href="aquarium/aquarium-selection.html" class="nav-item">
-          <span class="nav-icon">🐠</span>
+          <span class="nav-icon">
+            <!-- Fish SVG -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 16s2-2 6-2 6 2 6 2-2 2-6 2-6-2-6-2z"/><circle cx="12" cy="12" r="3"/><path d="M22 12h-4"/></svg>
+          </span>
           <span class="nav-label">Aquariums</span>
         </a>
         <a href="device/manage-devices.html" class="nav-item">
-          <span class="nav-icon">🔌</span>
+          <span class="nav-icon">
+            <!-- Plug SVG -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="12" rx="2"/><path d="M12 14v8"/><path d="M8 22h8"/></svg>
+          </span>
           <span class="nav-label">Devices</span>
         </a>
         <a href="#" class="nav-item">
-          <span class="nav-icon">⏰</span>
+          <span class="nav-icon">
+            <!-- Clock SVG for Schedules -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </span>
           <span class="nav-label">Schedules</span>
         </a>
         <a href="troubleshooting.html" class="nav-item">
-          <span class="nav-icon">🔧</span>
+          <span class="nav-icon">
+            <!-- Wrench SVG for Troubleshooting -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22.7 19.3l-2.4-2.4a2 2 0 0 0-2.8 0l-2.1 2.1a2 2 0 0 0 0 2.8l2.4 2.4a2 2 0 0 0 2.8 0l2.1-2.1a2 2 0 0 0 0-2.8z"/><path d="M14.7 6.3a7 7 0 0 1 3 3"/><path d="M2 2l7 7"/></svg>
+          </span>
           <span class="nav-label">Troubleshooting</span>
         </a>
       </nav>
@@ -144,6 +159,13 @@
             <div class="stat-value" id="alert-count">0</div>
           </div>
         </div>
+
+      <!-- Content Grid -->
+      </div>
+
+      <!-- System Log (Activity Log for WebSocket) -->
+      <div id="system-log" class="system-log" style="margin: 24px 0; padding: 16px; background: #181f2a; border-radius: 8px; min-height: 80px; max-height: 200px; overflow-y: auto; font-size: 0.95em; color: #b8c7e0;">
+        <!-- Activity log messages will appear here via JS -->
       </div>
 
       <!-- Content Grid -->

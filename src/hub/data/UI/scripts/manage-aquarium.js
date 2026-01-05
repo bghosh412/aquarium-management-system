@@ -23,43 +23,48 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function loadAquariumData() {
-    // Try to load from localStorage
-    const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
-    currentAquarium = aquariums.find(a => a.tankId === currentTankId);
-    
-    if (currentAquarium) {
-        populateForm();
-    }
-    
-    // Request from hub via WebSocket
-    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
-        sendCommand({
-            type: 'getAquarium',
-            tankId: currentTankId
+    // Load from API
+    fetch('/api/aquariums')
+        .then(response => response.json())
+        .then(data => {
+            if (data.aquariums && Array.isArray(data.aquariums)) {
+                currentAquarium = data.aquariums.find(a => a.id === currentTankId);
+                if (currentAquarium) {
+                    populateForm();
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error loading aquarium:', error);
+            // Fallback to localStorage
+            const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
+            currentAquarium = aquariums.find(a => a.id === currentTankId);
+            if (currentAquarium) {
+                populateForm();
+            }
         });
-    }
 }
 
 function populateForm() {
     document.getElementById('aquariumTitle').textContent = `Manage ${currentAquarium.name}`;
-    document.getElementById('tankId').value = currentAquarium.tankId;
+    document.getElementById('tankId').value = currentAquarium.id;
     document.getElementById('tankName').value = currentAquarium.name;
-    document.getElementById('volume').value = currentAquarium.volume;
+    document.getElementById('volume').value = currentAquarium.volumeLiters;
     document.getElementById('location').value = currentAquarium.location || '';
     
     // Thresholds
-    if (currentAquarium.thresholds) {
-        document.getElementById('tempMin').value = currentAquarium.thresholds.temperature.min;
-        document.getElementById('tempMax').value = currentAquarium.thresholds.temperature.max;
-        document.getElementById('phMin').value = currentAquarium.thresholds.ph.min;
-        document.getElementById('phMax').value = currentAquarium.thresholds.ph.max;
-        document.getElementById('tdsMin').value = currentAquarium.thresholds.tds.min;
-        document.getElementById('tdsMax').value = currentAquarium.thresholds.tds.max;
+    if (currentAquarium.waterParameters) {
+        document.getElementById('tempMin').value = currentAquarium.waterParameters.temperature.min;
+        document.getElementById('tempMax').value = currentAquarium.waterParameters.temperature.max;
+        document.getElementById('phMin').value = currentAquarium.waterParameters.ph.min;
+        document.getElementById('phMax').value = currentAquarium.waterParameters.ph.max;
+        document.getElementById('tdsMin').value = currentAquarium.waterParameters.tds.min;
+        document.getElementById('tdsMax').value = currentAquarium.waterParameters.tds.max;
     }
     
     // Status badge
     const badge = document.getElementById('statusBadge');
-    if (currentAquarium.online) {
+    if (currentAquarium.enabled) {
         badge.className = 'badge badge-online';
         badge.textContent = 'Active';
     } else {
@@ -70,11 +75,10 @@ function populateForm() {
 
 function saveAquarium() {
     const updatedAquarium = {
-        tankId: currentTankId,
         name: document.getElementById('tankName').value,
-        volume: parseFloat(document.getElementById('volume').value),
+        volumeLiters: parseFloat(document.getElementById('volume').value),
         location: document.getElementById('location').value || '',
-        thresholds: {
+        waterParameters: {
             temperature: {
                 min: parseFloat(document.getElementById('tempMin').value),
                 max: parseFloat(document.getElementById('tempMax').value)
@@ -91,45 +95,76 @@ function saveAquarium() {
     };
     
     // Validation
-    if (updatedAquarium.volume <= 0) {
+    if (updatedAquarium.volumeLiters <= 0) {
         showNotification('Volume must be greater than 0', 'error');
         return;
     }
     
-    if (updatedAquarium.thresholds.temperature.min >= updatedAquarium.thresholds.temperature.max) {
+    if (updatedAquarium.waterParameters.temperature.min >= updatedAquarium.waterParameters.temperature.max) {
         showNotification('Min temperature must be less than max temperature', 'error');
         return;
     }
     
-    if (updatedAquarium.thresholds.ph.min >= updatedAquarium.thresholds.ph.max) {
+    if (updatedAquarium.waterParameters.ph.min >= updatedAquarium.waterParameters.ph.max) {
         showNotification('Min pH must be less than max pH', 'error');
         return;
     }
     
-    if (updatedAquarium.thresholds.tds.min >= updatedAquarium.thresholds.tds.max) {
+    if (updatedAquarium.waterParameters.tds.min >= updatedAquarium.waterParameters.tds.max) {
         showNotification('Min TDS must be less than max TDS', 'error');
         return;
     }
     
-    // Send to hub via WebSocket
-    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
-        sendCommand({
-            type: 'updateAquarium',
-            aquarium: updatedAquarium
-        });
-    }
-    
-    // Update localStorage
-    const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
-    const index = aquariums.findIndex(a => a.tankId === currentTankId);
-    if (index !== -1) {
-        aquariums[index] = { ...aquariums[index], ...updatedAquarium };
-        localStorage.setItem('aquariums', JSON.stringify(aquariums));
-    }
-    
-    showNotification('Aquarium updated successfully!', 'success');
+    // Send to hub via REST API
+    fetch(`/api/aquarium/update?id=${currentTankId}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updatedAquarium)
+    })
+    .then(response => {
+        if (response.ok) {
+            showNotification('Aquarium updated successfully!', 'success');
+            // Reload data
+            setTimeout(() => loadAquariumData(), 1000);
+        } else {
+            showNotification('Failed to update aquarium', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error updating aquarium:', error);
+        showNotification('Error updating aquarium', 'error');
+    });
 }
 
+function deleteAquarium() {
+    if (!confirm('Are you sure you want to delete this aquarium? This action cannot be undone.')) {
+        return;
+    }
+    
+    // Send to hub via REST API
+    fetch(`/api/aquarium/delete?id=${currentTankId}`, {
+        method: 'POST'
+    })
+    .then(response => {
+        if (response.ok) {
+            showNotification('Aquarium deleted successfully!', 'success');
+            setTimeout(() => {
+                window.location.href = 'aquarium-selection.html';
+            }, 1000);
+        } else {
+            showNotification('Failed to delete aquarium', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error deleting aquarium:', error);
+        showNotification('Error deleting aquarium', 'error');
+    });
+}
+
+// Remove old WebSocket-based delete function
+/*
 function deleteAquarium() {
     if (!confirm('Are you sure you want to delete this aquarium? This action cannot be undone.')) {
         return;

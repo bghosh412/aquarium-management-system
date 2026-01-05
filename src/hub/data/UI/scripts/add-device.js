@@ -20,8 +20,8 @@ function loadTankOptions() {
             if (data.aquariums && data.aquariums.length > 0) {
                 data.aquariums.forEach(tank => {
                     const option = document.createElement('option');
-                    option.value = tank.tankId;
-                    option.textContent = `Tank ${tank.tankId} - ${tank.name}`;
+                    option.value = tank.id;
+                    option.textContent = `Tank ${tank.id} - ${tank.name}`;
                     tankSelect.appendChild(option);
                 });
             }

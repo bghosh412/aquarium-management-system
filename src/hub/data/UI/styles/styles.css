@@ -338,6 +338,7 @@ img {
     align-items: center;
     justify-content: center;
     line-height: 1;
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', 'Android Emoji', 'EmojiOne Color', 'Twemoji Mozilla', sans-serif !important;
 }
 
 .nav-label {

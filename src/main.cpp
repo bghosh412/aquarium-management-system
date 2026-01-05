@@ -30,6 +30,7 @@
 #include <HTTPClient.h>
 #include "Constant.h"
 #include "ESPNowManager.h"
+#include "ws_server.h"
 
 // ============================================================================
 // CONFIGURATION & CONSTANTS
@@ -69,6 +70,65 @@ AsyncWebServer server(80);
 
 // WiFiManager
 WiFiManager wifiManager;
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/**
+ * @brief Generate unique command ID
+ */
+uint8_t generateCommandId() {
+    static uint8_t commandIdCounter = 0;
+    return ++commandIdCounter;  // Auto-wraps at 255
+}
+
+/**
+ * @brief Create device object based on type
+ * NOTE: Device subclasses don't have .cpp implementations yet,
+ * so we can't instantiate them. This is a placeholder that will
+ * be implemented when device .cpp files are created.
+ */
+Device* createDevice(const uint8_t* mac, NodeType type, const char* name) {
+    // TODO: Implement when device .cpp files exist
+    Serial.printf(" ⚠️ Device creation not yet implemented (type: %d)\n", (int)type);
+    return nullptr;
+}
+
+/**
+ * @brief Count devices for a specific aquarium from devices.json
+ * TEMPORARY WORKAROUND: Since Device objects aren't created yet,
+ * we count devices directly from the JSON file
+ */
+int countDevicesForAquarium(uint8_t tankId) {
+    if (!LittleFS.exists("/config/devices.json")) {
+        return 0;
+    }
+    
+    File file = LittleFS.open("/config/devices.json", "r");
+    if (!file) {
+        return 0;
+    }
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        return 0;
+    }
+    
+    JsonArray devices = doc["devices"].as<JsonArray>();
+    int count = 0;
+    
+    for (JsonObject obj : devices) {
+        if (obj["tankId"].as<uint8_t>() == tankId) {
+            count++;
+        }
+    }
+    
+    return count;
+}
 
 // ============================================================================
 // CONFIGURATION LOADER
@@ -447,6 +507,101 @@ bool loadAquariumsFromFile() {
 }
 
 /**
+ * @brief Load devices from JSON file and associate with aquariums
+ * @return true if loaded successfully
+ */
+bool loadDevicesIntoAquariums() {
+    Serial.println(" Loading devices into aquarium objects...");
+    
+    if (!LittleFS.exists("/config/devices.json")) {
+        Serial.println("  devices.json not found");
+        return false;
+    }
+    
+    File file = LittleFS.open("/config/devices.json", "r");
+    if (!file) {
+        Serial.println(" Failed to open devices.json");
+        return false;
+    }
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        Serial.printf(" Failed to parse devices.json: %s\\n", error.c_str());
+        return false;
+    }
+    
+    JsonArray devices = doc["devices"].as<JsonArray>();
+    int loadedCount = 0;
+    int errorCount = 0;
+    
+    for (JsonObject obj : devices) {
+        String macStr = obj["mac"] | "";
+        String name = obj["name"] | "";
+        uint8_t tankId = obj["tankId"] | 0;
+        uint8_t type = obj["type"] | 0;
+        
+        if (macStr.isEmpty() || name.isEmpty() || tankId == 0) {
+            Serial.println("  Skipping invalid device entry");
+            errorCount++;
+            continue;
+        }
+        
+        // Parse MAC address
+        uint8_t mac[6];
+        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+            Serial.printf("  Invalid MAC format: %s\\n", macStr.c_str());
+            errorCount++;
+            continue;
+        }
+        
+        // Get aquarium
+        Aquarium* aquarium = AquariumManager::getInstance().getAquarium(tankId);
+        if (!aquarium) {
+            Serial.printf("  ⚠️  Aquarium %d not found for device %s\\n", tankId, name.c_str());
+            errorCount++;
+            continue;
+        }
+        
+        // Create device object based on type
+        NodeType deviceType = static_cast<NodeType>(type);
+        Device* device = createDevice(mac, deviceType, name.c_str());
+        
+        if (!device) {
+            Serial.printf("  Failed to create device %s (unknown type)\\n", name.c_str());
+            errorCount++;
+            continue;
+        }
+        
+        device->setTankId(tankId);
+        device->setEnabled(obj["enabled"] | true);
+        device->setFirmwareVersion(obj["firmwareVersion"] | 0);
+        
+        // Add to aquarium
+        if (aquarium->addDevice(device)) {
+            loadedCount++;
+        } else {
+            Serial.printf("  Failed to add device %s to aquarium\\n", name.c_str());
+            delete device;
+            errorCount++;
+        }
+    }
+    
+    Serial.printf(" ✅ Loaded %d devices into aquariums (%d errors)\\n", loadedCount, errorCount);
+    
+    // Print device counts per aquarium
+    std::vector<Aquarium*> allAquariums = AquariumManager::getInstance().getAllAquariums();
+    for (Aquarium* aquarium : allAquariums) {
+        Serial.printf("   - %s: %d devices\\n", aquarium->getName().c_str(), aquarium->getDeviceCount());
+    }
+    
+    return loadedCount > 0;
+}
+
+/**
  * @brief Save aquariums to JSON file
  * @return true if saved successfully
  */
@@ -560,13 +715,11 @@ uint8_t getNextAquariumId() {
 void setupWebServer() {
     Serial.println(" Starting web server...");
     
-    // Serve static files from LittleFS
-    server.serveStatic("/", LittleFS, "/UI/").setDefaultFile("index.html");
+    // ===== IMPORTANT: Register API routes FIRST before static file handlers =====
+    // AsyncWebServer processes routes in registration order, so API routes must come first
+    // to prevent serveStatic from intercepting /api/* requests
     
-    // Serve config directory (read-only)
-    server.serveStatic("/config", LittleFS, "/config/");
-    
-    // API endpoints (placeholder for future)
+    // API endpoints
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
         String json = "{";
         json += "\"uptime\":" + String(millis() / 1000) + ",";
@@ -600,7 +753,8 @@ void setupWebServer() {
             obj["tankType"] = aquarium->getTankType();
             obj["location"] = aquarium->getLocation();
             obj["enabled"] = aquarium->isEnabled();
-            obj["deviceCount"] = aquarium->getDeviceCount();
+            // TEMPORARY: Count devices from JSON file since Device objects don't exist yet
+            obj["deviceCount"] = countDevicesForAquarium(aquarium->getId());
             
             // Water parameters
             JsonObject waterParams = obj["waterParameters"].to<JsonObject>();
@@ -753,10 +907,99 @@ void setupWebServer() {
         request->send(200, "application/json", response);
     });
     
-    // DELETE aquarium
-    server.on("^\\/api\\/aquariums\\/([0-9]+)$", HTTP_DELETE, [](AsyncWebServerRequest *request){
-        String idStr = request->pathArg(0);
-        uint8_t id = idStr.toInt();
+    // POST update aquarium (using query parameter)
+    server.on("/api/aquarium/update", HTTP_POST, [](AsyncWebServerRequest *request){},
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;  // Wait for full body
+        
+        if (!request->hasParam("id")) {
+            request->send(400, "text/plain", "Missing id parameter");
+            return;
+        }
+        
+        uint8_t id = request->getParam("id")->value().toInt();
+        
+        Aquarium* aquarium = AquariumManager::getInstance().getAquarium(id);
+        if (!aquarium) {
+            request->send(404, "text/plain", "Aquarium not found");
+            return;
+        }
+        
+        // Parse JSON
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, (const char*)data, len);
+        
+        if (error) {
+            request->send(400, "text/plain", "Invalid JSON");
+            return;
+        }
+        
+        // Update properties (only if provided)
+        if (doc["name"].is<String>()) {
+            aquarium->setName(doc["name"].as<String>());
+        }
+        if (doc["volumeLiters"].is<float>()) {
+            aquarium->setVolume(doc["volumeLiters"].as<float>());
+        }
+        if (doc["tankType"].is<String>()) {
+            aquarium->setTankType(doc["tankType"].as<String>());
+        }
+        if (doc["location"].is<String>()) {
+            aquarium->setLocation(doc["location"].as<String>());
+        }
+        if (doc["description"].is<String>()) {
+            aquarium->setDescription(doc["description"].as<String>());
+        }
+        if (doc["enabled"].is<bool>()) {
+            aquarium->setEnabled(doc["enabled"].as<bool>());
+        }
+        
+        // Update water parameters if provided
+        JsonObject waterParameters = doc["waterParameters"];
+        if (!waterParameters.isNull()) {
+            JsonObject temp = waterParameters["temperature"];
+            if (!temp.isNull()) {
+                aquarium->setTemperatureRange(
+                    temp["min"].as<float>(),
+                    temp["max"].as<float>()
+                );
+            }
+            
+            JsonObject ph = waterParameters["ph"];
+            if (!ph.isNull()) {
+                aquarium->setPhRange(
+                    ph["min"].as<float>(),
+                    ph["max"].as<float>()
+                );
+            }
+            
+            JsonObject tds = waterParameters["tds"];
+            if (!tds.isNull()) {
+                aquarium->setTdsRange(
+                    tds["min"].as<uint16_t>(),
+                    tds["max"].as<uint16_t>()
+                );
+            }
+        }
+        
+        // Save to file
+        if (!saveAquariumsToFile()) {
+            Serial.println("  Warning: Failed to save aquariums to file");
+        }
+        
+        request->send(200, "text/plain", "Aquarium updated successfully");
+        Serial.printf(" Updated aquarium: %s (ID: %d)\\n", aquarium->getName().c_str(), id);
+    });
+    
+    // POST delete aquarium (using query parameter)
+    server.on("/api/aquarium/delete", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("id")) {
+            request->send(400, "text/plain", "Missing id parameter");
+            return;
+        }
+        
+        uint8_t id = request->getParam("id")->value().toInt();
         
         if (!AquariumManager::getInstance().removeAquarium(id)) {
             request->send(404, "text/plain", "Aquarium not found");
@@ -914,6 +1157,35 @@ void setupWebServer() {
             
             Serial.printf(" Device provisioned: %s\n", deviceName.c_str());
             
+            // **NOTE**: Device object creation disabled until Device subclass .cpp files exist
+            // TEMPORARY WORKAROUND: Devices are tracked via JSON file only
+            // This is sufficient for deviceCount calculation in /api/aquariums
+            /*
+            Aquarium* aquarium = AquariumManager::getInstance().getAquarium(tankId);
+            if (aquarium) {
+                NodeType deviceType = static_cast<NodeType>(foundDevice["type"].as<uint8_t>());
+                Device* device = createDevice(mac, deviceType, deviceName.c_str());
+                
+                if (device) {
+                    device->setTankId(tankId);
+                    device->setEnabled(true);
+                    device->setFirmwareVersion(foundDevice["firmwareVersion"].as<uint8_t>());
+                    
+                    if (aquarium->addDevice(device)) {
+                        Serial.printf(" ✅ Device added to aquarium object (deviceCount now: %d)\n", 
+                                     aquarium->getDeviceCount());
+                    } else {
+                        Serial.println(" ⚠️ Failed to add device to aquarium object");
+                        delete device;
+                    }
+                } else {
+                    Serial.println(" ⚠️ Failed to create device object (unknown type)");
+                }
+            } else {
+                Serial.printf(" ⚠️ Aquarium %d not found in memory!\n", tankId);
+            }
+            */
+            
             // Send success response
             String response = "{\"success\":true,\"device\":{";
             response += "\"mac\":\"" + macStr + "\",";
@@ -924,6 +1196,92 @@ void setupWebServer() {
             
             request->send(200, "application/json", response);
         }
+    });
+    
+    // POST device command (send command to specific device)
+    server.on("^\\/api\\/devices\\/([0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})\\/command$", HTTP_POST,
+        [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;  // Wait for full body
+        
+        String macStr = request->pathArg(0);
+        Serial.printf(" Received device command request for %s\\n", macStr.c_str());
+        
+        // Parse MAC address
+        uint8_t mac[6];
+        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+            return;
+        }
+        
+        // Parse JSON command
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, (const char*)data, len);
+        
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+        
+        // Build command message
+        CommandMessage cmd = {};
+        cmd.header.type = MessageType::COMMAND;
+        cmd.header.tankId = 0;  // Will be filled from device registry
+        cmd.header.nodeType = NodeType::HUB;
+        cmd.header.timestamp = millis();
+        cmd.header.sequenceNum = 0;
+        cmd.commandId = generateCommandId();
+        cmd.commandSeqID = 0;
+        cmd.finalCommand = true;
+        
+        // Extract command data from JSON
+        String commandType = doc["command"] | "";
+        if (commandType.isEmpty()) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing command field\"}");
+            return;
+        }
+        
+        // Map command string to command code
+        if (commandType == "TURN_ON") {
+            cmd.commandData[0] = 0x01;
+        } else if (commandType == "TURN_OFF") {
+            cmd.commandData[0] = 0x02;
+        } else if (commandType == "SET_LEVEL") {
+            cmd.commandData[0] = 0x03;
+            cmd.commandData[1] = doc["level"] | 0;
+        } else if (commandType == "SET_RGB") {
+            cmd.commandData[0] = 0x04;
+            cmd.commandData[1] = doc["white"] | 0;
+            cmd.commandData[2] = doc["blue"] | 0;
+            cmd.commandData[3] = doc["red"] | 0;
+        } else if (commandType == "FEED") {
+            cmd.commandData[0] = 0x05;
+            cmd.commandData[1] = doc["portions"] | 1;
+        } else {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Unknown command type\"}");
+            return;
+        }
+        
+        // Send command via ESP-NOW
+        bool sent = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd));
+        
+        if (!sent) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to send command to device\"}");
+            return;
+        }
+        
+        // Return success
+        JsonDocument response;
+        response["success"] = true;
+        response["commandId"] = cmd.commandId;
+        response["message"] = "Command sent successfully";
+        
+        String responseStr;
+        serializeJson(response, responseStr);
+        request->send(200, "application/json", responseStr);
+        
+        Serial.printf(" ✅ Command sent to device %s\\n", macStr.c_str());
     });
     
     // POST unmap device
@@ -1003,11 +1361,28 @@ void setupWebServer() {
             }
             
             // Remove from devices.json
+            uint8_t tankId = foundDevice["tankId"].as<uint8_t>();
             devices.remove(foundIndex);
             
             devicesFile = LittleFS.open("/config/devices.json", "w");
             serializeJson(devicesDoc, devicesFile);
             devicesFile.close();
+            
+            // **NOTE**: Device object removal disabled until Device subclass .cpp files exist
+            // Devices are only tracked in JSON for now
+            /*
+            Aquarium* aquarium = AquariumManager::getInstance().getAquarium(tankId);
+            if (aquarium && aquarium->hasDevice(mac)) {
+                if (aquarium->removeDevice(mac)) {
+                    Serial.printf(" ✅ Device removed from aquarium object (deviceCount now: %d)\n", 
+                                 aquarium->getDeviceCount());
+                } else {
+                    Serial.println(" ⚠️ Failed to remove device from aquarium object");
+                }
+            } else {
+                Serial.printf(" ⚠️ Aquarium %d not found or device not in aquarium!\n", tankId);
+            }
+            */
             
             // Add back to unmapped devices
             File unmappedFile = LittleFS.open("/config/unmapped-devices.json", "r");
@@ -1037,14 +1412,28 @@ void setupWebServer() {
         }
     });
     
+
+    // ===== Static File Serving (MUST be registered LAST) =====
+    // These catch-all handlers should come after all API routes
+
+    // WebSocket setup
+    ws.onEvent(onWebSocketEvent);
+    server.addHandler(&ws);
+
+    // Serve static files from LittleFS
+    server.serveStatic("/", LittleFS, "/UI/").setDefaultFile("index.html");
+
+    // Serve config directory (read-only)
+    server.serveStatic("/config", LittleFS, "/config/");
+
     // 404 handler
     server.onNotFound([](AsyncWebServerRequest *request){
         request->send(404, "text/plain", "Not found");
     });
-    
+
     // Start server
     server.begin();
-    
+
     Serial.println(" Web server started on port 80");
     Serial.printf("   - Access: http://%s.local\n", config.mdnsHostname.c_str());
     Serial.printf("   - Or: http://%s\n", WiFi.localIP().toString().c_str());
@@ -1256,6 +1645,10 @@ void setup() {
     
     // Load aquariums from JSON file
     loadAquariumsFromFile();
+    
+    // **NOTE**: Device loading disabled until Device subclass .cpp files are implemented
+    // loadDevicesIntoAquariums();
+    // TEMPORARY WORKAROUND: deviceCount is calculated from JSON in /api/aquariums endpoint
     
     // Setup ESP-NOW (callbacks run on Core 0, processed in main loop)
     setupESPNow();

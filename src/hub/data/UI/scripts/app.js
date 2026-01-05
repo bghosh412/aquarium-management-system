@@ -8,6 +8,40 @@ let reconnectInterval = null;
 let uptimeInterval = null;
 let startTime = Date.now();
 
+// Add activity log entry
+function addActivityLog(message, type = 'info') {
+    const activityList = document.getElementById('activity-list');
+    if (!activityList) return;
+
+    const activityItem = document.createElement('div');
+    activityItem.className = 'activity-item';
+
+    const iconColor = {
+        'success': '#10b981',
+        'error': '#ef4444',
+        'warning': '#f59e0b',
+        'info': '#0ea5e9'
+    }[type] || '#0ea5e9';
+
+    activityItem.innerHTML = `
+        <div class="activity-icon">
+            <span class="activity-dot" style="background: ${iconColor}"></span>
+        </div>
+        <div class="activity-details">
+            <div class="activity-title">${message}</div>
+            <div class="activity-time">${new Date().toLocaleTimeString()}</div>
+        </div>
+    `;
+
+    // Insert at the beginning
+    activityList.insertBefore(activityItem, activityList.firstChild);
+
+    // Keep only last 10 entries
+    while (activityList.children.length > 10) {
+        activityList.removeChild(activityList.lastChild);
+    }
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
@@ -121,7 +155,6 @@ function updateConnectionStatus(connected) {
             statusText.textContent = 'System Offline';
         }
     }
-}   }
 }
 
 // Update hub uptime display
@@ -258,129 +291,13 @@ function padZero(num) {
     return num.toString().padStart(2, '0');
 }
 
-// Update system statistics
-function updateSystemStats() {
-    // Aquarium count
-    const aquariumCount = document.getElementById('aquarium-count');
-    if (aquariumCount) {
-        aquariumCount.textContent = '1'; // Mock data - replace with actual
-    }
-    
-    // Device count
-    const deviceCount = document.getElementById('device-count');
-    if (deviceCount) {
-        deviceCount.textContent = Object.keys(nodes).length || '0';
-    }
-    
-    // Schedule count
-    const scheduleCount = document.getElementById('schedule-count');
-    if (scheduleCount) {
-        scheduleCount.textContent = '3'; // Mock data - replace with actual
-    }
-    
-    // Alert count
-    const alertCount = document.getElementById('alert-count');
-    if (alertCount) {
-        alertCount.textContent = '0'; // Mock data - replace with actual
-    }
-    
-    // Memory status
-    const memoryStatus = document.getElementById('memory-status');
-    if (memoryStatus) {
-        memoryStatus.textContent = '65% Free'; // Mock data
-    }
-    
-    // WiFi status
-    const wifiStatus = document.getElementById('wifi-status');
-    if (wifiStatus) {
-        wifiStatus.textContent = 'Strong'; // Mock data
-    }
-    
-    // Water parameters
-    updateWaterParameters();
-}
-
-// Update water parameters display
-function updateWaterParameters() {
-    // These will be updated from actual sensor data
-    const tempAvg = document.getElementById('temp-avg');
-    const phAvg = document.getElementById('ph-avg');
-    const tdsAvg = document.getElementById('tds-avg');
-    
-    if (tempAvg) tempAvg.textContent = '25.3°C';
-    if (phAvg) phAvg.textContent = '7.1';
-    if (tdsAvg) tdsAvg.textContent = '450 ppm';
-}
-
-// Add activity log entry
-function addActivityLog(message, type = 'info') {
-    const activityList = document.getElementById('activity-list');
-    if (!activityList) return;
-    
-    const activityItem = document.createElement('div');
-    activityItem.className = 'activity-item';
-    
-    const iconColor = {
-        'success': '#10b981',
-        'error': '#ef4444',
-        'warning': '#f59e0b',
-        'info': '#0ea5e9'
-    }[type] || '#0ea5e9';
-    
-    activityItem.innerHTML = `
-        <div class="activity-icon">
-            <span class="activity-dot" style="background: ${iconColor}"></span>
-        </div>
-        <div class="activity-details">
-            <div class="activity-title">${message}</div>
-            <div class="activity-time">${getTimeAgo()}</div>
-        </div>
-    `;
-    
-    // Insert at the beginning
-    activityList.insertBefore(activityItem, activityList.firstChild);
-    
-    // Keep only last 10 entries
-    while (activityList.children.length > 10) {
-        activityList.removeChild(activityList.lastChild);
-    }
-}
-
-function getTimeAgo() {
-    const now = new Date();
-    return now.toLocaleTimeString();
-}
-
-// Legacy functions for compatibility
-function logMessage(message, type = 'info') {
-    console.log(`[${type.toUpperCase()}] ${message}`);
-    addActivityLog(message, type);
-}
-
 // ============================================================================
 // DASHBOARD API INTEGRATION
 // ============================================================================
 
 function updateSystemStats() {
-    // Fetch aquarium count
-    fetch('/api/aquariums')
-        .then(response => response.json())
-        .then(data => {
-            const count = (data.aquariums && data.aquariums.length) || 0;
-            const elem = document.getElementById('aquarium-count');
-            if (elem) elem.textContent = count;
-        })
-        .catch(error => console.error('Error fetching aquariums:', error));
-    
-    // Fetch device count
-    fetch('/api/devices')
-        .then(response => response.json())
-        .then(data => {
-            const count = (data.devices && data.devices.length) || 0;
-            const elem = document.getElementById('device-count');
-            if (elem) elem.textContent = count;
-        })
-        .catch(error => console.error('Error fetching devices:', error));
+    // This function is now only for hub-specific stats like memory and WiFi.
+    // Aquarium and device counts are handled by loadDashboardData().
     
     // Update memory status
     fetch('/api/status')
@@ -431,15 +348,14 @@ function loadDashboardData() {
         .then(response => response.json())
         .then(data => {
             if (data.aquariums && Array.isArray(data.aquariums)) {
-                const totalAquariums = data.aquariums.length;
                 const activeAquariums = data.aquariums.filter(a => a.enabled).length;
                 
-                // Update dashboard stats if elements exist
-                const totalElem = document.getElementById('total-aquariums');
-                if (totalElem) totalElem.textContent = totalAquariums;
+                // Update dashboard stats - using correct element ID
+                const aquariumCountElem = document.getElementById('aquarium-count');
+                if (aquariumCountElem) aquariumCountElem.textContent = activeAquariums;
                 
-                const activeElem = document.getElementById('active-aquariums');
-                if (activeElem) activeElem.textContent = activeAquariums;
+                // Store in localStorage for other pages
+                localStorage.setItem('aquariums', JSON.stringify(data.aquariums));
             }
         })
         .catch(error => console.error('Error loading aquariums:', error));
@@ -449,15 +365,14 @@ function loadDashboardData() {
         .then(response => response.json())
         .then(data => {
             if (data.devices && Array.isArray(data.devices)) {
-                const totalDevices = data.devices.length;
-                const onlineDevices = data.devices.filter(d => d.status === 'ONLINE' || d.enabled).length;
+                const onlineDevices = data.devices.filter(d => d.status === 'ONLINE').length;
                 
-                // Update dashboard stats if elements exist
-                const totalElem = document.getElementById('total-devices');
-                if (totalElem) totalElem.textContent = totalDevices;
+                // Update dashboard stats - using correct element ID
+                const deviceCountElem = document.getElementById('device-count');
+                if (deviceCountElem) deviceCountElem.textContent = onlineDevices;
                 
-                const onlineElem = document.getElementById('online-devices');
-                if (onlineElem) onlineElem.textContent = onlineDevices;
+                // Store in localStorage for other pages
+                localStorage.setItem('devices', JSON.stringify(data.devices));
             }
         })
         .catch(error => console.error('Error loading devices:', error));

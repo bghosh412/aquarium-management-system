@@ -15,7 +15,7 @@ function createAquarium() {
         volumeLiters: parseFloat(document.getElementById('volume').value),
         tankType: document.getElementById('tankType').value,
         location: document.getElementById('location').value || '',
-        thresholds: {
+        waterParameters: {
             temperature: {
                 min: parseFloat(document.getElementById('tempMin').value),
                 max: parseFloat(document.getElementById('tempMax').value)
@@ -47,17 +47,17 @@ function createAquarium() {
         return;
     }
     
-    if (aquarium.thresholds.temperature.min >= aquarium.thresholds.temperature.max) {
+    if (aquarium.waterParameters.temperature.min >= aquarium.waterParameters.temperature.max) {
         showNotification('Min temperature must be less than max temperature', 'error');
         return;
     }
     
-    if (aquarium.thresholds.ph.min >= aquarium.thresholds.ph.max) {
+    if (aquarium.waterParameters.ph.min >= aquarium.waterParameters.ph.max) {
         showNotification('Min pH must be less than max pH', 'error');
         return;
     }
     
-    if (aquarium.thresholds.tds.min >= aquarium.thresholds.tds.max) {
+    if (aquarium.waterParameters.tds.min >= aquarium.waterParameters.tds.max) {
         showNotification('Min TDS must be less than max TDS', 'error');
         return;
     }

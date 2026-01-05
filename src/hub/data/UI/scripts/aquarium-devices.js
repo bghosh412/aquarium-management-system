@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!currentTankId) {
         const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
         if (aquariums.length > 0) {
-            currentTankId = aquariums[0].tankId;
+            currentTankId = aquariums[0].id;
             localStorage.setItem('selectedTankId', currentTankId);
         } else {
             // No aquariums available — show friendly empty state and stop further loading
@@ -49,24 +49,37 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function loadAquariumData() {
-    // Load from localStorage
-    const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
-    currentAquarium = aquariums.find(a => a.tankId === currentTankId);
-    
-    if (currentAquarium) {
-        displayAquariumInfo();
-    }
+    // Load from API
+    fetch('/api/aquariums')
+        .then(response => response.json())
+        .then(data => {
+            if (data.aquariums && Array.isArray(data.aquariums)) {
+                currentAquarium = data.aquariums.find(a => a.id === currentTankId);
+                if (currentAquarium) {
+                    displayAquariumInfo();
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error loading aquarium:', error);
+            // Fallback to localStorage
+            const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
+            currentAquarium = aquariums.find(a => a.id === currentTankId);
+            if (currentAquarium) {
+                displayAquariumInfo();
+            }
+        });
 }
 
 function displayAquariumInfo() {
     document.getElementById('aquariumName').textContent = currentAquarium.name;
-    document.getElementById('tankId').textContent = currentAquarium.tankId;
-    document.getElementById('volume').textContent = currentAquarium.volume;
+    document.getElementById('tankId').textContent = currentAquarium.id;
+    document.getElementById('volume').textContent = currentAquarium.volumeLiters;
     document.getElementById('location').textContent = currentAquarium.location || 'Not specified';
     
     // Display thresholds
-    if (currentAquarium.thresholds) {
-        const t = currentAquarium.thresholds;
+    if (currentAquarium.waterParameters) {
+        const t = currentAquarium.waterParameters;
         document.getElementById('tempRange').textContent = `${t.temperature.min}-${t.temperature.max}°C`;
         document.getElementById('phRange').textContent = `${t.ph.min}-${t.ph.max}`;
         document.getElementById('tdsRange').textContent = `${t.tds.min}-${t.tds.max} ppm`;
@@ -74,10 +87,23 @@ function displayAquariumInfo() {
 }
 
 function loadDevices() {
-    // Try to load from localStorage
-    const allDevices = JSON.parse(localStorage.getItem('devices') || '[]');
-    devices = allDevices.filter(d => d.tankId === currentTankId);
-    renderDevices();
+    // Load from API
+    fetch('/api/devices')
+        .then(response => response.json())
+        .then(data => {
+            if (data.devices && Array.isArray(data.devices)) {
+                // Filter devices by current tank ID
+                devices = data.devices.filter(d => d.tankId === currentTankId);
+                renderDevices();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading devices:', error);
+            // Fallback to localStorage
+            const allDevices = JSON.parse(localStorage.getItem('devices') || '[]');
+            devices = allDevices.filter(d => d.tankId === currentTankId);
+            renderDevices();
+        });
 }
 
 function setupFilters() {
@@ -112,8 +138,8 @@ function renderDevices() {
     
     grid.innerHTML = filteredDevices.map(device => {
         const icon = getDeviceIcon(device.type);
-        const statusClass = device.online ? 'badge-online' : 'badge-offline';
-        const statusText = device.online ? 'Online' : 'Offline';
+        const statusClass = (device.status === 'ONLINE') ? 'badge-online' : 'badge-offline';
+        const statusText = (device.status === 'ONLINE') ? 'Online' : 'Offline';
         
         return `
             <div class="card" style="cursor: pointer;" onclick="viewDeviceDetails('${device.mac}', '${device.type}')">

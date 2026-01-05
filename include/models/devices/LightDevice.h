@@ -1,7 +1,7 @@
 #ifndef LIGHT_DEVICE_H
 #define LIGHT_DEVICE_H
 
-#include "Device.h"
+#include "models/Device.h"
 
 /**
  * @brief Light device controller (3-channel PWM LED)

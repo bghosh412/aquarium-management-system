@@ -29,33 +29,8 @@
   </nav>
 
   <div class="container">
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <h2>Navigation</h2>
-      </div>
-      <nav class="sidebar-nav">
-        <a href="/index.html" class="nav-item">
-          <span class="nav-icon">🏠</span>
-          <span class="nav-label">Dashboard</span>
-        </a>
-        <a href="/aquarium/aquarium-selection.html" class="nav-item active">
-          <span class="nav-icon">🐠</span>
-          <span class="nav-label">Aquariums</span>
-        </a>
-        <a href="/device/manage-devices.html" class="nav-item">
-          <span class="nav-icon">🔌</span>
-          <span class="nav-label">Devices</span>
-        </a>
-        <a href="#" class="nav-item">
-          <span class="nav-icon">⚙️</span>
-          <span class="nav-label">Settings</span>
-        </a>
-      </nav>
-      <div class="sidebar-footer">
-        <p>&copy; 2026 Aquarium Hub</p>
-      </div>
-    </aside>
+    <!-- Sidebar (injected) -->
+    <aside class="sidebar"></aside>
 
     <!-- Main Content -->
     <main class="main-content">
@@ -78,6 +53,7 @@
               <small class="form-help">A friendly name to identify this aquarium</small>
             </div>
 
+
             <!-- Volume -->
             <div class="form-group">
               <label for="volume" class="form-label">Volume (Liters)</label>
@@ -85,29 +61,6 @@
               <small class="form-help">Total water capacity of the aquarium</small>
             </div>
 
-            <!-- Tank Type -->
-            <div class="form-group">
-              <label for="tankType" class="form-label">Tank Type</label>
-              <select id="tankType" class="form-select" required>
-                <option value="" disabled selected>Select tank type</option>
-                <option value="Planted">Planted</option>
-                <option value="Cichlids">Cichlids</option>
-                <option value="Discuss">Discuss</option>
-                <option value="Shrimp">Shrimp</option>
-                <option value="Mix">Mix</option>
-              </select>
-              <small class="form-help">Select the type of aquarium</small>
-            </div>
-
-            <!-- Location -->
-            <div class="form-group">
-              <label for="location" class="form-label">Location (Optional)</label>
-              <input type="text" id="location" class="form-input" placeholder="e.g., Living Room">
-              <small class="form-help">Physical location of this aquarium</small>
-            </div>
-
-            <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--color-border);">
-            <h3 style="margin-bottom: 1.5rem;">Water Parameter Thresholds</h3>
             <!-- Temperature Range -->
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
               <div class="form-group">
@@ -161,5 +114,7 @@
 
   <script src="/scripts/app.js"></script>
   <script src="/scripts/add-aquarium.js"></script>
+  <script src="/scripts/sidebar-inject.js"></script>
+  <script src="/scripts/sidebar-inject.js"></script>
 </body>
 </html>

@@ -36,19 +36,31 @@
             </div>
             <nav class="sidebar-nav">
                 <a href="../index.html" class="nav-item">
-                    <span class="nav-icon">🏠</span>
+                    <span class="nav-icon">
+                        <!-- Dashboard SVG -->
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+                    </span>
                     <span class="nav-label">Dashboard</span>
                 </a>
                 <a href="../aquarium/aquarium-selection.html" class="nav-item">
-                    <span class="nav-icon">🐠</span>
+                    <span class="nav-icon">
+                        <!-- Fish SVG -->
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 16s2-2 6-2 6 2 6 2-2 2-6 2-6-2-6-2z"/><circle cx="12" cy="12" r="3"/><path d="M22 12h-4"/></svg>
+                    </span>
                     <span class="nav-label">Aquariums</span>
                 </a>
                 <a href="manage-devices.html" class="nav-item active">
-                    <span class="nav-icon">🔌</span>
+                    <span class="nav-icon">
+                        <!-- Plug SVG -->
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="12" rx="2"/><path d="M12 14v8"/><path d="M8 22h8"/></svg>
+                    </span>
                     <span class="nav-label">Devices</span>
                 </a>
                 <a href="#" class="nav-item">
-                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-icon">
+                        <!-- Settings Gear SVG -->
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </span>
                     <span class="nav-label">Settings</span>
                 </a>
             </nav>
@@ -81,12 +93,12 @@
                             <label for="typeFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Type</label>
                             <select id="typeFilter" class="form-input" onchange="filterDevices()">
                                 <option value="all">All Types</option>
-                                <option value="light">💡 Light</option>
-                                <option value="co2">🫧 CO₂</option>
-                                <option value="heater">🔥 Heater</option>
-                                <option value="feeder">🐟 Feeder</option>
-                                <option value="sensor">📊 Sensor</option>
-                                <option value="repeater">📡 Repeater</option>
+                                <option value="light">&#x1F4A1; Light</option>
+                                <option value="co2">CO₂</option>
+                                <option value="heater">&#x1F525; Heater</option>
+                                <option value="feeder">&#x1F41F; Feeder</option>
+                                <option value="sensor">&#x1F4CA; Sensor</option>
+                                <option value="repeater">Repeater</option>
                             </select>
                         </div>
 
@@ -108,7 +120,10 @@
             <div class="stats-grid" style="margin-bottom: 2rem;">
                 <div class="stat-card">
                     <div class="stat-icon stat-icon-online">
-                        <span>🔌</span>
+                        <span>
+                            <!-- Plug SVG -->
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="12" rx="2"/><path d="M12 14v8"/><path d="M8 22h8"/></svg>
+                        </span>
                     </div>
                     <div class="stat-content">
                         <div class="stat-value" id="totalDevices">0</div>
@@ -118,7 +133,10 @@
 
                 <div class="stat-card">
                     <div class="stat-icon stat-icon-online">
-                        <span>✓</span>
+                        <span>
+                            <!-- Check SVG -->
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        </span>
                     </div>
                     <div class="stat-content">
                         <div class="stat-value" id="onlineDevices">0</div>
@@ -128,7 +146,10 @@
 
                 <div class="stat-card">
                     <div class="stat-icon" style="background: linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(239, 68, 68, 0.1) 100%);">
-                        <span>⚠️</span>
+                        <span>
+                            <!-- Warning SVG -->
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        </span>
                     </div>
                     <div class="stat-content">
                         <div class="stat-value" id="offlineDevices">0</div>
@@ -138,7 +159,10 @@
 
                 <div class="stat-card">
                     <div class="stat-icon" style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(245, 158, 11, 0.1) 100%);">
-                        <span>⏰</span>
+                        <span>
+                            <!-- Clock SVG -->
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        </span>
                     </div>
                     <div class="stat-content">
                         <div class="stat-value" id="scheduledDevices">0</div>
@@ -155,6 +179,10 @@
             <!-- Empty State -->
             <div id="emptyState" class="card" style="display: none; text-align: center; padding: 3rem;">
                 <div style="font-size: 4rem; margin-bottom: 1rem;">🔌</div>
+                                        <div style="font-size: 4rem; margin-bottom: 1rem;">
+                                            <!-- Plug SVG -->
+                                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="12" rx="2"/><path d="M12 14v8"/><path d="M8 22h8"/></svg>
+                                        </div>
                 <h2>No Devices Found</h2>
                 <p style="color: var(--color-text-secondary); margin: 1rem 0 2rem;">
                     No devices match your current filters, or no devices have been added yet.
@@ -173,19 +201,34 @@
                 <div class="card-body">
                     <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
                         <button class="btn btn-secondary" onclick="selectAll()">
-                            <span>☑️</span> Select All
+                            <span>
+                                <!-- Checkbox SVG -->
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 11 12 14 22 4"/></svg>
+                            </span> Select All
                         </button>
                         <button class="btn btn-secondary" onclick="deselectAll()">
-                            <span>◻️</span> Deselect All
+                            <span>
+                                <!-- Unchecked Box SVG -->
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                            </span> Deselect All
                         </button>
                         <button class="btn btn-success" onclick="bulkEnable()" id="bulkEnableBtn" disabled>
-                            <span>✓</span> Enable Selected
+                            <span>
+                                <!-- Check SVG -->
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            </span> Enable Selected
                         </button>
                         <button class="btn btn-warning" onclick="bulkDisable()" id="bulkDisableBtn" disabled>
-                            <span>⏸️</span> Disable Selected
+                            <span>
+                                <!-- Pause SVG -->
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                            </span> Disable Selected
                         </button>
                         <button class="btn btn-danger" onclick="bulkDelete()" id="bulkDeleteBtn" disabled>
-                            <span>🗑️</span> Delete Selected
+                            <span>
+                                <!-- Trash SVG -->
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+                            </span> Delete Selected
                         </button>
                     </div>
                 </div>

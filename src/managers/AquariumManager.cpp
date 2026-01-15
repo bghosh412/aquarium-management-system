@@ -3,6 +3,41 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 
+static const char* nodeTypeToString(NodeType type) {
+    switch (type) {
+        case NodeType::LIGHT: return "LIGHT";
+        case NodeType::CO2: return "CO2";
+        case NodeType::HEATER: return "HEATER";
+        case NodeType::FISH_FEEDER: return "FISH_FEEDER";
+        case NodeType::SENSOR: return "SENSOR";
+        case NodeType::REPEATER: return "REPEATER";
+        default: return "UNKNOWN";
+    }
+}
+
+static bool isProvisionedDeviceMac(const String& macStr) {
+    File file = LittleFS.open("/config/devices.json", "r");
+    if (!file) {
+        return false;
+    }
+
+    DynamicJsonDocument doc(8192);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    if (error) {
+        return false;
+    }
+
+    JsonArray devices = doc["devices"].as<JsonArray>();
+    for (JsonObject device : devices) {
+        if (device["mac"].as<String>() == macStr) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // ============================================================================
 // SINGLETON INSTANCE
 // ============================================================================
@@ -292,7 +327,57 @@ void AquariumManager::handleHeartbeat(const uint8_t* mac, const HeartbeatMessage
     
     auto it = _globalDeviceRegistry.find(macKey);
     if (it == _globalDeviceRegistry.end()) {
-        // Unknown device, ignore
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+        // If not provisioned, persist as unmapped so UI can show it after hub restarts
+        if (!isProvisionedDeviceMac(String(macStr))) {
+            File file = LittleFS.open("/config/unmapped-devices.json", "r");
+            DynamicJsonDocument doc(4096);
+
+            if (file) {
+                deserializeJson(doc, file);
+                file.close();
+            } else {
+                doc["metadata"]["lastCleanup"] = 0;
+                doc["metadata"]["totalDiscovered"] = 0;
+                doc["metadata"]["autoCleanupAfterDays"] = 7;
+            }
+
+            JsonArray unmappedDevices = doc["unmappedDevices"];
+            bool alreadyExists = false;
+
+            for (JsonObject device : unmappedDevices) {
+                if (device["mac"].as<String>() == String(macStr)) {
+                    device["lastSeen"] = millis();
+                    device["announceCount"] = device["announceCount"].as<int>() + 1;
+                    alreadyExists = true;
+                    break;
+                }
+            }
+
+            if (!alreadyExists) {
+                JsonObject newDevice = unmappedDevices.createNestedObject();
+                newDevice["mac"] = macStr;
+                newDevice["type"] = nodeTypeToString(msg.header.nodeType);
+                newDevice["firmwareVersion"] = 0;
+                newDevice["capabilities"] = 0;
+                newDevice["discoveredAt"] = millis();
+                newDevice["lastSeen"] = millis();
+                newDevice["announceCount"] = 1;
+                newDevice["status"] = "HEARTBEAT";
+
+                doc["metadata"]["totalDiscovered"] = doc["metadata"]["totalDiscovered"].as<int>() + 1;
+            }
+
+            file = LittleFS.open("/config/unmapped-devices.json", "w");
+            if (file) {
+                serializeJson(doc, file);
+                file.close();
+            }
+        }
+
         return;
     }
     

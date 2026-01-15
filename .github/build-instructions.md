@@ -154,7 +154,9 @@ lib_deps =
 ### Key Configuration Points
 
 - **src_dir**: Points to environment-specific source code
-- **data_dir**: Points to filesystem data for `uploadfs` command
+- **data_dir**: Set per-environment via tools/set_data_dir.py for `buildfs` and `uploadfs`.
+- **Hub UI source**: `src/hub/data/UI` is the authoritative UI folder used to build LittleFS.
+- **Legacy folder**: The project root `data/` directory is legacy and should not be used for hub filesystem builds.
 - **No src_filter needed**: Each environment already isolated by directory
 - **lib_deps**: Environment-specific dependencies
 - **Common includes**: `include/` directory available to all environments

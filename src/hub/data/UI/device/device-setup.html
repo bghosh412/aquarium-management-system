@@ -7,7 +7,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#0c4a6e">
     <title>Device Setup - Aquarium Hub</title>
-    <link rel="stylesheet" href="/styles/styles.css">
+    <link rel="stylesheet" href="/styles/styles.css?v=20260116">
 </head>
 <body>
     <!-- Navbar -->
@@ -21,7 +21,7 @@
                 </div>
             </div>
             <div class="navbar-actions">
-                <a href="manage-devices.html" class="btn btn-secondary">
+                <a href="manage-devices.html" class="btn mainSecondarybtn">
                     <span>←</span> Back
                 </a>
             </div>
@@ -164,45 +164,11 @@
 
                     <!-- Communication Test -->
                     <div style="margin-top: 1.5rem;">
-                        <button class="btn btn-secondary" style="width: 100%;" onclick="testCommunication()">
+                        <button class="btn Secondarybtn" style="width: 100%;" onclick="testCommunication()">
                             <span>📡</span> Test Communication
                         </button>
                         <div id="testResult" style="margin-top: 1rem; display: none;"></div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Fail-Safe Settings -->
-            <div class="card" style="margin-bottom: 2rem;">
-                <div class="card-header">
-                    <h3>Fail-Safe Behavior</h3>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label for="failSafeMode" class="form-label">On Communication Loss</label>
-                        <select id="failSafeMode" class="form-input">
-                            <option value="default">Use Default (Recommended)</option>
-                            <option value="off">Turn Off</option>
-                            <option value="hold">Hold Last State</option>
-                            <option value="custom">Custom Behavior</option>
-                        </select>
-                        <small class="form-help">How the device should behave when connection is lost</small>
-                    </div>
-
-                    <!-- Fail-Safe Warnings -->
-                    <div id="failSafeWarning" style="padding: 1rem; background: rgba(245, 158, 11, 0.1); border-left: 4px solid var(--color-accent-warning); border-radius: var(--radius-sm); margin-top: 1rem;">
-                        <strong>⚠️ Safety Notice:</strong>
-                        <ul style="margin: 0.5rem 0 0; padding-left: 1.5rem;">
-                            <li>CO₂ devices automatically turn OFF (critical safety)</li>
-                            <li>Heaters automatically turn OFF (prevent overheating)</li>
-                            <li>Lights hold last state (safe to maintain)</li>
-                            <li>Feeders do nothing (safer to skip feeding)</li>
-                        </ul>
-                    </div>
-
-                    <button class="btn btn-warning" style="width: 100%; margin-top: 1rem;" onclick="triggerFailSafe()">
-                        <span>⚠️</span> Trigger Fail-Safe Test
-                    </button>
                 </div>
             </div>
 
@@ -241,10 +207,10 @@
 
                     <!-- Reset Statistics -->
                     <div style="margin-top: 2rem; display: flex; gap: 1rem;">
-                        <button class="btn btn-secondary" style="flex: 1;" onclick="resetStatistics()">
+                        <button class="btn Secondarybtn" style="flex: 1;" onclick="resetStatistics()">
                             <span>🔄</span> Reset Statistics
                         </button>
-                        <button class="btn btn-secondary" style="flex: 1;" onclick="exportDiagnostics()">
+                        <button class="btn Secondarybtn" style="flex: 1;" onclick="exportDiagnostics()">
                             <span>📊</span> Export Diagnostics
                         </button>
                     </div>
@@ -299,7 +265,7 @@
         }
     </style>
 
-    <script src="../scripts/app.js"></script>
-    <script src="../scripts/device-setup.js"></script>
+    <script src="../scripts/app.js?v=20260116"></script>
+    <script src="../scripts/device-setup.js?v=20260116"></script>
 </body>
 </html>

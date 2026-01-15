@@ -2,6 +2,7 @@
 
 let deviceMac = null;
 let deviceData = null;
+let pendingTankId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
@@ -41,9 +42,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    loadDeviceData();
-    loadTankOptions();
-    setupForm();
+    Promise.all([loadTankOptions(), loadDeviceData()])
+        .then(() => {
+            if (deviceData) {
+                displayDeviceInfo();
+            }
+            setupForm();
+        });
     
     // Request device data from hub
     if (window.ws && window.ws.readyState === WebSocket.OPEN) {
@@ -54,12 +59,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-function loadDeviceData() {
+async function loadDeviceData() {
     const devices = JSON.parse(localStorage.getItem('devices') || '[]');
     deviceData = devices.find(d => d.mac === deviceMac);
     
     if (deviceData) {
-        displayDeviceInfo();
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/devices');
+        const data = await response.json();
+        if (data.devices && Array.isArray(data.devices)) {
+            localStorage.setItem('devices', JSON.stringify(data.devices));
+            deviceData = data.devices.find(d => d.mac === deviceMac);
+        }
+    } catch (error) {
+        console.error('Error loading devices:', error);
     }
 }
 
@@ -80,7 +96,8 @@ function displayDeviceInfo() {
     
     // Fill form fields
     document.getElementById('editDeviceName').value = deviceData.name;
-    document.getElementById('tankId').value = deviceData.tankId;
+    pendingTankId = deviceData.tankId;
+    setSelectedTank(deviceData.tankId);
     document.getElementById('deviceEnabled').checked = deviceData.enabled !== false;
     
     if (deviceData.heartbeatInterval) {
@@ -92,8 +109,9 @@ function displayDeviceInfo() {
         document.getElementById('maxRetries').value = deviceData.maxRetries;
     }
     
-    if (deviceData.failSafeMode) {
-        document.getElementById('failSafeMode').value = deviceData.failSafeMode;
+    const failSafeSelect = document.getElementById('failSafeMode');
+    if (failSafeSelect && deviceData.failSafeMode) {
+        failSafeSelect.value = deviceData.failSafeMode;
     }
     
     // Statistics
@@ -121,17 +139,49 @@ function updateStatistics() {
     }
 }
 
-function loadTankOptions() {
-    const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
+async function loadTankOptions() {
     const tankSelect = document.getElementById('tankId');
-    
     tankSelect.innerHTML = '<option value="">Select aquarium...</option>';
+
+    try {
+        const response = await fetch('/api/aquariums');
+        const data = await response.json();
+        if (data.aquariums && Array.isArray(data.aquariums)) {
+            data.aquariums.forEach(tank => {
+                const tankId = tank.id ?? tank.tankId;
+                const option = document.createElement('option');
+                option.value = tankId;
+                option.textContent = `Tank ${tankId} - ${tank.name}`;
+                tankSelect.appendChild(option);
+            });
+            setSelectedTank(pendingTankId);
+            return;
+        }
+    } catch (error) {
+        console.error('Error loading aquariums:', error);
+    }
+
+    const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
     aquariums.forEach(tank => {
+        const tankId = tank.id ?? tank.tankId;
         const option = document.createElement('option');
-        option.value = tank.tankId;
-        option.textContent = `Tank ${tank.tankId} - ${tank.name}`;
+        option.value = tankId;
+        option.textContent = `Tank ${tankId} - ${tank.name}`;
         tankSelect.appendChild(option);
     });
+    setSelectedTank(pendingTankId);
+}
+
+function setSelectedTank(tankId) {
+    if (tankId === undefined || tankId === null) {
+        return;
+    }
+    const tankSelect = document.getElementById('tankId');
+    const value = String(tankId);
+    const hasOption = Array.from(tankSelect.options).some(option => option.value === value);
+    if (hasOption) {
+        tankSelect.value = value;
+    }
 }
 
 function setupForm() {
@@ -149,9 +199,13 @@ function saveDeviceSettings() {
         tankId: parseInt(document.getElementById('tankId').value),
         enabled: document.getElementById('deviceEnabled').checked,
         heartbeatInterval: parseInt(document.getElementById('heartbeatInterval').value),
-        maxRetries: parseInt(document.getElementById('maxRetries').value),
-        failSafeMode: document.getElementById('failSafeMode').value
+        maxRetries: parseInt(document.getElementById('maxRetries').value)
     };
+
+    const failSafeSelect = document.getElementById('failSafeMode');
+    if (failSafeSelect) {
+        updatedDevice.failSafeMode = failSafeSelect.value;
+    }
     
     // Send to hub
     if (window.ws && window.ws.readyState === WebSocket.OPEN) {
@@ -228,25 +282,34 @@ function deleteDevice() {
     if (!confirm('Are you sure you want to delete this device? This cannot be undone.')) {
         return;
     }
-    
-    // Send to hub
-    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
-        sendCommand({
-            type: 'deleteDevice',
-            mac: deviceMac
-        });
-    }
-    
-    // Remove from localStorage
-    const devices = JSON.parse(localStorage.getItem('devices') || '[]');
-    const filtered = devices.filter(d => d.mac !== deviceMac);
-    localStorage.setItem('devices', JSON.stringify(filtered));
-    
-    showNotification('Device deleted', 'success');
-    
-    setTimeout(() => {
-        window.location.href = 'manage-devices.html';
-    }, 1500);
+
+    fetch('/api/unmap-device', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ mac: deviceMac })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const devices = JSON.parse(localStorage.getItem('devices') || '[]');
+            const filtered = devices.filter(d => d.mac !== deviceMac);
+            localStorage.setItem('devices', JSON.stringify(filtered));
+
+            showNotification('Device unmapped', 'success');
+
+            setTimeout(() => {
+                window.location.href = 'manage-devices.html';
+            }, 1500);
+        } else {
+            showNotification('Failed to unmap device', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error unmapping device:', error);
+        showNotification('Failed to unmap device', 'error');
+    });
 }
 
 function resetStatistics() {
@@ -287,6 +350,12 @@ function exportDiagnostics() {
 
 function getDeviceTypeName(type) {
     const names = {
+        'LIGHT': 'Light Controller',
+        'CO2': 'CO₂ Regulator',
+        'HEATER': 'Heater',
+        'FISH_FEEDER': 'Fish Feeder',
+        'SENSOR': 'Water Quality Sensor',
+        'REPEATER': 'Repeater',
         'light': 'Light Controller',
         'co2': 'CO₂ Regulator',
         'heater': 'Heater',
@@ -294,7 +363,7 @@ function getDeviceTypeName(type) {
         'sensor': 'Water Quality Sensor',
         'repeater': 'Repeater'
     };
-    return names[type] || 'Unknown';
+    return names[type] || names[String(type).toLowerCase()] || 'Unknown';
 }
 
 function formatUptime(seconds) {

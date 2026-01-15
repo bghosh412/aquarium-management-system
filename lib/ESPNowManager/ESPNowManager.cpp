@@ -149,7 +149,14 @@ bool ESPNowManager::addPeer(const uint8_t* mac) {
         return true;
     }
     if (result != 0) {
-        Serial.printf("[ERR] Failed to add peer %02X:%02X:...\n", mac[0], mac[1]);
+        Serial.printf("[ERR] Failed to add peer %02X:%02X:... (err %d)\n", mac[0], mac[1], result);
+        // Retry once by removing and re-adding
+        esp_now_del_peer((uint8_t*)mac);
+        result = esp_now_add_peer((uint8_t*)mac, ESP_NOW_ROLE_COMBO, _channel, NULL, 0);
+        if (result == 0 || result == -1) {
+            return true;
+        }
+        Serial.printf("[ERR] Retry add peer failed %02X:%02X:... (err %d)\n", mac[0], mac[1], result);
         return false;
     }
 #else

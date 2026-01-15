@@ -125,6 +125,74 @@
     box-sizing: border-box;
 }
 
+/* ===== Button Styles ===== */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-weight: 600;
+    padding: 0.45rem 1rem;
+    min-height: 2.25rem;
+    cursor: pointer;
+    transition: var(--transition);
+    text-decoration: none;
+    line-height: 1.2;
+}
+
+.btn-primary {
+    background: var(--primary-color);
+    color: #fff;
+    box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover {
+    background: var(--primary-dark);
+}
+
+.btn-danger {
+    background: var(--danger-color);
+    color: #fff;
+}
+
+.btn-danger:hover {
+    filter: brightness(0.95);
+}
+
+.btn-warning {
+    background: var(--warning-color);
+    color: #111827;
+}
+
+.btn-warning:hover {
+    filter: brightness(0.98);
+}
+
+.Secondarybtn,
+.btn-secondary {
+    background: #e2e8f0;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
+}
+
+.Secondarybtn:hover,
+.btn-secondary:hover {
+    background: #cbd5e1;
+}
+
+.mainSecondarybtn {
+    background: #1e293b;
+    color: #fff;
+    border: 1px solid #0f172a;
+}
+
+.mainSecondarybtn:hover {
+    background: #0f172a;
+}
+
 html {
     overflow-x: hidden;
     -webkit-text-size-adjust: 100%;

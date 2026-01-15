@@ -298,7 +298,48 @@ box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
     background: var(--color-accent-danger);
     color: white;
 }
-```
+
+/*
+  New: Secondary Button Styles
+
+  Two consistent secondary button styles exist to improve visual hierarchy
+  and provide a clear distinction between primary actions and secondary
+  contextual actions.
+
+  - `.mainSecondarybtn`:
+      * Dark, high-contrast secondary button for important secondary actions
+      * Use for prominent navigation or major contextual actions (e.g., "Back", "Close")
+      * Slightly smaller than primary but use bold, larger font for readability
+
+  - `.Secondarybtn` (or `.btn-secondary`):
+      * Light, neutral secondary button for lower-priority actions
+      * Use for inline controls, filters, and utility actions
+      * Compact height with slightly larger font for touch friendliness
+
+  Recommended sizing and weight (applies to both):
+    - Height: ~2.25rem (36px)
+    - Font-size: 1rem (16px)
+    - Font-weight: 600
+
+  Example usage:
+
+  ```html
+  <!-- Primary Action -->
+  <button class="btn btn-primary">Save</button>
+
+  <!-- Prominent Secondary (dark) -->
+  <a class="btn mainSecondarybtn" href="../manage-devices.html">← Back</a>
+
+  <!-- Neutral Secondary (light) -->
+  <button class="btn Secondarybtn">Test Connection</button>
+  ```
+
+  CSS notes (existing implementation in `styles.css`):
+  - `.mainSecondarybtn` is a dark, high-contrast style used for important
+    secondary actions and navigation.
+  - `.Secondarybtn` (and legacy `.btn-secondary`) is a light, neutral style
+    for low-priority/utility actions. Hover states slightly darken the background.
+*/
 
 ### 3. Form Components
 

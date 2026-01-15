@@ -262,22 +262,28 @@ function bulkDelete() {
         return;
     }
     
-    selectedDevices.forEach(mac => {
-        sendCommand({
-            type: 'deleteDevice',
-            mac: mac
+    const macsToRemove = Array.from(selectedDevices);
+    const requests = macsToRemove.map(mac =>
+        fetch('/api/unmap-device', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac })
+        }).then(response => response.json())
+    );
+
+    Promise.all(requests)
+        .then(() => {
+            allDevices = allDevices.filter(d => !selectedDevices.has(d.mac));
+            localStorage.setItem('devices', JSON.stringify(allDevices));
+            selectedDevices.clear();
+            filterDevices();
+            updateStatistics();
+            showNotification(`Unmapped ${macsToRemove.length} device(s)`, 'success');
+        })
+        .catch(error => {
+            console.error('Error unmapping devices:', error);
+            showNotification('Failed to unmap selected devices', 'error');
         });
-        
-        // Remove from local storage
-        allDevices = allDevices.filter(d => d.mac !== mac);
-    });
-    
-    localStorage.setItem('devices', JSON.stringify(allDevices));
-    selectedDevices.clear();
-    filterDevices();
-    updateStatistics();
-    
-    showNotification(`Deleted ${selectedDevices.size} device(s)`, 'success');
 }
 
 function viewDevice(mac) {

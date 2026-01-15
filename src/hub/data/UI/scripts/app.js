@@ -66,6 +66,7 @@ function initWebSocket() {
     addActivityLog(`Connecting to hub...`, 'info');
     
     ws = new WebSocket(wsUrl);
+    window.ws = ws;
     
     ws.onopen = () => {
         addActivityLog('Connected to hub', 'success');

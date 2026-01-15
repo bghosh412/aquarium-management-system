@@ -1340,16 +1340,15 @@ void setupWebServer() {
                 return;
             }
             
-            // Load devices.json
-            File devicesFile = LittleFS.open("/config/devices.json", "r");
-            if (!devicesFile) {
-                request->send(404, "application/json", "{\"success\":false,\"error\":\"Devices file not found\"}");
-                return;
-            }
-            
+            // Load devices.json (if missing, treat as empty and still proceed)
             DynamicJsonDocument devicesDoc(8192);
-            deserializeJson(devicesDoc, devicesFile);
-            devicesFile.close();
+            File devicesFile = LittleFS.open("/config/devices.json", "r");
+            if (devicesFile) {
+                deserializeJson(devicesDoc, devicesFile);
+                devicesFile.close();
+            } else {
+                devicesDoc["devices"] = JsonArray();
+            }
             
             // Find and remove device
             JsonArray devices = devicesDoc["devices"];
@@ -1365,8 +1364,11 @@ void setupWebServer() {
             }
             
             if (foundIndex == -1) {
-                request->send(404, "application/json", "{\"success\":false,\"error\":\"Device not found\"}");
-                return;
+                // Device not found in registry; still send UNMAP and add to unmapped list
+                foundDevice = devicesDoc.createNestedObject();
+                foundDevice["type"] = "UNKNOWN";
+                foundDevice["firmwareVersion"] = 0;
+                foundDevice["tankId"] = 0;
             }
             
             // Send UNMAP message to node
@@ -1386,13 +1388,15 @@ void setupWebServer() {
                 Serial.println(" Warning: Failed to send UNMAP message (device may be offline)");
             }
             
-            // Remove from devices.json
-            uint8_t tankId = foundDevice["tankId"].as<uint8_t>();
-            devices.remove(foundIndex);
-            
-            devicesFile = LittleFS.open("/config/devices.json", "w");
-            serializeJson(devicesDoc, devicesFile);
-            devicesFile.close();
+            // Remove from devices.json if present
+            if (foundIndex != -1) {
+                uint8_t tankId = foundDevice["tankId"].as<uint8_t>();
+                devices.remove(foundIndex);
+
+                devicesFile = LittleFS.open("/config/devices.json", "w");
+                serializeJson(devicesDoc, devicesFile);
+                devicesFile.close();
+            }
             
             // **NOTE**: Device object removal disabled until Device subclass .cpp files exist
             // Devices are only tracked in JSON for now

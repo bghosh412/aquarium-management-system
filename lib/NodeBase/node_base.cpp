@@ -32,7 +32,11 @@ void loadNodeConfiguration(NodeType defaultType, const char* defaultName) {
     nodeConfig.nodeName = String(defaultName);
     nodeConfig.nodeType = defaultType;
     nodeConfig.firmwareVersion = 1;
-    nodeConfig.espnowChannel = 11;
+    #ifdef ESPNOW_CHANNEL
+    nodeConfig.espnowChannel = ESPNOW_CHANNEL;
+    #else
+    nodeConfig.espnowChannel = 6;
+    #endif
     nodeConfig.debugSerial = true;
     nodeConfig.debugESPNOW = true;
     nodeConfig.debugHardware = false;
@@ -153,13 +157,17 @@ void onAckReceived(const uint8_t* mac, const AckMessage& msg) {
     }
     
     // Add hub as peer
-    ESPNowManager::getInstance().addPeer(mac);
+    bool peerAdded = ESPNowManager::getInstance().addPeer(mac);
     
     // Mark as connected to hub
-    if (msg.accepted) {
+    if (msg.accepted && peerAdded) {
         isConnectedToHub = true;
         if (nodeConfig.debugSerial) {
             Serial.println("[OK] Connected to hub - ready for commands\\n");
+        }
+    } else if (msg.accepted && !peerAdded) {
+        if (nodeConfig.debugSerial) {
+            Serial.println("[WARN] ACK accepted but peer add failed; staying in discovery mode");
         }
     }
 }

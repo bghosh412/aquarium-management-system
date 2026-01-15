@@ -42,6 +42,7 @@ This project uses **modular instructions**. Based on what you're working on, ref
 2. **No Global Logic in Nodes** - Hub makes all decisions
 3. **Non-blocking Code** - State machines, no delays
 4. **Modular Design** - Clean separation of concerns
+5. **No Unsolicited Documentation** - Do NOT create .md files unless explicitly requested by user
 
 ---
 
@@ -118,9 +119,10 @@ vim include/protocol/messages.h
 - **Safety first**: Always implement fail-safe modes
 - **No blocking code**: Use state machines and timers
 - **Test compilation**: Run `platformio run` before committing
+- **No documentation files**: Do NOT create markdown (.md) documentation files unless explicitly requested by the user
 
 ---
 
-**Last Updated**: December 29, 2025  
-**Version**: 2.0 (Modular Instructions)  
+**Last Updated**: January 15, 2026  
+**Version**: 2.1 (No Unsolicited Documentation)  
 **Repository**: bghosh412/aquarium-management-system

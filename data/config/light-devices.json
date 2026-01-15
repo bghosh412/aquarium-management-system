@@ -1,0 +1,196 @@
+{
+  "lightDevices": [
+    {
+      "mac": "AA:BB:CC:DD:EE:01",
+      "name": "Living Room Light",
+      "tankId": 1,
+      "currentLevels": {
+        "white": 85,
+        "blue": 60,
+        "red": 40
+      },
+      "presets": [
+        {
+          "name": "Morning Dawn",
+          "white": 20,
+          "blue": 40,
+          "red": 10
+        },
+        {
+          "name": "Midday Sun",
+          "white": 100,
+          "blue": 80,
+          "red": 60
+        },
+        {
+          "name": "Evening Dusk",
+          "white": 30,
+          "blue": 50,
+          "red": 20
+        },
+        {
+          "name": "Night Moon",
+          "white": 0,
+          "blue": 15,
+          "red": 0
+        },
+        {
+          "name": "Custom 1",
+          "white": 70,
+          "blue": 70,
+          "red": 50
+        }
+      ],
+      "photoPeriods": {
+        "morning": {
+          "enabled": true,
+          "startHour": 7,
+          "startMinute": 0,
+          "startAM": true,
+          "durationHours": 4,
+          "durationMinutes": 0,
+          "enableRamp": true,
+          "preset": "Morning Dawn"
+        },
+        "evening": {
+          "enabled": true,
+          "startHour": 6,
+          "startMinute": 0,
+          "startAM": false,
+          "durationHours": 3,
+          "durationMinutes": 30,
+          "enableRamp": true,
+          "preset": "Evening Dusk"
+        }
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:11",
+      "name": "Shrimp Tank Light",
+      "tankId": 2,
+      "currentLevels": {
+        "white": 50,
+        "blue": 40,
+        "red": 30
+      },
+      "presets": [
+        {
+          "name": "Gentle Dawn",
+          "white": 15,
+          "blue": 25,
+          "red": 10
+        },
+        {
+          "name": "Soft Day",
+          "white": 60,
+          "blue": 50,
+          "red": 35
+        },
+        {
+          "name": "Calm Dusk",
+          "white": 20,
+          "blue": 30,
+          "red": 15
+        },
+        {
+          "name": "Dim Night",
+          "white": 0,
+          "blue": 10,
+          "red": 0
+        },
+        {
+          "name": "Custom 1",
+          "white": 45,
+          "blue": 45,
+          "red": 30
+        }
+      ],
+      "photoPeriods": {
+        "morning": {
+          "enabled": true,
+          "startHour": 8,
+          "startMinute": 30,
+          "startAM": true,
+          "durationHours": 5,
+          "durationMinutes": 0,
+          "enableRamp": true,
+          "preset": "Gentle Dawn"
+        },
+        "evening": {
+          "enabled": true,
+          "startHour": 5,
+          "startMinute": 30,
+          "startAM": false,
+          "durationHours": 2,
+          "durationMinutes": 30,
+          "enableRamp": true,
+          "preset": "Calm Dusk"
+        }
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:21",
+      "name": "Cichlid Tank Light",
+      "tankId": 3,
+      "currentLevels": {
+        "white": 95,
+        "blue": 70,
+        "red": 55
+      },
+      "presets": [
+        {
+          "name": "Bright Dawn",
+          "white": 30,
+          "blue": 50,
+          "red": 15
+        },
+        {
+          "name": "Full Sun",
+          "white": 100,
+          "blue": 85,
+          "red": 65
+        },
+        {
+          "name": "Golden Hour",
+          "white": 40,
+          "blue": 60,
+          "red": 30
+        },
+        {
+          "name": "Moonlight",
+          "white": 0,
+          "blue": 20,
+          "red": 0
+        },
+        {
+          "name": "Custom 1",
+          "white": 80,
+          "blue": 75,
+          "red": 60
+        }
+      ],
+      "photoPeriods": {
+        "morning": {
+          "enabled": true,
+          "startHour": 6,
+          "startMinute": 30,
+          "startAM": true,
+          "durationHours": 5,
+          "durationMinutes": 30,
+          "enableRamp": true,
+          "preset": "Bright Dawn"
+        },
+        "evening": {
+          "enabled": true,
+          "startHour": 7,
+          "startMinute": 0,
+          "startAM": false,
+          "durationHours": 4,
+          "durationMinutes": 0,
+          "enableRamp": true,
+          "preset": "Golden Hour"
+        }
+      }
+    }
+  ]
+}

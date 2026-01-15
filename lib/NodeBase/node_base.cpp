@@ -32,7 +32,7 @@ void loadNodeConfiguration(NodeType defaultType, const char* defaultName) {
     nodeConfig.nodeName = String(defaultName);
     nodeConfig.nodeType = defaultType;
     nodeConfig.firmwareVersion = 1;
-    nodeConfig.espnowChannel = 6;
+    nodeConfig.espnowChannel = 11;
     nodeConfig.debugSerial = true;
     nodeConfig.debugESPNOW = true;
     nodeConfig.debugHardware = false;

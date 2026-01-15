@@ -1,0 +1,43 @@
+{
+  "system": {
+    "name": "Aquarium Management System",
+    "version": "1.0.0",
+    "hubId": "HUB-001"
+  },
+  "tanks": [
+    {
+      "id": 1,
+      "name": "Main Display Tank",
+      "volume": 200,
+      "units": "liters"
+    },
+    {
+      "id": 2,
+      "name": "Quarantine Tank",
+      "volume": 50,
+      "units": "liters"
+    },
+    {
+      "id": 3,
+      "name": "Breeding Tank",
+      "volume": 75,
+      "units": "liters"
+    }
+  ],
+  "espnow": {
+    "channel": 6,
+    "maxNodes": 20,
+    "heartbeatInterval": 60,
+    "heartbeatTimeout": 180
+  },
+  "safety": {
+    "maxHeaterTemp": 32,
+    "minHeaterTemp": 18,
+    "maxCO2Duration": 3600,
+    "maxFeedingPortions": 5
+  },
+  "scheduling": {
+    "enabled": true,
+    "schedules": []
+  }
+}

@@ -1,0 +1,202 @@
+{
+  "devices": [
+    {
+      "mac": "AA:BB:CC:DD:EE:01",
+      "type": "LIGHT",
+      "name": "Living Room Light",
+      "tankId": 1,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 1234,
+      "health": 100,
+      "stats": {
+        "messagesReceived": 4562,
+        "messagesSent": 3891,
+        "commandsSent": 234,
+        "errorCount": 2
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:02",
+      "type": "CO2",
+      "name": "Living Room CO2",
+      "tankId": 1,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 1200,
+      "health": 98,
+      "stats": {
+        "messagesReceived": 3200,
+        "messagesSent": 2400,
+        "commandsSent": 156,
+        "errorCount": 0
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:03",
+      "type": "HEATER",
+      "name": "Living Room Heater",
+      "tankId": 1,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 1180,
+      "health": 100,
+      "stats": {
+        "messagesReceived": 2980,
+        "messagesSent": 2100,
+        "commandsSent": 89,
+        "errorCount": 1
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:04",
+      "type": "FISH_FEEDER",
+      "name": "Living Room Feeder",
+      "tankId": 1,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 1220,
+      "health": 95,
+      "stats": {
+        "messagesReceived": 1200,
+        "messagesSent": 800,
+        "commandsSent": 12,
+        "errorCount": 0
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:05",
+      "type": "SENSOR",
+      "name": "Living Room Sensors",
+      "tankId": 1,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 1250,
+      "health": 100,
+      "stats": {
+        "messagesReceived": 8900,
+        "messagesSent": 7600,
+        "commandsSent": 0,
+        "errorCount": 5
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:11",
+      "type": "LIGHT",
+      "name": "Shrimp Tank Light",
+      "tankId": 2,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 980,
+      "health": 100,
+      "stats": {
+        "messagesReceived": 2100,
+        "messagesSent": 1800,
+        "commandsSent": 98,
+        "errorCount": 0
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:12",
+      "type": "HEATER",
+      "name": "Shrimp Tank Heater",
+      "tankId": 2,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 990,
+      "health": 100,
+      "stats": {
+        "messagesReceived": 1980,
+        "messagesSent": 1500,
+        "commandsSent": 45,
+        "errorCount": 0
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:21",
+      "type": "LIGHT",
+      "name": "Cichlid Tank Light",
+      "tankId": 3,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 1500,
+      "health": 97,
+      "stats": {
+        "messagesReceived": 6700,
+        "messagesSent": 5400,
+        "commandsSent": 310,
+        "errorCount": 3
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:22",
+      "type": "HEATER",
+      "name": "Cichlid Tank Heater",
+      "tankId": 3,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 1490,
+      "health": 100,
+      "stats": {
+        "messagesReceived": 4200,
+        "messagesSent": 3100,
+        "commandsSent": 120,
+        "errorCount": 1
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:23",
+      "type": "FISH_FEEDER",
+      "name": "Cichlid Tank Feeder",
+      "tankId": 3,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 1480,
+      "health": 100,
+      "stats": {
+        "messagesReceived": 1800,
+        "messagesSent": 1200,
+        "commandsSent": 18,
+        "errorCount": 0
+      }
+    },
+    {
+      "mac": "AA:BB:CC:DD:EE:FF",
+      "type": "REPEATER",
+      "name": "ESP-NOW Repeater",
+      "tankId": 0,
+      "firmwareVersion": 1,
+      "enabled": true,
+      "status": "ONLINE",
+      "lastHeartbeat": 0,
+      "uptimeMinutes": 2100,
+      "health": 100,
+      "stats": {
+        "messagesReceived": 25000,
+        "messagesSent": 24800,
+        "commandsSent": 0,
+        "errorCount": 8
+      }
+    }
+  ]
+}

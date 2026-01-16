@@ -116,6 +116,19 @@
     --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
     
     --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Legacy/inline token compatibility */
+    --color-primary: var(--primary-color);
+    --color-primary-dark: var(--primary-dark);
+    --color-primary-light: var(--primary-light);
+    --color-accent: var(--success-color);
+    --color-accent-warning: var(--warning-color);
+    --color-accent-danger: var(--danger-color);
+    --color-bg: var(--bg-tertiary);
+    --color-border: var(--border-color);
+    --color-text-secondary: var(--text-secondary);
+    --radius-md: var(--border-radius);
+    --radius-sm: var(--border-radius-sm);
 }
 
 /* ===== Global Styles ===== */

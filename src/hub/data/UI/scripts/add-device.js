@@ -273,9 +273,25 @@ function addDeviceManually() {
         },
         body: JSON.stringify(provisionData)
     })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
+    .then(async (response) => {
+        const contentType = response.headers.get('content-type') || '';
+        let payload = null;
+
+        if (contentType.includes('application/json')) {
+            payload = await response.json();
+        } else {
+            payload = await response.text();
+        }
+
+        if (!response.ok) {
+            const errorMessage = payload && typeof payload === 'object' ? payload.error : payload;
+            throw new Error(errorMessage || 'Provision request failed');
+        }
+
+        return payload;
+    })
+    .then((data) => {
+        if (data && data.success) {
             showNotification('Device provisioned successfully!', 'success');
             
             // Remove from discovered devices display
@@ -295,12 +311,13 @@ function addDeviceManually() {
                 window.location.href = 'manage-devices.html';
             }, 1500);
         } else {
-            showNotification('Error provisioning device: ' + (data.error || 'Unknown error'), 'error');
+            const errorMessage = data && data.error ? data.error : 'Unknown error';
+            showNotification('Error provisioning device: ' + errorMessage, 'error');
         }
     })
-    .catch(error => {
+    .catch((error) => {
         console.error('Error provisioning device:', error);
-        showNotification('Failed to provision device. Check console for details.', 'error');
+        showNotification(`Failed to provision device: ${error.message}`, 'error');
     });
 }
 

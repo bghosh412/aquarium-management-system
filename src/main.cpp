@@ -1133,6 +1133,12 @@ void setupWebServer() {
             }
             
             // Send CONFIG message to node
+            if (!ESPNowManager::getInstance().addPeer(mac)) {
+                Serial.println(" Failed to add peer before CONFIG send");
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to add ESP-NOW peer. Ensure device is powered on and announcing.\"}");
+                return;
+            }
+
             ConfigMessage configMsg = {};
             configMsg.header.type = MessageType::CONFIG;
             configMsg.header.tankId = tankId;

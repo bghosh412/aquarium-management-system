@@ -260,12 +260,22 @@ function addDeviceManually() {
     }
     
     // Send provision request to hub
+    const typeMap = {
+        'light': 'LIGHT',
+        'co2': 'CO2',
+        'heater': 'HEATER',
+        'feeder': 'FISH_FEEDER',
+        'sensor': 'SENSOR',
+        'repeater': 'REPEATER'
+    };
+
     const provisionData = {
         mac: deviceMac,
         name: deviceName,
-        tankId: tankId
+        tankId: tankId,
+        type: typeMap[deviceType] || deviceType.toUpperCase()
     };
-    
+
     fetch('/api/provision-device', {
         method: 'POST',
         headers: {

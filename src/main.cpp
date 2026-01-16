@@ -1417,32 +1417,53 @@ void setupWebServer() {
             
             Serial.println(" CONFIG message sent to device");
             
-            // Remove from unmapped devices
-            unmappedDevices.remove(foundIndex);
-            
+            // Preserve found device details before we modify the unmapped list
+            String foundTypeStr = foundDevice["type"].as<String>();
+            if (foundTypeStr.length() == 0) foundTypeStr = "UNKNOWN";
+            uint8_t foundFw = foundDevice["firmwareVersion"].as<uint8_t>();
+
+            // Remove all entries for this MAC from unmapped devices (avoid duplicates/re-appear race)
+            for (int i = (int)unmappedDevices.size() - 1; i >= 0; i--) {
+                if (unmappedDevices[i]["mac"].as<String>() == macStr) {
+                    unmappedDevices.remove(i);
+                }
+            }
+
             // Save updated unmapped devices
             unmappedFile = LittleFS.open("/config/unmapped-devices.json", "w");
             serializeJson(unmappedDoc, unmappedFile);
             unmappedFile.close();
-            
-            // Add to devices.json
+
+            // Add to devices.json (create devices array if missing)
             File devicesFile = LittleFS.open("/config/devices.json", "r");
             DynamicJsonDocument devicesDoc(8192);
             if (devicesFile) {
                 deserializeJson(devicesDoc, devicesFile);
                 devicesFile.close();
             }
-            
+
             JsonArray devices = devicesDoc["devices"];
+            if (devices.isNull()) {
+                devices = devicesDoc.createNestedArray("devices");
+            }
+
+            // Prefer type provided by client (doc["type"]) if present, otherwise use discovered type
+            String requestedType = String();
+            if (doc.containsKey("type")) {
+                requestedType = doc["type"].as<String>();
+            }
+            String finalType = (requestedType.length() > 0) ? requestedType : foundTypeStr;
+            finalType.toUpperCase();
+
             JsonObject newDevice = devices.createNestedObject();
             newDevice["mac"] = macStr;
-            newDevice["type"] = foundDevice["type"];
+            newDevice["type"] = finalType;
             newDevice["name"] = deviceName;
             newDevice["tankId"] = tankId;
-            newDevice["firmwareVersion"] = foundDevice["firmwareVersion"];
+            newDevice["firmwareVersion"] = (doc.containsKey("firmwareVersion") ? doc["firmwareVersion"].as<uint8_t>() : foundFw);
             newDevice["enabled"] = true;
             newDevice["status"] = "PROVISIONING";
-            
+
             devicesFile = LittleFS.open("/config/devices.json", "w");
             serializeJson(devicesDoc, devicesFile);
             devicesFile.close();
@@ -1698,15 +1719,26 @@ void setupWebServer() {
 
             JsonArray unmappedDevices = unmappedDoc["unmappedDevices"];
             if (unmappedDevices.isNull()) {
-                unmappedDevices = unmappedDoc["unmappedDevices"].to<JsonArray>();
+                unmappedDevices = unmappedDoc.createNestedArray("unmappedDevices");
             }
+
+            // Remove any existing entries for this MAC to avoid duplicates
+            for (int i = (int)unmappedDevices.size() - 1; i >= 0; i--) {
+                if (unmappedDevices[i]["mac"].as<String>() == macStr) {
+                    unmappedDevices.remove(i);
+                }
+            }
+
+            String typeStr = foundDevice.containsKey("type") ? foundDevice["type"].as<String>() : String("UNKNOWN");
+            if (typeStr.length() == 0) typeStr = "UNKNOWN";
+
             JsonObject newUnmapped = unmappedDevices.createNestedObject();
             newUnmapped["mac"] = macStr;
-            newUnmapped["type"] = foundDevice["type"];
-            newUnmapped["firmwareVersion"] = foundDevice["firmwareVersion"];
+            newUnmapped["type"] = typeStr;
+            newUnmapped["firmwareVersion"] = foundDevice.containsKey("firmwareVersion") ? foundDevice["firmwareVersion"].as<uint8_t>() : 0;
             newUnmapped["discoveredAt"] = millis();
             newUnmapped["announceCount"] = 0;
-            
+
             unmappedFile = LittleFS.open("/config/unmapped-devices.json", "w");
             serializeJson(unmappedDoc, unmappedFile);
             unmappedFile.close();

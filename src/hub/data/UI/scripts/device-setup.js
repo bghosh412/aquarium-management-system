@@ -278,8 +278,8 @@ function triggerFailSafe() {
     showNotification('Fail-safe triggered', 'success');
 }
 
-function deleteDevice() {
-    if (!confirm('Are you sure you want to delete this device? This cannot be undone.')) {
+function unmapDevice() {
+    if (!confirm('Are you sure you want to unmap this device? This will reset it to discovery mode.')) {
         return;
     }
 

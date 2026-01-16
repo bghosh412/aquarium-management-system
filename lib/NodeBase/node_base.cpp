@@ -35,7 +35,7 @@ void loadNodeConfiguration(NodeType defaultType, const char* defaultName) {
     #ifdef ESPNOW_CHANNEL
     nodeConfig.espnowChannel = ESPNOW_CHANNEL;
     #else
-    nodeConfig.espnowChannel = 6;
+    nodeConfig.espnowChannel = 11;  // Failsafe channel
     #endif
     nodeConfig.debugSerial = true;
     nodeConfig.debugESPNOW = true;
@@ -47,24 +47,28 @@ void loadNodeConfiguration(NodeType defaultType, const char* defaultName) {
     // Attempt to load from filesystem
     if (!LittleFS.begin()) {
         Serial.println("[WARN] LittleFS mount failed, using defaults");
+        Serial.printf("[WARN] Failsafe channel in use: %d\n", nodeConfig.espnowChannel);
         return;
     }
     
     if (!LittleFS.exists("/node_config.txt")) {
         Serial.println("[WARN] Config file not found, using defaults");
+        Serial.printf("[WARN] Failsafe channel in use: %d\n", nodeConfig.espnowChannel);
+        saveNodeConfiguration();
         return;
     }
     
     File file = LittleFS.open("/node_config.txt", "r");
     if (!file) {
         Serial.println("[ERROR] Failed to open config file");
+        Serial.printf("[WARN] Failsafe channel in use: %d\n", nodeConfig.espnowChannel);
         return;
     }
     
     Serial.println("[FILE] Loading configuration...");
     
     while (file.available()) {
-        String line = file.readStringUntil('\\n');
+        String line = file.readStringUntil('\n');
         line.trim();
         
         // Skip comments and empty lines
@@ -151,6 +155,7 @@ void onAckReceived(const uint8_t* mac, const AckMessage& msg) {
         Serial.println("+========================================================+");
         Serial.printf("| [ACK] ACK received from %02X:%02X:%02X:%02X:%02X:%02X\\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        Serial.printf("| Channel: %d\n", nodeConfig.espnowChannel);
         Serial.printf("| Assigned Node ID: %d\\n", msg.assignedNodeId);
         Serial.printf("| Accepted: %s\\n", msg.accepted ? "YES" : "NO");
         Serial.println("+========================================================+");
@@ -177,6 +182,7 @@ void onConfigReceived(const uint8_t* mac, const ConfigMessage& msg) {
         Serial.println("+========================================================+");
         Serial.printf("| [CFG]  CONFIG received from %02X:%02X:%02X:%02X:%02X:%02X\\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        Serial.printf("| Channel: %d\n", nodeConfig.espnowChannel);
         Serial.printf("| Assigned Tank ID: %d\\n", msg.header.tankId);
         Serial.printf("| Device Name: %s\\n", msg.deviceName);
         Serial.println("+========================================================+");
@@ -213,6 +219,7 @@ void onUnmapReceived(const uint8_t* mac, const UnmapMessage& msg) {
         Serial.println("+========================================================+");
         Serial.printf("| [UNMAP] UNMAP received from %02X:%02X:%02X:%02X:%02X:%02X\\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        Serial.printf("| Channel: %d\n", nodeConfig.espnowChannel);
         Serial.printf("| Reason: %d\\n", msg.reason);
         Serial.println("+========================================================+");
     }
@@ -260,7 +267,8 @@ void sendHeartbeat() {
     ESPNowManager::getInstance().send(broadcast, (uint8_t*)&msg, sizeof(msg));
     
     if (nodeConfig.debugESPNOW) {
-        Serial.printf("[HB] Heartbeat sent (uptime: %dmin, time: %u)\n", msg.uptimeMinutes, currentUnixTime);
+        Serial.printf("[HB] Heartbeat sent (uptime: %dmin, time: %u, ch=%d)\n",
+                      msg.uptimeMinutes, currentUnixTime, nodeConfig.espnowChannel);
     }
 }
 
@@ -278,7 +286,8 @@ void sendAnnounce() {
     ESPNowManager::getInstance().send(broadcast, (uint8_t*)&msg, sizeof(msg));
     
     if (nodeConfig.debugESPNOW) {
-        Serial.printf("[TX] ANNOUNCE sent (tankId=%d, FW=v%d)\\n", nodeConfig.tankId, nodeConfig.firmwareVersion);
+        Serial.printf("[TX] ANNOUNCE sent (tankId=%d, FW=v%d, ch=%d)\n",
+                      nodeConfig.tankId, nodeConfig.firmwareVersion, nodeConfig.espnowChannel);
         if (nodeConfig.tankId == 0) {
             Serial.println("[WARN] Node is UNMAPPED - waiting for provisioning");
         }
@@ -304,6 +313,7 @@ void sendStatusAck(const uint8_t* mac, uint8_t commandId, uint8_t statusCode, co
     ESPNowManager::getInstance().send(mac, (uint8_t*)&msg, sizeof(msg));
     
     if (nodeConfig.debugESPNOW) {
-        Serial.printf("[TX] STATUS sent (cmdId=%d, status=%d)\n", commandId, statusCode);
+        Serial.printf("[TX] STATUS sent (cmdId=%d, status=%d, ch=%d)\n",
+                      commandId, statusCode, nodeConfig.espnowChannel);
     }
 }

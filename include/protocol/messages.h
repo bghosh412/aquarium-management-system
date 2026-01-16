@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 // ESP-NOW configuration
-#define ESPNOW_CHANNEL 6
 #define MAX_TANK_ID 255
 #define MAX_NODE_NAME_LEN 16
 

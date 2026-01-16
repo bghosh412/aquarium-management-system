@@ -216,6 +216,9 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
         
         // Check if already in unmapped list
         JsonArray unmappedDevices = doc["unmappedDevices"];
+        if (unmappedDevices.isNull()) {
+            unmappedDevices = doc["unmappedDevices"].to<JsonArray>();
+        }
         char macStr[18];
         snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -440,6 +443,32 @@ std::vector<Device*> AquariumManager::getAllDevices() const {
 
 size_t AquariumManager::getDeviceCount() const {
     return _globalDeviceRegistry.size();
+}
+
+bool AquariumManager::removeDevice(const uint8_t* mac) {
+    uint64_t macKey = _macToKey(mac);
+    auto it = _globalDeviceRegistry.find(macKey);
+    if (it == _globalDeviceRegistry.end()) {
+        return false;
+    }
+
+    Device* device = it->second;
+    uint8_t tankId = device->getTankId();
+
+    Aquarium* aquarium = getAquarium(tankId);
+    if (aquarium) {
+        aquarium->removeDevice(mac);
+    }
+
+    if (_wsCallback) {
+        _wsCallback("deviceUnmapped", device->toJson());
+    }
+
+    delete device;
+    _globalDeviceRegistry.erase(it);
+
+    Serial.printf(" ✅ Device removed from registry (Tank %d)\n", tankId);
+    return true;
 }
 
 // ============================================================================

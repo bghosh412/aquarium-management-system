@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Update Software - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css?v=20260116">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Settings</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="/index.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <aside class="sidebar">
+            <!-- Sidebar will be injected here -->
+        </aside>
+
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Update Software</h1>
+                <p class="page-description">OTA updates for firmware and LittleFS</p>
+            </div>
+
+            <div class="settings-layout">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Settings Menu</h3>
+                    </div>
+                    <div class="card-body settings-nav">
+                        <a href="/settings/download-upload.html">Download/Upload files</a>
+                        <a href="/settings/update-software.html" class="active">Update software</a>
+                        <a href="/settings/backup-restore.html">Backup/Restore Settings</a>
+                        <a href="/settings/diagnostics.html">Diagnostics</a>
+                        <a href="/settings/wifi-settings.html">WIFI Settings</a>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>OTA Updates</h3>
+                        <span style="color: var(--color-text-secondary); font-size: 0.875rem;">Uses URLs from hub_config.txt</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label class="form-label">Firmware URL</label>
+                            <input type="text" id="firmwareUrl" class="form-input" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">LittleFS URL</label>
+                            <input type="text" id="littlefsUrl" class="form-input" readonly>
+                        </div>
+
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem;">
+                            <button class="btn btn-primary" id="updateFirmwareBtn">
+                                <span>⬆️</span> Update Firmware
+                            </button>
+                            <button class="btn btn-secondary" id="updateLittlefsBtn">
+                                <span>⬆️</span> Update LittleFS
+                            </button>
+                        </div>
+
+                        <div id="updateStatus" style="margin-top: 1rem;"></div>
+                        <div style="margin-top: 1rem; padding: 1rem; background: rgba(245, 158, 11, 0.1); border-left: 4px solid var(--color-accent-warning); border-radius: var(--radius-sm);">
+                            <strong>⚠️ Note:</strong> SSL certificate validation is disabled for OTA downloads to conserve RAM.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/scripts/app.js?v=20260116"></script>
+    <script src="/scripts/sidebar-inject.js?v=20260116"></script>
+    <script src="/settings/settings-update-software.js?v=20260116"></script>
+</body>
+</html>

@@ -158,7 +158,7 @@ function renderDevices() {
                 </div>
                 <div class="card-footer" style="display: flex; gap: 0.5rem;">
                     <button class="btn btn-primary" style="flex: 1;" onclick="viewDevice('${device.mac}')">
-                        🔌 Control
+                        🗓️ Schedule
                     </button>
                     <button class="btn btn-secondary" style="flex: 1;" onclick="setupDevice('${device.mac}')">
                         ⚙️ Setup
@@ -292,16 +292,22 @@ function viewDevice(mac) {
     
     localStorage.setItem('selectedDeviceMac', mac);
     
+    const deviceType = String(device.type || '').toLowerCase();
+
+    if (deviceType === 'light') {
+        window.location.href = `schedule/light-schedule.html?mac=${mac}`;
+        return;
+    }
+
     // Route to appropriate details page
     const detailsPages = {
-        'light': '../aquarium/details/light-details.html',
         'co2': '../aquarium/details/co2-details.html',
         'heater': '../aquarium/details/heater-details.html',
         'feeder': '../aquarium/details/feeder-details.html',
         'sensor': '../aquarium/details/sensor-details.html'
     };
     
-    const page = detailsPages[device.type] || 'device-setup.html';
+    const page = detailsPages[deviceType] || 'device-setup.html';
     window.location.href = page + `?mac=${mac}`;
 }
 

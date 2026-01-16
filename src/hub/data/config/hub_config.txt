@@ -28,5 +28,9 @@ DEBUG_SERIAL=true
 DEBUG_ESPNOW=true
 DEBUG_WEBSOCKET=false
 
+# OTA Update URLs
+FIRMWARE_OTA_URL=
+LITTLEFS_OTA_URL=
+
 # ntfy.sh Notification
 NTFY_TOPIC=ams-hub-bg

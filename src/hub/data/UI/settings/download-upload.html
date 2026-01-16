@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Download/Upload Files - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css?v=20260116">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Settings</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="/index.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <aside class="sidebar">
+            <!-- Sidebar will be injected here -->
+        </aside>
+
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Settings</h1>
+                <p class="page-description">Download and upload hub configuration files</p>
+            </div>
+
+            <div class="settings-layout">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Settings Menu</h3>
+                    </div>
+                    <div class="card-body settings-nav">
+                        <a href="/settings/download-upload.html" class="active">Download/Upload files</a>
+                        <a href="/settings/update-software.html">Update software</a>
+                        <a href="/settings/backup-restore.html">Backup/Restore Settings</a>
+                        <a href="/settings/diagnostics.html">Diagnostics</a>
+                        <a href="/settings/wifi-settings.html">WIFI Settings</a>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Download/Upload Files</h3>
+                        <span style="color: var(--color-text-secondary); font-size: 0.875rem;">
+                            JSON files stored on the hub
+                        </span>
+                    </div>
+                    <div class="card-body">
+                        <div style="margin-bottom: 1.5rem;">
+                            <h4 style="margin-bottom: 0.75rem;">Available Files</h4>
+                            <div id="fileList" style="display: grid; gap: 0.75rem;"></div>
+                        </div>
+
+                        <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                        <div>
+                            <h4 style="margin-bottom: 0.75rem;">Upload JSON File</h4>
+                            <form id="uploadForm">
+                                <div class="form-group">
+                                    <label for="uploadFile" class="form-label">Select JSON File</label>
+                                    <input type="file" id="uploadFile" class="form-input" accept=".json" required>
+                                    <small class="form-help">Uploading will overwrite the file on the hub.</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="targetFile" class="form-label">Target Filename</label>
+                                    <select id="targetFile" class="form-input" required></select>
+                                </div>
+                                <button type="submit" class="btn btn-primary">
+                                    <span>⬆️</span> Upload File
+                                </button>
+                            </form>
+                            <div id="uploadStatus" style="margin-top: 1rem;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/scripts/app.js?v=20260116"></script>
+    <script src="/scripts/sidebar-inject.js?v=20260116"></script>
+    <script src="/settings/settings-download-upload.js?v=20260116"></script>
+</body>
+</html>

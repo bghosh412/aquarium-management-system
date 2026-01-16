@@ -15,14 +15,26 @@
  */
 
 #include <Arduino.h>
+
 #include <ESP8266WiFi.h>
+#include <LittleFS.h>
 #include <espnow.h>
 #include "protocol/messages.h"
 
-// Repeater Configuration
-const uint8_t TANK_ID = 1;
-const char REPEATER_NAME[] = "Repeater-01";
+// Repeater Configuration Defaults
+const uint8_t DEFAULT_TANK_ID = 1;
+const char DEFAULT_REPEATER_NAME[] = "Repeater-01";
 const uint8_t FIRMWARE_VERSION = 1;
+
+struct RepeaterConfig {
+    uint8_t tankId;
+    String name;
+    uint8_t espnowChannel;
+    uint32_t announceIntervalMs;
+    uint32_t heartbeatIntervalMs;
+};
+
+RepeaterConfig repeaterConfig;
 
 // Hub MAC address (learned dynamically)
 uint8_t hubMAC[6] = {0};
@@ -41,6 +53,72 @@ enum class RepeaterState {
     FAIL_SAFE
 };
 RepeaterState currentState = RepeaterState::INIT;
+
+void loadRepeaterConfig() {
+    repeaterConfig.tankId = DEFAULT_TANK_ID;
+    repeaterConfig.name = String(DEFAULT_REPEATER_NAME);
+    #ifdef ESPNOW_CHANNEL
+    repeaterConfig.espnowChannel = ESPNOW_CHANNEL;
+    #else
+    repeaterConfig.espnowChannel = 11;
+    #endif
+    repeaterConfig.announceIntervalMs = 30000;
+    repeaterConfig.heartbeatIntervalMs = 60000;
+
+    if (!LittleFS.begin()) {
+        Serial.println("[WARN] LittleFS mount failed, using defaults");
+        return;
+    }
+
+    if (!LittleFS.exists("/node_config.txt")) {
+        Serial.println("[WARN] Config file not found, using defaults");
+        return;
+    }
+
+    File file = LittleFS.open("/node_config.txt", "r");
+    if (!file) {
+        Serial.println("[ERROR] Failed to open config file");
+        return;
+    }
+
+    while (file.available()) {
+        String line = file.readStringUntil('\n');
+        line.trim();
+
+        if (line.startsWith("#") || line.length() == 0) {
+            continue;
+        }
+
+        int separatorIndex = line.indexOf('=');
+        if (separatorIndex == -1) {
+            continue;
+        }
+
+        String key = line.substring(0, separatorIndex);
+        String value = line.substring(separatorIndex + 1);
+        key.trim();
+        value.trim();
+
+        if (key == "TANK_ID" || key == "NODE_TANK_ID") {
+            repeaterConfig.tankId = value.toInt();
+        } else if (key == "NODE_NAME") {
+            repeaterConfig.name = value;
+        } else if (key == "ESPNOW_CHANNEL") {
+            repeaterConfig.espnowChannel = value.toInt();
+        } else if (key == "ANNOUNCE_INTERVAL_MS") {
+            repeaterConfig.announceIntervalMs = value.toInt();
+        } else if (key == "HEARTBEAT_INTERVAL_MS") {
+            repeaterConfig.heartbeatIntervalMs = value.toInt();
+        }
+    }
+
+    file.close();
+
+    Serial.println("[OK] Repeater configuration loaded");
+    Serial.printf("   - Name: %s\n", repeaterConfig.name.c_str());
+    Serial.printf("   - Tank ID: %d\n", repeaterConfig.tankId);
+    Serial.printf("   - ESP-NOW Channel: %d\n", repeaterConfig.espnowChannel);
+}
 
 /**
  * ESP-NOW Receive Callback
@@ -62,7 +140,7 @@ void onDataReceived(uint8_t *senderMAC, uint8_t *data, uint8_t len) {
         if (!hubRegistered) {
             memcpy(hubMAC, senderMAC, 6);
             hubRegistered = true;
-            esp_now_add_peer(hubMAC, ESP_NOW_ROLE_COMBO, ESPNOW_CHANNEL, NULL, 0);
+            esp_now_add_peer(hubMAC, ESP_NOW_ROLE_COMBO, repeaterConfig.espnowChannel, NULL, 0);
             Serial.println("[HUB] Learned hub MAC address");
             currentState = RepeaterState::ACTIVE;
         }
@@ -106,12 +184,11 @@ void onDataSent(uint8_t *mac, uint8_t status) {
 void sendAnnounce() {
     AnnounceMessage msg;
     msg.header.type = MessageType::ANNOUNCE;
-    msg.header.tankId = TANK_ID;
+    msg.header.tankId = repeaterConfig.tankId;
     msg.header.nodeType = NodeType::UNKNOWN;  // Repeater doesn't have a specific type yet
     msg.header.timestamp = millis();
     msg.header.sequenceNum = 0;
     
-    strncpy(msg.nodeName, REPEATER_NAME, MAX_NODE_NAME_LEN);
     msg.firmwareVersion = FIRMWARE_VERSION;
     msg.capabilities = 0xFF;  // Special capability flag for repeater
     
@@ -127,7 +204,7 @@ void sendHeartbeat() {
     
     HeartbeatMessage msg;
     msg.header.type = MessageType::HEARTBEAT;
-    msg.header.tankId = TANK_ID;
+    msg.header.tankId = repeaterConfig.tankId;
     msg.header.nodeType = NodeType::UNKNOWN;
     msg.header.timestamp = millis();
     msg.header.sequenceNum = 0;
@@ -147,10 +224,11 @@ void setupESPNow() {
     WiFi.disconnect();
     
     // Set WiFi channel
-    wifi_set_channel(ESPNOW_CHANNEL);
+    wifi_set_channel(repeaterConfig.espnowChannel);
     
     Serial.print("MAC Address: ");
     Serial.println(WiFi.macAddress());
+    Serial.printf("ESP-NOW Channel: %d\n", repeaterConfig.espnowChannel);
     
     // Initialize ESP-NOW
     if (esp_now_init() != 0) {
@@ -202,6 +280,7 @@ void setup() {
     Serial.println("    Range Extender for Hub");
     Serial.println("========================================\n");
     
+    loadRepeaterConfig();
     setupESPNow();
     
     // Send initial announce
@@ -219,13 +298,13 @@ void loop() {
     unsigned long now = millis();
     
     // Send ANNOUNCE every 30 seconds if hub not registered
-    if (!hubRegistered && (now - lastAnnounce >= 30000)) {
+    if (!hubRegistered && (now - lastAnnounce >= repeaterConfig.announceIntervalMs)) {
         sendAnnounce();
         lastAnnounce = now;
     }
     
     // Send heartbeat every 60 seconds if hub registered
-    if (hubRegistered && (now - lastHeartbeat >= 60000)) {
+    if (hubRegistered && (now - lastHeartbeat >= repeaterConfig.heartbeatIntervalMs)) {
         sendHeartbeat();
         lastHeartbeat = now;
     }

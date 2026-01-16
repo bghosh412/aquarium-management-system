@@ -24,10 +24,13 @@
 #include <LittleFS.h>
 #include <esp_now.h>
 #include <ArduinoJson.h>
+#include <Update.h>
+#include <WiFiClientSecure.h>
 #include "protocol/messages.h"
 #include "models/Aquarium.h"
 #include "managers/AquariumManager.h"
 #include <HTTPClient.h>
+#include <memory>
 #include "Constant.h"
 #include "ESPNowManager.h"
 #include "ws_server.h"
@@ -52,6 +55,8 @@ struct HubConfig {
     bool debugSerial;
     bool debugESPNOW;
     bool debugWebSocket;
+    String otaFirmwareUrl;
+    String otaLittlefsUrl;
 };
 
 HubConfig config;
@@ -78,6 +83,93 @@ void recordMissingAsset(const String &url) {
     if (recentMissingAssets.size() > MISSING_ASSETS_LIMIT) {
         recentMissingAssets.erase(recentMissingAssets.begin());
     }
+}
+
+struct SettingsUploadContext {
+    File file;
+    String error;
+};
+
+// ============================================================================
+// SETTINGS HELPERS
+// ============================================================================
+
+static const char* kConfigJsonFiles[] = {
+    "aquariums.json",
+    "config.json",
+    "devices.json",
+    "light-devices.json",
+    "unmapped-devices.json"
+};
+
+bool isAllowedConfigFile(const String& name) {
+    for (const char* fileName : kConfigJsonFiles) {
+        if (name == fileName) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool performOtaUpdate(const String& url, bool isLittleFs, String& errorOut) {
+    if (url.length() == 0) {
+        errorOut = "OTA URL not set";
+        return false;
+    }
+
+    std::unique_ptr<WiFiClient> client;
+    if (url.startsWith("https://")) {
+        std::unique_ptr<WiFiClientSecure> secureClient(new WiFiClientSecure());
+        secureClient->setInsecure();
+        client = std::move(secureClient);
+    } else {
+        client = std::unique_ptr<WiFiClient>(new WiFiClient());
+    }
+
+    HTTPClient http;
+    if (!http.begin(*client, url)) {
+        errorOut = "Failed to start HTTP";
+        return false;
+    }
+
+    int httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK) {
+        errorOut = "HTTP error: " + String(httpCode);
+        http.end();
+        return false;
+    }
+
+    int contentLength = http.getSize();
+    int updateType = isLittleFs ? U_SPIFFS : U_FLASH;
+
+    if (!Update.begin(contentLength > 0 ? contentLength : UPDATE_SIZE_UNKNOWN, updateType)) {
+        errorOut = Update.errorString();
+        http.end();
+        return false;
+    }
+
+    size_t written = Update.writeStream(http.getStream());
+    if (contentLength > 0 && written != (size_t)contentLength) {
+        errorOut = "Incomplete OTA write";
+        Update.abort();
+        http.end();
+        return false;
+    }
+
+    if (!Update.end()) {
+        errorOut = Update.errorString();
+        http.end();
+        return false;
+    }
+
+    if (!Update.isFinished()) {
+        errorOut = "OTA not finished";
+        http.end();
+        return false;
+    }
+
+    http.end();
+    return true;
 }
 
 // WiFiManager
@@ -162,6 +254,8 @@ void loadConfiguration() {
     config.debugSerial = true;
     config.debugESPNOW = false;
     config.debugWebSocket = false;
+    config.otaFirmwareUrl = "";
+    config.otaLittlefsUrl = "";
     
     // Load from file
     if (!LittleFS.exists("/config/hub_config.txt")) {
@@ -226,6 +320,10 @@ void loadConfiguration() {
             config.debugESPNOW = (value == "true");
         } else if (key == "DEBUG_WEBSOCKET") {
             config.debugWebSocket = (value == "true");
+        } else if (key == "FIRMWARE_OTA_URL") {
+            config.otaFirmwareUrl = value;
+        } else if (key == "LITTLEFS_OTA_URL") {
+            config.otaLittlefsUrl = value;
         }
     }
     
@@ -1063,10 +1161,172 @@ void setupWebServer() {
             return;
         }
         
-        String jsonData = file.readString();
+        DynamicJsonDocument doc(8192);
+        DeserializationError error = deserializeJson(doc, file);
         file.close();
-        
+
+        if (error) {
+            Serial.printf(" Failed to parse devices.json: %s\n", error.c_str());
+            request->send(500, "application/json", "{\"devices\":[]}");
+            return;
+        }
+
+        JsonArray devices = doc["devices"].as<JsonArray>();
+        for (JsonObject device : devices) {
+            String macStr = device["mac"] | "";
+            bool online = false;
+
+            if (macStr.length() > 0) {
+                uint8_t mac[6];
+                if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                          &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
+                    online = ESPNowManager::getInstance().isPeerOnline(mac);
+                }
+            }
+
+            device["online"] = online;
+        }
+
+        String jsonData;
+        serializeJson(doc, jsonData);
         request->send(200, "application/json", jsonData);
+    });
+
+    // GET settings file list
+    server.on("/api/settings/files", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+        JsonArray files = doc["files"].to<JsonArray>();
+
+        for (const char* fileName : kConfigJsonFiles) {
+            String path = String("/config/") + fileName;
+            if (LittleFS.exists(path)) {
+                files.add(fileName);
+            }
+        }
+
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // GET settings file download
+    server.on("/api/settings/download", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("name")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing file name\"}");
+            return;
+        }
+
+        String name = request->getParam("name")->value();
+        if (!isAllowedConfigFile(name)) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid file name\"}");
+            return;
+        }
+
+        String path = String("/config/") + name;
+        if (!LittleFS.exists(path)) {
+            request->send(404, "application/json", "{\"success\":false,\"error\":\"File not found\"}");
+            return;
+        }
+
+        request->send(LittleFS, path, "application/json", true);
+    });
+
+    // POST settings file upload
+    server.on("/api/settings/upload", HTTP_POST,
+        [](AsyncWebServerRequest *request){
+            SettingsUploadContext* ctx = (SettingsUploadContext*)request->_tempObject;
+            if (!ctx || ctx->error.length() == 0) {
+                request->send(200, "application/json", "{\"success\":true}");
+            } else {
+                String response = String("{\"success\":false,\"error\":\"") + ctx->error + "\"}";
+                request->send(400, "application/json", response);
+            }
+
+            if (ctx) {
+                delete ctx;
+                request->_tempObject = nullptr;
+            }
+        },
+        [](AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final){
+            SettingsUploadContext* ctx = (SettingsUploadContext*)request->_tempObject;
+            if (!ctx) {
+                ctx = new SettingsUploadContext();
+                request->_tempObject = ctx;
+            }
+
+            if (index == 0) {
+                if (!request->hasParam("target")) {
+                    ctx->error = "Missing target";
+                    return;
+                }
+
+                String target = request->getParam("target")->value();
+                if (!isAllowedConfigFile(target)) {
+                    ctx->error = "Invalid target filename";
+                    return;
+                }
+
+                String path = String("/config/") + target;
+                ctx->file = LittleFS.open(path, "w");
+                if (!ctx->file) {
+                    ctx->error = "Failed to open file";
+                    return;
+                }
+            }
+
+            if (ctx->error.length() > 0) {
+                return;
+            }
+
+            if (len) {
+                ctx->file.write(data, len);
+            }
+
+            if (final && ctx->file) {
+                ctx->file.close();
+            }
+        }
+    );
+
+    // GET OTA URLs
+    server.on("/api/settings/ota-urls", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+        doc["firmwareUrl"] = config.otaFirmwareUrl;
+        doc["littlefsUrl"] = config.otaLittlefsUrl;
+
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST OTA firmware update
+    server.on("/api/ota/firmware", HTTP_POST, [](AsyncWebServerRequest *request){
+        String error;
+        bool ok = performOtaUpdate(config.otaFirmwareUrl, false, error);
+        if (!ok) {
+            String response = String("{\"success\":false,\"error\":\"") + error + "\"}";
+            request->send(500, "application/json", response);
+            return;
+        }
+
+        request->send(200, "application/json", "{\"success\":true}");
+        delay(1000);
+        ESP.restart();
+    });
+
+    // POST OTA LittleFS update
+    server.on("/api/ota/littlefs", HTTP_POST, [](AsyncWebServerRequest *request){
+        String error;
+        bool ok = performOtaUpdate(config.otaLittlefsUrl, true, error);
+        if (!ok) {
+            String response = String("{\"success\":false,\"error\":\"") + error + "\"}";
+            request->send(500, "application/json", response);
+            return;
+        }
+
+        request->send(200, "application/json", "{\"success\":true}");
+        delay(1000);
+        ESP.restart();
     });
     
     // POST provision device
@@ -1403,6 +1663,10 @@ void setupWebServer() {
                 serializeJson(devicesDoc, devicesFile);
                 devicesFile.close();
             }
+
+            // Remove from in-memory registry and ESP-NOW peer tracking
+            AquariumManager::getInstance().removeDevice(mac);
+            ESPNowManager::getInstance().removePeer(mac);
             
             // **NOTE**: Device object removal disabled until Device subclass .cpp files exist
             // Devices are only tracked in JSON for now
@@ -1426,9 +1690,16 @@ void setupWebServer() {
             if (unmappedFile) {
                 deserializeJson(unmappedDoc, unmappedFile);
                 unmappedFile.close();
+            } else {
+                unmappedDoc["metadata"]["lastCleanup"] = 0;
+                unmappedDoc["metadata"]["totalDiscovered"] = 0;
+                unmappedDoc["metadata"]["autoCleanupAfterDays"] = 7;
             }
-            
+
             JsonArray unmappedDevices = unmappedDoc["unmappedDevices"];
+            if (unmappedDevices.isNull()) {
+                unmappedDevices = unmappedDoc["unmappedDevices"].to<JsonArray>();
+            }
             JsonObject newUnmapped = unmappedDevices.createNestedObject();
             newUnmapped["mac"] = macStr;
             newUnmapped["type"] = foundDevice["type"];

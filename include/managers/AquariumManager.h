@@ -112,6 +112,13 @@ public:
      * @brief Get device count
      */
     size_t getDeviceCount() const;
+
+    /**
+     * @brief Remove device by MAC address (global registry + aquarium)
+     * @param mac Device MAC address
+     * @return true if removed
+     */
+    bool removeDevice(const uint8_t* mac);
     
     // ===== Scheduling =====
     /**

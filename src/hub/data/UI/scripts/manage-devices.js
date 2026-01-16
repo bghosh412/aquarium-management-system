@@ -126,6 +126,7 @@ function renderDevices() {
         const statusClass = device.online ? 'badge-online' : 'badge-offline';
         const statusText = device.online ? 'Online' : 'Offline';
         const isSelected = selectedDevices.has(device.mac);
+        const deviceTypeLower = String(device.type || '').toLowerCase();
         
         return `
             <div class="card" style="${isSelected ? 'border: 2px solid var(--color-primary);' : ''}">
@@ -134,6 +135,7 @@ function renderDevices() {
                         <input type="checkbox" class="checkbox" ${isSelected ? 'checked' : ''} 
                                onchange="toggleDeviceSelection('${device.mac}', this.checked)">
                         <h3 style="margin: 0;">${icon} ${device.name}</h3>
+                        <span class="badge badge-secondary">${getDeviceTypeName(device.type)}</span>
                     </div>
                     <span class="badge ${statusClass}">${statusText}</span>
                 </div>
@@ -157,9 +159,9 @@ function renderDevices() {
                     ` : ''}
                 </div>
                 <div class="card-footer" style="display: flex; gap: 0.5rem;">
-                    <button class="btn btn-primary" style="flex: 1;" onclick="viewDevice('${device.mac}')">
-                        🗓️ Schedule
-                    </button>
+                    ${deviceTypeLower === 'light' || deviceTypeLower === 'lighting' || deviceTypeLower === 'lights' ? 
+                        `<button class="btn btn-primary" style="flex: 1;" onclick="viewDevice('${device.mac}')">🗓️ Schedule</button>` : 
+                        `<div style="flex: 1;"></div>`}
                     <button class="btn btn-secondary" style="flex: 1;" onclick="setupDevice('${device.mac}')">
                         ⚙️ Setup
                     </button>
@@ -187,6 +189,7 @@ function getDeviceIcon(type) {
 }
 
 function getDeviceTypeName(type) {
+    const typeLower = String(type || '').toLowerCase();
     const names = {
         'light': 'Light Controller',
         'co2': 'CO₂ Regulator',
@@ -195,7 +198,7 @@ function getDeviceTypeName(type) {
         'sensor': 'Water Quality Sensor',
         'repeater': 'Repeater'
     };
-    return names[type] || 'Unknown';
+    return names[typeLower] || 'Unknown';
 }
 
 function toggleDeviceSelection(mac, checked) {
@@ -294,7 +297,7 @@ function viewDevice(mac) {
     
     const deviceType = String(device.type || '').toLowerCase();
 
-    if (deviceType === 'light') {
+    if (deviceType === 'light' || deviceType === 'lighting' || deviceType === 'lights') {
         window.location.href = `schedule/light-schedule.html?mac=${mac}`;
         return;
     }

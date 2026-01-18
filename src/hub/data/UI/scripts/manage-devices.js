@@ -165,8 +165,8 @@ function renderDevices() {
                     <button class="btn btn-secondary" style="flex: 1;" onclick="setupDevice('${device.mac}')">
                         ⚙️ Setup
                     </button>
-                    <button class="btn btn-danger" style="flex: 1;" onclick="unmapDevice('${device.mac}', '${device.name}')">
-                        🗑️ Unmap
+                    <button class="btn btn-primary" style="flex: 1;" onclick="controlDevice('${device.mac}')">
+                        🎛️ Control
                     </button>
                 </div>
             </div>
@@ -317,6 +317,20 @@ function viewDevice(mac) {
 function setupDevice(mac) {
     localStorage.setItem('selectedDeviceMac', mac);
     window.location.href = `device-setup.html?mac=${mac}`;
+}
+
+function controlDevice(mac) {
+    const device = allDevices.find(d => d.mac === mac);
+    if (!device) return;
+
+    const deviceType = String(device.type || '').toLowerCase();
+    if (deviceType === 'light' || deviceType === 'lighting' || deviceType === 'lights') {
+        localStorage.setItem('selectedDeviceMac', mac);
+        window.location.href = `control/light-control.html?mac=${mac}`;
+        return;
+    }
+
+    showNotification('Control is only available for light devices.', 'error');
 }
 
 function unmapDevice(mac, name) {

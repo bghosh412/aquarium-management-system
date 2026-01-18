@@ -58,14 +58,20 @@ void enterFailSafeMode() {
     // No action needed - current state preserved
 }
 
-void handleCommand(const CommandMessage& cmd) {
-    uint8_t commandType = cmd.commandData[0];
+static void readPinStatus(uint8_t* statusData) {
+    statusData[0] = (digitalRead(PIN_LED_CHANNEL1) == HIGH) ? 1 : 0;
+    statusData[1] = (digitalRead(PIN_LED_CHANNEL2) == HIGH) ? 1 : 0;
+    statusData[2] = (digitalRead(PIN_LED_CHANNEL3) == HIGH) ? 1 : 0;
+}
+
+void handleCommand(const uint8_t* mac, const uint8_t* data, size_t len) {
+    if (len == 0 || data == nullptr) return;
+    uint8_t commandType = data[0];
     
     if (nodeConfig.debugESPNOW) {
         Serial.println("+========================================================+");
         Serial.printf("| [CMD] COMMAND received\n");
-        Serial.printf("| Tank ID: %d\n", cmd.header.tankId);
-        Serial.printf("| Command ID: %d\n", cmd.commandId);
+        Serial.printf("| Tank ID: %d\n", nodeConfig.tankId);
         Serial.printf("| Command Type: %d\n", commandType);
     }
     
@@ -132,6 +138,12 @@ void handleCommand(const CommandMessage& cmd) {
             }
             break;
             
+        case 40: // Status request
+            if (nodeConfig.debugESPNOW) {
+                Serial.println("| [OK] Status request");
+            }
+            break;
+
         default:
             success = false;
             if (nodeConfig.debugESPNOW) {
@@ -145,12 +157,19 @@ void handleCommand(const CommandMessage& cmd) {
     }
     
     // Send acknowledgment
+    // Apply state immediately so status reflects actual pins
+    updateHardware();
+
     uint8_t statusCode = success ? 0x00 : 0xFF;
-    uint8_t statusData[3] = {lightState.channel1On ? 1 : 0, lightState.channel2On ? 1 : 0, lightState.channel3On ? 1 : 0};
-    
-    // Get sender MAC from ESPNowManager (last sender)
-    uint8_t hubMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // Broadcast fallback
-    sendStatusAck(hubMac, cmd.commandId, statusCode, statusData, 3);
+    uint8_t statusData[3] = {0, 0, 0};
+    readPinStatus(statusData);
+    if (nodeConfig.debugESPNOW) {
+        Serial.printf("| [STATUS] Pin states: ch1=%d ch2=%d ch3=%d\n",
+                      statusData[0], statusData[1], statusData[2]);
+    }
+
+    // Send status directly to hub MAC (commandId not available in data-only callback)
+    sendStatusAck(mac, 0, statusCode, statusData, 3);
 }
 
 void updateHardware() {
@@ -177,9 +196,7 @@ void onUnmapReceivedWrapper(const uint8_t* mac, const UnmapMessage& msg) {
 }
 
 void onCommandReceivedWrapper(const uint8_t* mac, const uint8_t* data, size_t len) {
-    if (len < sizeof(CommandMessage)) return;
-    CommandMessage* msg = (CommandMessage*)data;
-    handleCommand(*msg);
+    handleCommand(mac, data, len);
 }
 
 // ============================================================================

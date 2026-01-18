@@ -120,6 +120,21 @@ bool ESPNowManager::begin(uint8_t channel, bool isHub) {
     
     _initialized = true;
     
+#ifdef ESP8266
+    // ESP8266 CRITICAL FIX: Clear peer table on init to prevent table-full errors
+    // ESP8266 has limited peer slots and they can get filled with stale entries
+    if (!_isHub) {
+        Serial.println("[INFO] Clearing ESP8266 peer table (node mode)...");
+        // Clear any existing peers (this is safe on fresh boot)
+        esp_now_deinit();
+        esp_now_init();
+        esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+        esp_now_register_recv_cb(onReceiveStatic);
+        esp_now_register_send_cb(onSendStatic);
+        Serial.println("[OK] ESP8266 peer table cleared and re-initialized");
+    }
+#endif
+    
     // Add broadcast peer (required for both hub and nodes)
     // Hub needs it to receive broadcast ANNOUNCE messages from nodes
     // Nodes need it to send broadcast ANNOUNCE during discovery
@@ -137,7 +152,7 @@ bool ESPNowManager::begin(uint8_t channel, bool isHub) {
     return true;
 }
 
-bool ESPNowManager::addPeer(const uint8_t* mac) {
+bool ESPNowManager::addPeer(const uint8_t* mac, int ifidx) {
     if (!_initialized) return false;
     
     // Check if peer already exists to avoid errors
@@ -171,11 +186,29 @@ bool ESPNowManager::addPeer(const uint8_t* mac) {
     peerInfo.channel = _channel;
     peerInfo.encrypt = false;
     
+    // If caller provided an ifidx, use it. Otherwise select a sane default.
+    if (ifidx != -1) {
+        peerInfo.ifidx = (wifi_interface_t)ifidx;
+        Serial.printf("[PEER] addPeer: Setting peer ifidx=%d (channel=%d)\n", ifidx, _channel);
+    } else {
+        // CRITICAL: Default to STA interface for hub and nodes
+        if (_isHub) {
+            peerInfo.ifidx = WIFI_IF_STA;
+            Serial.printf("[PEER] Hub mode: Setting peer ifidx=WIFI_IF_STA (channel=%d)\n", _channel);
+        } else {
+            peerInfo.ifidx = WIFI_IF_STA;  // Nodes also use STA
+            Serial.printf("[PEER] Node mode: Setting peer ifidx=WIFI_IF_STA (channel=%d)\n", _channel);
+        }
+    }
+    
     esp_err_t result = esp_now_add_peer(&peerInfo);
     if (result != ESP_OK) {
         Serial.printf("[ERR] Failed to add peer %02X:%02X:... (error %d)\n", mac[0], mac[1], result);
         return false;
     }
+    
+    Serial.printf("[OK] Peer added with ifidx=%d: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  peerInfo.ifidx, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 #endif
     
     // Track peer if hub
@@ -188,10 +221,15 @@ bool ESPNowManager::addPeer(const uint8_t* mac) {
         peer.lastSeqReceived = 0;
     }
     
-    Serial.printf("[OK] Added peer %02X:%02X:%02X:%02X:%02X:%02X\n",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    
     return true;
+}
+
+std::vector<ESPNowManager::PeerStatus> ESPNowManager::getPeers() const {
+    std::vector<PeerStatus> result;
+    for (const auto& kv : _peers) {
+        result.push_back(kv.second);
+    }
+    return result;
 }
 
 bool ESPNowManager::removePeer(const uint8_t* mac) {
@@ -524,6 +562,16 @@ void ESPNowManager::onReceiveStatic(const uint8_t* mac, const uint8_t* data, int
     // Debug: Log every received message
     Serial.printf("[RX] Got %d bytes from %02X:%02X:%02X:%02X:%02X:%02X\n",
                  len, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    // UNCONDITIONAL raw hex dump for debugging
+    Serial.print("[RX-RAW] ");
+    for (int i = 0; i < len; i++) {
+        Serial.printf("%02X", data[i]);
+        if (i + 1 < len) {
+            Serial.print(" ");
+        }
+    }
+    Serial.printf(" | isHub=%d\n", s_instance ? (int)s_instance->_isHub : -1);
     
     // Queue message for processing in main loop (ISR-safe)
     RxQueueEntry entry;
@@ -557,6 +605,8 @@ void ESPNowManager::onSendStatic(const uint8_t* mac, esp_now_send_status_t statu
 void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* data, int len) {
     _stats.messagesReceived++;
     
+    Serial.printf("[ESPNowMgr] processReceivedMessage: len=%d\n", len);
+    
     // Validate minimum size
     if (len < sizeof(MessageHeader)) {
         Serial.println("[ERR] Message too small");
@@ -564,6 +614,7 @@ void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* da
     }
     
     MessageHeader* header = (MessageHeader*)data;
+    Serial.printf("[ESPNowMgr] MessageType=%d (0x%02X)\n", (int)header->type, (uint8_t)header->type);
     
     // Check for duplicate (sequence number validation)
     if (isDuplicate(mac, header->sequenceNum)) {
@@ -581,8 +632,11 @@ void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* da
             break;
             
         case MessageType::STATUS:
+            Serial.println("[ESPNowMgr] Routing to processStatus");
             if (len >= sizeof(StatusMessage)) {
                 processStatus(mac, *(StatusMessage*)data);
+            } else {
+                Serial.printf("[ERR] STATUS too small: %d < %d\n", len, sizeof(StatusMessage));
             }
             break;
             
@@ -718,8 +772,13 @@ void ESPNowManager::processCommand(const uint8_t* mac, const CommandMessage& cmd
 }
 
 void ESPNowManager::processStatus(const uint8_t* mac, const StatusMessage& status) {
+    Serial.printf("[ESPNowMgr] processStatus called, callback=%s\n", _statusCallback ? "SET" : "NULL");
     if (_statusCallback) {
+        Serial.println("[ESPNowMgr] Calling _statusCallback...");
         _statusCallback(mac, status);
+        Serial.println("[ESPNowMgr] _statusCallback returned");
+    } else {
+        Serial.println("[WARN] No status callback registered!");
     }
 }
 

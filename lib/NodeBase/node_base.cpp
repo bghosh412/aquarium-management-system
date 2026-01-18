@@ -161,9 +161,30 @@ void onAckReceived(const uint8_t* mac, const AckMessage& msg) {
         Serial.println("+========================================================+");
     }
     
-    // Add hub as peer
-    bool peerAdded = ESPNowManager::getInstance().addPeer(mac);
-    
+    // Prefer return MAC from ACK if provided (hub AP MAC)
+    bool peerAdded = false;
+    if (msg.accepted) {
+        // If ACK carries a returnMac, use that as the hub peer for replies
+        bool hasReturnMac = false;
+        for (int i = 0; i < 6; ++i) {
+            if (msg.returnMac[i] != 0x00) { hasReturnMac = true; break; }
+        }
+
+        if (hasReturnMac) {
+            memcpy(nodeConfig.hubReturnMac, msg.returnMac, 6);
+            nodeConfig.hubReturnMacSet = true;
+            if (nodeConfig.debugESPNOW) {
+                Serial.printf("[INFO] ACK provided returnMAC %02X:%02X:%02X:%02X:%02X:%02X\n",
+                              nodeConfig.hubReturnMac[0], nodeConfig.hubReturnMac[1], nodeConfig.hubReturnMac[2],
+                              nodeConfig.hubReturnMac[3], nodeConfig.hubReturnMac[4], nodeConfig.hubReturnMac[5]);
+            }
+            peerAdded = ESPNowManager::getInstance().addPeer(nodeConfig.hubReturnMac);
+        } else {
+            // Fallback to sender MAC
+            peerAdded = ESPNowManager::getInstance().addPeer(mac);
+        }
+    }
+
     // Mark as connected to hub
     if (msg.accepted && peerAdded) {
         isConnectedToHub = true;
@@ -310,10 +331,93 @@ void sendStatusAck(const uint8_t* mac, uint8_t commandId, uint8_t statusCode, co
         memcpy(msg.statusData, data, copyLen);
     }
     
-    ESPNowManager::getInstance().send(mac, (uint8_t*)&msg, sizeof(msg));
+    // CRITICAL FAILSAFE: Always ensure hub is registered as peer before sending
+    // Prefer a returnMAC advertised by the hub (hub AP MAC). Fallback to sender MAC.
+    uint8_t destMac[6];
+    if (nodeConfig.hubReturnMacSet) {
+        memcpy(destMac, nodeConfig.hubReturnMac, 6);
+    } else {
+        memcpy(destMac, mac, 6);
+    }
+
+    bool peerExists = false;
+#ifdef ESP8266
+    // Check if hub exists in peer table
+    peerExists = (esp_now_is_peer_exist((uint8_t*)destMac) == 1);
+
+    // ESP8266 FIX: If peer doesn't exist, preemptively clean up peer table
+    if (!peerExists) {
+        if (nodeConfig.debugESPNOW) {
+            Serial.println("[WARN] Hub not in peer table - cleaning up before add");
+            Serial.flush();
+        }
+
+        // Delete hub MAC if it exists (might be stale)
+        esp_now_del_peer((uint8_t*)destMac);
+
+        // Re-add broadcast peer to ensure it's there
+        uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        esp_now_del_peer(broadcastMac);  // Remove first
+        esp_now_add_peer(broadcastMac, ESP_NOW_ROLE_COMBO, nodeConfig.espnowChannel, NULL, 0);
+
+        if (nodeConfig.debugESPNOW) {
+            Serial.println("[INFO] Peer table cleaned, attempting hub add...");
+            Serial.flush();
+        }
+    }
+#else
+    peerExists = esp_now_is_peer_exist(destMac);
+#endif
+    
+    if (!peerExists) {
+        // Try to add hub as peer (prefer AP interface if hubReturnMacSet)
+        bool addSuccess = false;
+        if (nodeConfig.hubReturnMacSet) {
+#ifdef ESP32
+            addSuccess = ESPNowManager::getInstance().addPeer(destMac, WIFI_IF_AP);
+#else
+            addSuccess = ESPNowManager::getInstance().addPeer(destMac);
+#endif
+        } else {
+            addSuccess = ESPNowManager::getInstance().addPeer(destMac);
+        }
+
+        if (!addSuccess && nodeConfig.debugESPNOW) {
+            Serial.println("[ERR] Hub add still failed after cleanup");
+            Serial.flush();
+        } else if (addSuccess && nodeConfig.debugESPNOW) {
+            Serial.println("[OK] Hub successfully added to peer table");
+            Serial.flush();
+        }
+    }
     
     if (nodeConfig.debugESPNOW) {
-        Serial.printf("[TX] STATUS sent (cmdId=%d, status=%d, ch=%d)\n",
-                      commandId, statusCode, nodeConfig.espnowChannel);
+        Serial.printf("[TX] STATUS sending to %02X:%02X:%02X:%02X:%02X:%02X (cmdId=%d, status=%d, ch=%d, msgType=%d)\n",
+                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                      commandId, statusCode, nodeConfig.espnowChannel, (uint8_t)msg.header.type);
+        Serial.flush();  // Ensure output is sent
+        
+        // Re-check after potential re-add
+#ifdef ESP8266
+        int recheck = esp_now_is_peer_exist((uint8_t*)mac);
+        peerExists = (recheck == 1);
+        Serial.printf("[TX] esp_now_is_peer_exist recheck: %d\n", recheck);
+#else
+        peerExists = esp_now_is_peer_exist(mac);
+#endif
+        Serial.printf("[TX] Hub is %s as peer (after check)\n", peerExists ? "REGISTERED" : "NOT REGISTERED");
+        Serial.flush();  // Ensure output is sent
+    }
+    
+    bool sendResult = ESPNowManager::getInstance().send(mac, (uint8_t*)&msg, sizeof(msg));
+    
+    if (nodeConfig.debugESPNOW) {
+        Serial.printf("[TX] STATUS send() returned: %s\n", sendResult ? "SUCCESS" : "FAILED");
+        Serial.flush();  // Ensure output is sent
+        
+        if (!sendResult) {
+            Serial.println("[ERR] STATUS message failed to send - check peer registration and channel");
+            Serial.flush();
+        }
     }
 }

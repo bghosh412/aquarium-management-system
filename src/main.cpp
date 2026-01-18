@@ -4,7 +4,8 @@
  * 
  * Architecture:
  * - Core 0: Main loop - ESP-NOW message processing, web server, system orchestration
- * - Core 1: Watchdog task - Device health monitoring, heartbeat timeouts, fail-safe triggers
+ * - Core 0: ESP-NOW + scheduler + watchdog task
+ * - Core 1: Web UI task
  * 
  * Features:
  * - tzapu WiFiManager for configuration
@@ -26,6 +27,7 @@
 #include <ArduinoJson.h>
 #include <Update.h>
 #include <WiFiClientSecure.h>
+#include <map>
 #include "protocol/messages.h"
 #include "models/Aquarium.h"
 #include "managers/AquariumManager.h"
@@ -59,16 +61,40 @@ struct HubConfig {
     String otaLittlefsUrl;
 };
 
+struct LightChannelStatus {
+    bool ch1;
+    bool ch2;
+    bool ch3;
+    uint32_t updatedAt;
+};
+
+static std::map<String, LightChannelStatus> g_lightStatus;
+static std::map<String, uint32_t> g_lightStatusPending;
+
+static String macToString(const uint8_t* mac) {
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return String(macStr);
+}
+
 HubConfig config;
 
 // Task handles
 TaskHandle_t watchdogTaskHandle = NULL;
+TaskHandle_t webUiTaskHandle = NULL;
 
 // ESPNowManager callbacks declared here
 void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg);
 void onHeartbeatReceived(const uint8_t* mac, const HeartbeatMessage& msg);
 void onStatusReceived(const uint8_t* mac, const StatusMessage& msg);
 void onCommandReceived(const uint8_t* mac, const uint8_t* data, size_t len);
+
+// Peer registration
+void registerAllDevicesAsPeers();
+
+// Web server setup
+void setupWebServer();
 
 // Web server
 AsyncWebServer server(80);
@@ -99,6 +125,7 @@ static const char* kConfigJsonFiles[] = {
     "config.json",
     "devices.json",
     "light-devices.json",
+    "light-schedule.json",
     "unmapped-devices.json"
 };
 
@@ -383,7 +410,7 @@ void aggressiveMemoryCleanup() {
 }
 
 // ============================================================================
-// WATCHDOG TASK (Core 1) - Device Health Monitoring
+// WATCHDOG TASK (Core 0) - Device Health Monitoring
 // ============================================================================
 
 void watchdogTask(void* parameter) {
@@ -426,6 +453,22 @@ void watchdogTask(void* parameter) {
 }
 
 // ============================================================================
+// WEB UI TASK (Core 1) - Web server + UI
+// ============================================================================
+
+void webUiTask(void* parameter) {
+    Serial.printf(" Web UI task started on core %d\n", xPortGetCoreID());
+
+    // Setup web server on Web UI core
+    setupWebServer();
+
+    // Keep task alive (AsyncWebServer runs in background)
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+// ============================================================================
 // FILESYSTEM SETUP
 // ============================================================================
 
@@ -451,6 +494,19 @@ bool setupFilesystem() {
             Serial.println("   - ERROR: Failed to create unmapped-devices.json");
         }
     }
+
+    // Initialize light-schedule.json if it doesn't exist
+    if (!LittleFS.exists("/config/light-schedule.json")) {
+        Serial.println(" Creating light-schedule.json...");
+        File file = LittleFS.open("/config/light-schedule.json", "w");
+        if (file) {
+            file.print("{\"schedules\":[]}");
+            file.close();
+            Serial.println("   - light-schedule.json initialized");
+        } else {
+            Serial.println("   - ERROR: Failed to create light-schedule.json");
+        }
+    }
     
     // List files (debug)
     if (config.debugSerial) {
@@ -472,6 +528,14 @@ bool setupFilesystem() {
 
 void setupWiFi() {
     Serial.println(" Starting WiFi configuration...");
+    
+    // CRITICAL: Force WiFi to STA mode only (not AP+STA)
+    // ESP-NOW peer registration with ifidx=WIFI_IF_STA requires STA-only mode
+    // Set WiFi to AP only for test: Hub acting purely as AP (receiver)
+    WiFi.mode(WIFI_AP);
+    Serial.println(" [HUB] WiFi mode set to: WIFI_AP (AP only - test)");
+
+
     
     // Set hostname before WiFi begins
     WiFi.setHostname(config.mdnsHostname.c_str());
@@ -614,6 +678,80 @@ bool loadAquariumsFromFile() {
     
     Serial.printf(" Loaded %d aquariums from file\\n", loadedCount);
     return loadedCount > 0;
+}
+
+/**
+ * @brief Register all devices from devices.json as ESP-NOW peers
+ * CRITICAL: Must be called AFTER ESP-NOW initialization
+ */
+void registerAllDevicesAsPeers() {
+    Serial.println("");
+    Serial.println(" ========================================");
+    Serial.println(" Registering devices as ESP-NOW peers...");
+    Serial.println(" ========================================");
+    
+    if (!LittleFS.exists("/config/devices.json")) {
+        Serial.println("  devices.json not found - no peers to register");
+        return;
+    }
+    
+    File file = LittleFS.open("/config/devices.json", "r");
+    if (!file) {
+        Serial.println("  Failed to open devices.json");
+        return;
+    }
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        Serial.printf("  Failed to parse devices.json: %s\\n", error.c_str());
+        return;
+    }
+    
+    JsonArray devices = doc["devices"].as<JsonArray>();
+    int successCount = 0;
+    int failCount = 0;
+    int skippedCount = 0;
+    
+    Serial.printf("  Found %d devices in devices.json\n", devices.size());
+    
+    for (JsonObject obj : devices) {
+        String macStr = obj["mac"] | "";
+        String name = obj["name"] | "";
+        
+        if (macStr.isEmpty()) {
+            continue;
+        }
+        
+        // Skip dummy test devices (MACs starting with AA:BB:CC)
+        if (macStr.startsWith("AA:BB:CC") || macStr.startsWith("aa:bb:cc")) {
+            Serial.printf("  ⊘ %s (%s) - SKIPPED (test device)\\n", name.c_str(), macStr.c_str());
+            skippedCount++;
+            continue;
+        }
+        
+        // Parse MAC address
+        uint8_t mac[6];
+        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
+            
+            // Register as peer
+            if (ESPNowManager::getInstance().addPeer(mac)) {
+                Serial.printf("  ✓ %s (%s)\\n", name.c_str(), macStr.c_str());
+                successCount++;
+            } else {
+                Serial.printf("  ✗ %s (%s) - FAILED\\n", name.c_str(), macStr.c_str());
+                failCount++;
+            }
+        }
+    }
+    
+    Serial.println(" ========================================");
+    Serial.printf(" Registered: %d | Failed: %d | Skipped: %d\\n", successCount, failCount, skippedCount);
+    Serial.println(" ========================================");
+    Serial.println("");
 }
 
 /**
@@ -1192,16 +1330,260 @@ void setupWebServer() {
         request->send(200, "application/json", jsonData);
     });
 
-    // GET settings file list
-    server.on("/api/settings/files", HTTP_GET, [](AsyncWebServerRequest *request){
-        JsonDocument doc;
-        JsonArray files = doc["files"].to<JsonArray>();
+    // GET light schedule for a device
+    server.on("/api/light-schedule", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
 
-        for (const char* fileName : kConfigJsonFiles) {
-            String path = String("/config/") + fileName;
-            if (LittleFS.exists(path)) {
-                files.add(fileName);
+        String macStr = request->getParam("mac")->value();
+        File file = LittleFS.open("/config/light-schedule.json", "r");
+        if (!file) {
+            request->send(200, "application/json", "{\"success\":true,\"schedule\":null}");
+            return;
+        }
+
+        DynamicJsonDocument doc(4096);
+        DeserializationError error = deserializeJson(doc, file);
+        file.close();
+        if (error) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse light-schedule.json\"}");
+            return;
+        }
+
+        JsonArray schedules = doc["schedules"].as<JsonArray>();
+        JsonObject found;
+        for (JsonObject entry : schedules) {
+            String entryMac = entry["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                found = entry;
+                break;
             }
+        }
+
+        DynamicJsonDocument responseDoc(2048);
+        responseDoc["success"] = true;
+        if (!found.isNull()) {
+            responseDoc["schedule"] = found;
+        } else {
+            responseDoc["schedule"] = nullptr;
+        }
+
+        String response;
+        serializeJson(responseDoc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST save light schedule for a device
+    server.on("/api/light-schedule", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(4096);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        JsonVariant schedule = body["schedule"];
+        if (schedule.isNull()) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing schedule\"}");
+            return;
+        }
+
+        File file = LittleFS.open("/config/light-schedule.json", "r");
+        DynamicJsonDocument doc(4096);
+        if (file) {
+            deserializeJson(doc, file);
+            file.close();
+        }
+
+        JsonArray schedules = doc["schedules"];
+        if (schedules.isNull()) {
+            schedules = doc.createNestedArray("schedules");
+        }
+
+        // Remove existing entry for this MAC
+        for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+            String entryMac = schedules[i]["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                schedules.remove(i);
+            }
+        }
+
+        JsonObject newEntry = schedules.createNestedObject();
+        newEntry["mac"] = macStr;
+        newEntry["tankId"] = body["tankId"] | 0;
+        newEntry["deviceName"] = body["deviceName"] | "";
+        newEntry["schedule"] = schedule;
+        newEntry["updatedAt"] = millis();
+
+        file = LittleFS.open("/config/light-schedule.json", "w");
+        if (!file) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write light-schedule.json\"}");
+            return;
+        }
+        serializeJson(doc, file);
+        file.close();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // GET light channel status (fetch from node)
+    server.on("/api/light-status", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        String macKey = macStr;
+        macKey.toUpperCase();
+
+        uint8_t mac[6];
+        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+            return;
+        }
+
+        if (config.debugESPNOW) {
+            Serial.printf("[LIGHT] Status request for %s\n", macKey.c_str());
+        }
+
+        CommandMessage cmd = {};
+        cmd.header.type = MessageType::COMMAND;
+        cmd.header.tankId = 0;
+        cmd.header.nodeType = NodeType::HUB;
+        cmd.header.timestamp = millis();
+        cmd.header.sequenceNum = 0;
+        cmd.commandId = generateCommandId();
+        cmd.commandSeqID = 0;
+        cmd.finalCommand = true;
+        cmd.commandData[0] = 0x28;  // LIGHT_STATUS request
+
+        // Include Hub AP MAC in the command so node knows where to reply
+        uint8_t apMac[6] = {0};
+#ifdef ESP32
+        esp_read_mac(apMac, ESP_MAC_WIFI_SOFTAP);
+#else
+        String apStr = WiFi.softAPmacAddress();
+        sscanf(apStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+               &apMac[0], &apMac[1], &apMac[2], &apMac[3], &apMac[4], &apMac[5]);
+#endif
+        memcpy(cmd.returnMac, apMac, 6);
+
+        Serial.printf("[HUB] Re-adding peer before status request: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        // DEBUG: print Hub WiFi mode
+        wifi_mode_t hubMode = WiFi.getMode();
+        const char* hubModeStr = (hubMode == WIFI_MODE_STA) ? "STA" : (hubMode == WIFI_MODE_AP) ? "AP" : (hubMode == WIFI_MODE_APSTA) ? "AP+STA" : "UNKNOWN";
+        Serial.printf("[HUB] WiFi mode: %s\n", hubModeStr);
+        Serial.flush();
+#ifdef ESP32
+        bool peerAdded = ESPNowManager::getInstance().addPeer(mac, WIFI_IF_AP);
+#else
+        bool peerAdded = ESPNowManager::getInstance().addPeer(mac);
+#endif
+        Serial.printf("[HUB] Peer add: %s\n", peerAdded ? "OK" : "FAIL");
+        
+        Serial.printf("[HUB] Sending COMMAND (type=0x%02X, len=%d) to node...\n", 
+                      (uint8_t)cmd.header.type, sizeof(cmd));
+        bool sendResult = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd));
+        Serial.printf("[HUB] Send result: %s\n", sendResult ? "SUCCESS" : "FAILED");
+        Serial.println("[HUB] Waiting for STATUS response (watch for [RX-RAW])...");
+
+        g_lightStatusPending[macKey] = millis();
+
+        auto it = g_lightStatus.find(macKey);
+        if (it != g_lightStatus.end()) {
+            LightChannelStatus status = it->second;
+            if (config.debugESPNOW) {
+                Serial.printf("[LIGHT] Returning cached status for %s -> ch1=%d ch2=%d ch3=%d\n",
+                              macKey.c_str(), status.ch1 ? 1 : 0, status.ch2 ? 1 : 0, status.ch3 ? 1 : 0);
+            }
+
+            DynamicJsonDocument responseDoc(256);
+            responseDoc["success"] = true;
+            JsonObject statusObj = responseDoc.createNestedObject("status");
+            statusObj["1"] = status.ch1;
+            statusObj["2"] = status.ch2;
+            statusObj["3"] = status.ch3;
+            responseDoc["updatedAt"] = status.updatedAt;
+
+            String response;
+            serializeJson(responseDoc, response);
+            request->send(200, "application/json", response);
+            return;
+        }
+
+        if (config.debugESPNOW) {
+            Serial.printf("[LIGHT] No cached status for %s (request sent)\n", macKey.c_str());
+        }
+        request->send(200, "application/json", "{\"success\":false,\"pending\":true}");
+    });
+
+// GET peers list (Hub diagnostics)
+server.on("/api/peers", HTTP_GET, [](AsyncWebServerRequest *request){
+    DynamicJsonDocument doc(4096);
+    JsonArray peersArr = doc.createNestedArray("peers");
+
+    auto peers = ESPNowManager::getInstance().getPeers();
+    for (auto &p : peers) {
+        char macStr[32];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 p.mac[0], p.mac[1], p.mac[2], p.mac[3], p.mac[4], p.mac[5]);
+        JsonObject o = peersArr.createNestedObject();
+        o["mac"] = macStr;
+        o["online"] = p.online;
+        o["lastHeartbeat"] = p.lastHeartbeat;
+    }
+
+    String resp;
+    serializeJson(doc, resp);
+    request->send(200, "application/json", resp);
+});
+
+// POST remove peer
+server.on("/api/peer/remove", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!request->hasParam("mac", true)) {
+        request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+        return;
+    }
+
+    String macStr = request->getParam("mac", true)->value();
+    uint8_t mac[6];
+    if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+               &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+        request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC\"}");
+        return;
+    }
+
+    bool removed = ESPNowManager::getInstance().removePeer(mac);
+    if (removed) {
+        request->send(200, "application/json", "{\"success\":true}");
+    } else {
+        request->send(500, "application/json", "{\"success\":false,\"error\":\"Remove failed\"}");
+    }
+});
+
+// GET hub macs (STA and AP)
+server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
+    DynamicJsonDocument doc(256);
+    doc["sta"] = WiFi.macAddress();
+    doc["ap"] = WiFi.softAPmacAddress();
+    String resp;
+    serializeJson(doc, resp);
+    request->send(200, "application/json", resp);
+});
         }
 
         String response;
@@ -1571,11 +1953,43 @@ void setupWebServer() {
         } else if (commandType == "FEED") {
             cmd.commandData[0] = 0x05;
             cmd.commandData[1] = doc["portions"] | 1;
+        } else if (commandType == "LIGHT_CH1_ON") {
+            cmd.commandData[0] = 0x0B;
+        } else if (commandType == "LIGHT_CH1_OFF") {
+            cmd.commandData[0] = 0x0A;
+        } else if (commandType == "LIGHT_CH2_ON") {
+            cmd.commandData[0] = 0x15;
+        } else if (commandType == "LIGHT_CH2_OFF") {
+            cmd.commandData[0] = 0x14;
+        } else if (commandType == "LIGHT_CH3_ON") {
+            cmd.commandData[0] = 0x1F;
+        } else if (commandType == "LIGHT_CH3_OFF") {
+            cmd.commandData[0] = 0x1E;
+        } else if (commandType == "LIGHT_STATUS") {
+            cmd.commandData[0] = 0x28;
         } else {
             request->send(400, "application/json", "{\"success\":false,\"error\":\"Unknown command type\"}");
             return;
         }
         
+        // Include Hub AP MAC in command so node knows where to reply
+        uint8_t apMac[6] = {0};
+#ifdef ESP32
+        esp_read_mac(apMac, ESP_MAC_WIFI_SOFTAP);
+#else
+        String apStr = WiFi.softAPmacAddress();
+        sscanf(apStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+               &apMac[0], &apMac[1], &apMac[2], &apMac[3], &apMac[4], &apMac[5]);
+#endif
+        memcpy(cmd.returnMac, apMac, 6);
+
+        // Re-add peer using AP interface for unicast robustness
+#ifdef ESP32
+        ESPNowManager::getInstance().addPeer(mac, WIFI_IF_AP);
+#else
+        ESPNowManager::getInstance().addPeer(mac);
+#endif
+
         // Send command via ESP-NOW
         bool sent = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd));
         
@@ -1805,6 +2219,8 @@ void setupWebServer() {
         request->send(404, "text/plain", "Not found");
     });
 
+
+
     // Start server
     server.begin();
 
@@ -1852,6 +2268,13 @@ void setupWebServer() {
 // ============================================================================
 
 void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
+    // Skip dummy test devices (MACs starting with AA:BB:CC)
+    if (mac[0] == 0xAA && mac[1] == 0xBB && mac[2] == 0xCC) {
+        Serial.printf("[HUB] Ignoring ANNOUNCE from dummy device: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        return;
+    }
+    
     if (config.debugESPNOW) {
         Serial.println("");
         Serial.printf("  ANNOUNCE from %02X:%02X:%02X:%02X:%02X:%02X\n",
@@ -1867,8 +2290,15 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
     // Forward to AquariumManager
     AquariumManager::getInstance().handleAnnounce(mac, msg);
     
-    // Add peer and send ACK
-    ESPNowManager::getInstance().addPeer(mac);
+    // CRITICAL: Add peer for bidirectional unicast communication
+    Serial.printf("[HUB] Adding peer %02X:%02X:%02X:%02X:%02X:%02X (ANNOUNCE)...\n", 
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    bool peerAdded = ESPNowManager::getInstance().addPeer(mac);
+    if (peerAdded) {
+        Serial.println("[HUB] ✓ Peer registered - unicast ready");
+    } else {
+        Serial.println("[HUB] ✗ Peer registration FAILED - unicast will NOT work!");
+    }
     
     AckMessage ack = {};
     ack.header.type = MessageType::ACK;
@@ -1887,11 +2317,20 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
 }
 
 void onHeartbeatReceived(const uint8_t* mac, const HeartbeatMessage& msg) {
-    if (config.debugESPNOW) {
-        Serial.printf(" HEARTBEAT from %02X:%02X:%02X:%02X:%02X:%02X | "
-                      "Health: %d%% | Uptime: %dmin\n",
-                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                      msg.health, msg.uptimeMinutes);
+    // Skip dummy test devices (MACs starting with AA:BB:CC)
+    if (mac[0] == 0xAA && mac[1] == 0xBB && mac[2] == 0xCC) {
+        return;  // Silently ignore
+    }
+    
+    // FAILSAFE: Ensure peer is registered (in case missed during ANNOUNCE)
+    // This allows recovery if hub rebooted or peer list was cleared
+    static std::map<String, unsigned long> lastPeerCheck;
+    String macKey = macToString(mac);
+    unsigned long now = millis();
+    
+    if (lastPeerCheck.find(macKey) == lastPeerCheck.end() || (now - lastPeerCheck[macKey] > 60000)) {
+        ESPNowManager::getInstance().addPeer(mac);  // Idempotent - won't fail if already exists
+        lastPeerCheck[macKey] = now;
     }
     
     // Update peer online status
@@ -1902,8 +2341,8 @@ void onHeartbeatReceived(const uint8_t* mac, const HeartbeatMessage& msg) {
 }
 
 void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
-    if (config.debugESPNOW) {
-        Serial.println("");
+    if (true) {
+        //Serial.println("");
         Serial.printf("  STATUS from %02X:%02X:%02X:%02X:%02X:%02X\n",
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         Serial.printf(" Command ID: %d | Status Code: %d\n",
@@ -1931,6 +2370,28 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
         Serial.println("");
     }
     
+    // Update light channel status cache
+    String macStr = macToString(mac);
+    bool pendingLightStatus = (g_lightStatusPending.find(macStr) != g_lightStatusPending.end());
+    if (msg.header.nodeType == NodeType::LIGHT || pendingLightStatus) {
+        LightChannelStatus status;
+        status.ch1 = msg.statusData[0] != 0;
+        status.ch2 = msg.statusData[1] != 0;
+        status.ch3 = msg.statusData[2] != 0;
+        status.updatedAt = millis();
+        g_lightStatus[macStr] = status;
+
+        if (pendingLightStatus) {
+            g_lightStatusPending.erase(macStr);
+        }
+
+        if (config.debugESPNOW) {
+            Serial.printf("[LIGHT] STATUS update %s -> ch1=%d ch2=%d ch3=%d (nodeType=%d, pending=%s)\n",
+                          macStr.c_str(), status.ch1 ? 1 : 0, status.ch2 ? 1 : 0, status.ch3 ? 1 : 0,
+                          (int)msg.header.nodeType, pendingLightStatus ? "yes" : "no");
+        }
+    }
+
     // Forward to AquariumManager
     AquariumManager::getInstance().handleStatus(mac, msg);
 }
@@ -1947,6 +2408,15 @@ void setupESPNow() {
     Serial.println("");
     Serial.println(" Initializing ESPNowManager...");
     Serial.println("");
+    
+    // CRITICAL: Disable WiFi power save mode for reliable ESP-NOW reception
+    // Power save mode can cause ESP-NOW unicast messages to be dropped
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    Serial.println(" [HUB] WiFi power save: DISABLED (for ESP-NOW reliability)");
+    
+    // Set WiFi protocol to support ESP-NOW
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
+    Serial.println(" [HUB] WiFi protocol: 11B/G/N/LR enabled");
     
     // Initialize ESPNowManager as hub
     bool success = ESPNowManager::getInstance().begin(config.espnowChannel, true);
@@ -1967,7 +2437,8 @@ void setupESPNow() {
     Serial.printf("   - Mode: HUB (FreeRTOS queue enabled)\n");
     Serial.printf("   - Debug: %s\n", config.debugESPNOW ? "ON" : "OFF");
     Serial.println("");
-    
+
+
     // Print initial statistics
     if (config.debugESPNOW) {
         auto stats = ESPNowManager::getInstance().getStatistics();
@@ -2014,8 +2485,7 @@ void setup() {
     // Initialize AquariumManager
     AquariumManager::getInstance().initialize();
     
-    // Setup web server
-    setupWebServer();
+    // Web server setup moved to Web UI task (Core 1)
     
     // Load aquariums from JSON file
     loadAquariumsFromFile();
@@ -2027,7 +2497,10 @@ void setup() {
     // Setup ESP-NOW (callbacks run on Core 0, processed in main loop)
     setupESPNow();
     
-    // Start watchdog task on Core 1 (device health monitoring)
+    // CRITICAL: Register all devices as ESP-NOW peers for bidirectional unicast
+    registerAllDevicesAsPeers();
+    
+    // Start watchdog task on Core 0 (ESP-NOW + scheduler core)
     xTaskCreatePinnedToCore(
         watchdogTask,            // Task function
         "Watchdog",              // Name
@@ -2035,9 +2508,21 @@ void setup() {
         NULL,                    // Parameters
         2,                       // Priority (higher than main loop)
         &watchdogTaskHandle,     // Task handle
-        1                        // Core 1 (separate from main processing)
+        0                        // Core 0 (ESP-NOW + scheduler)
     );
-    Serial.printf(" Watchdog task created on Core 1 (priority 2)\n");
+    Serial.printf(" Watchdog task created on Core 0 (priority 2)\n");
+
+    // Start Web UI task on Core 1 (Web UI core)
+    xTaskCreatePinnedToCore(
+        webUiTask,               // Task function
+        "WebUI",                 // Name
+        8192,                    // Stack size
+        NULL,                    // Parameters
+        1,                       // Priority
+        &webUiTaskHandle,        // Task handle
+        1                        // Core 1 (Web UI)
+    );
+    Serial.printf(" Web UI task created on Core 1 (priority 1)\n");
     
     Serial.println();
     Serial.println("");
@@ -2051,9 +2536,9 @@ void setup() {
 
 void loop() {
     // Main loop runs on Core 0
-    // Processes ESP-NOW messages from queue
-    // Web server runs asynchronously on Core 0
-    // Watchdog task runs independently on Core 1
+    // Processes ESP-NOW messages from queue and scheduler
+    // Web UI runs on Core 1
+    // Watchdog task runs independently on Core 0
     
     // Process ESP-NOW messages via ESPNowManager (non-blocking)
     ESPNowManager::getInstance().processQueue();
@@ -2062,7 +2547,7 @@ void loop() {
     ESPNowManager::getInstance().checkPeerTimeouts(60000);
     
     // Update AquariumManager (schedule execution only)
-    // Note: Health checks and water monitoring run on Core 1 watchdog task
+    // Note: Health checks and water monitoring run on Core 0 watchdog task
     AquariumManager::getInstance().updateSchedules();
     
     // Print WiFi channel status periodically

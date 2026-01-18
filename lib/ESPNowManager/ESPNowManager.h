@@ -110,7 +110,7 @@ public:
      * @param mac MAC address of peer
      * @return true if successful
      */
-    bool addPeer(const uint8_t* mac);
+    bool addPeer(const uint8_t* mac, int ifidx = -1);
     
     /**
      * @brief Remove peer from ESP-NOW
@@ -288,7 +288,10 @@ private:
     
     // Peer tracking (hub-side)
     std::map<uint64_t, PeerStatus> _peers;  // Key: MAC as uint64_t
-    
+
+public:
+    // Return a copy of current peers (hub-side)
+    std::vector<PeerStatus> getPeers() const;    
     // Retry contexts (hub-side)
     std::vector<RetryContext> _retryQueue;
     

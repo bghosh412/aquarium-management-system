@@ -729,7 +729,20 @@ void AquariumManager::_sendAck(const uint8_t* mac, uint8_t tankId, bool accepted
     ack.header.sequenceNum = 0;
     ack.assignedNodeId = 0;  // Not used for now
     ack.accepted = accepted;
-    
+
+    // Populate returnMac with Hub's AP MAC so nodes know where to reply
+    uint8_t apMac[6] = {0};
+#ifdef ESP32
+    // Get AP MAC directly
+    esp_read_mac(apMac, ESP_MAC_WIFI_SOFTAP);
+#else
+    // Fallback: parse WiFi.softAPmacAddress() string
+    String apStr = WiFi.softAPmacAddress();
+    sscanf(apStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+           &apMac[0], &apMac[1], &apMac[2], &apMac[3], &apMac[4], &apMac[5]);
+#endif
+    memcpy(ack.returnMac, apMac, 6);
+
     esp_err_t result = esp_now_send(mac, (uint8_t*)&ack, sizeof(ack));
     
     if (result == ESP_OK) {

@@ -32,6 +32,8 @@ struct NodeConfig {
     uint32_t announceIntervalMs;
     uint32_t heartbeatIntervalMs;
     uint32_t connectionTimeoutMs;
+    uint8_t hubReturnMac[6];   // Hub AP MAC to reply to (populated from ACK)
+    bool hubReturnMacSet;      // True when hubReturnMac contains valid MAC
 };
 
 // Global configuration (implemented in node_base.cpp)

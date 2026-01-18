@@ -1,7 +1,7 @@
 {
   "devices": [
     {
-      "mac": "AA:BB:CC:DD:EE:01",
+      "mac": "DC:4F:22:65:9A:19",
       "type": "LIGHT",
       "name": "Living Room Light",
       "tankId": 1,

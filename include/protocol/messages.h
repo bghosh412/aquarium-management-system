@@ -55,8 +55,9 @@ struct AckMessage {
     MessageHeader header;
     uint8_t assignedNodeId;  // Hub-assigned unique ID
     bool accepted;           // Whether node is accepted into network
+    uint8_t returnMac[6];    // Hub AP MAC that node should use for replies
     uint32_t unixTimestamp;  // Current Unix timestamp from hub
-    uint8_t reserved[8];     // Reserved for future use
+    uint8_t reserved[2];     // Reserved for future use
 } __attribute__((packed));
 
 // CONFIG message - hub sends configuration to node (provisioning)
@@ -72,6 +73,7 @@ struct CommandMessage {
     uint8_t commandId;
     uint8_t commandSeqID;          // sequenceID for commands, incase larger command needs to be sent to nodes, then this increases by 1 for each sub messages
     bool finalCommand;             // True if final message sequence, else False if there are subsequent messages to be followed
+    uint8_t returnMac[6];          // Hub AP MAC for node to reply to
     uint8_t commandData[32];       // Generic command payload
 } __attribute__((packed));
 

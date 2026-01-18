@@ -170,7 +170,7 @@ def run_test():
         udoc = load_json(UNMAPPED_FILE)
         assert_condition(any(d.get('mac') == TEST_MAC and d.get('type') == 'LIGHT' for d in udoc.get('unmappedDevices', [])), 'Device type not preserved when unmapped')
 
-        print('\nALL TESTS PASSED ✅')
+        print('\nALL TESTS PASSED')
         return 0
 
     except Exception as e:

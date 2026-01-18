@@ -217,14 +217,202 @@
         populateDropdown('eveningDurationMinute', Array.from({length: 60}, (_, i) => i));
 
         // Button handlers
-        document.getElementById('saveScheduleBtn').onclick = function(e) {
+        let currentDevice = null;
+
+        document.getElementById('saveScheduleBtn').onclick = async function(e) {
             e.preventDefault();
-            alert('Save not implemented (stub)');
+            if (!currentDevice) {
+                alert('Device not loaded.');
+                return;
+            }
+
+            const schedule = buildSchedulePayload();
+            const payload = {
+                mac: currentDevice.mac,
+                tankId: currentDevice.tankId,
+                deviceName: currentDevice.name || currentDevice.mac,
+                schedule
+            };
+
+            try {
+                setSaveState(true);
+                const resp = await fetch('/api/light-schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error((data && data.error) || 'Save failed');
+                }
+
+                // Cache locally for quick reloads
+                localStorage.setItem(`lightSchedule:${currentDevice.mac}`, JSON.stringify(payload));
+                alert('Schedule saved successfully.');
+            } catch (err) {
+                console.error('Save failed:', err);
+                alert('Failed to save schedule.');
+            } finally {
+                setSaveState(false);
+            }
         };
         
         document.getElementById('cancelScheduleBtn').onclick = function() {
             document.getElementById('lightScheduleForm').reset();
         };
+
+        // Utility: get query string param
+        function getQueryParam(name) {
+            const params = new URLSearchParams(window.location.search);
+            return params.get(name);
+        }
+
+        // Load device by MAC from API and populate page
+        async function loadDeviceFromQuery() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '../device/manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const devices = data.devices || [];
+                const device = devices.find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    console.warn('Device not found:', mac);
+                    alert('Device not found. It may have been unmapped or removed.');
+                    window.location.href = '../device/manage-devices.html';
+                    return;
+                }
+
+                // Populate header fields
+                document.getElementById('tankName').textContent = `Aquarium ${device.tankId}`;
+                document.getElementById('deviceType').textContent = getDeviceTypeLabel(device.type || 'LIGHT');
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                currentDevice = device;
+                await loadSchedule(mac);
+
+            } catch (err) {
+                console.error('Error loading device:', err);
+                alert('Failed to load device information.');
+            }
+        }
+
+        async function loadSchedule(mac) {
+            try {
+                const resp = await fetch(`/api/light-schedule?mac=${encodeURIComponent(mac)}`);
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error((data && data.error) || 'Failed to load schedule');
+                }
+
+                if (data.schedule && data.schedule.schedule) {
+                    applySchedule(data.schedule.schedule);
+                }
+            } catch (err) {
+                console.warn('No schedule loaded:', err);
+                // Fallback to local cache if available
+                const cached = localStorage.getItem(`lightSchedule:${mac}`);
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        if (parsed && parsed.schedule) {
+                            applySchedule(parsed.schedule);
+                        }
+                    } catch (e) {
+                        console.warn('Failed to parse cached schedule:', e);
+                    }
+                }
+            }
+        }
+
+        function setSaveState(isSaving) {
+            const btn = document.getElementById('saveScheduleBtn');
+            btn.disabled = isSaving;
+            btn.textContent = isSaving ? 'Saving...' : '✓ Save';
+        }
+
+        function applySchedule(schedule) {
+            if (schedule.morning) {
+                applyTimeToFields('morning', schedule.morning);
+            }
+            if (schedule.evening) {
+                applyTimeToFields('evening', schedule.evening);
+            }
+        }
+
+        function applyTimeToFields(prefix, section) {
+            const start = section.start || { hour: 7, minute: 0 };
+            const duration = section.duration || { hour: 1, minute: 0 };
+            const ramp = !!section.ramp;
+
+            const converted = to12Hour(start.hour || 0, start.minute || 0);
+            document.getElementById(`${prefix}StartHour`).value = converted.hour12;
+            document.getElementById(`${prefix}StartMinute`).value = converted.minute;
+            document.getElementById(`${prefix}StartAMPM`).value = converted.ampm;
+
+            document.getElementById(`${prefix}DurationHour`).value = duration.hour || 0;
+            document.getElementById(`${prefix}DurationMinute`).value = duration.minute || 0;
+            document.getElementById(`${prefix}Ramp`).value = ramp ? 'yes' : 'no';
+        }
+
+        function buildSchedulePayload() {
+            const morning = readSection('morning');
+            const evening = readSection('evening');
+            return { morning, evening };
+        }
+
+        function readSection(prefix) {
+            const hour = parseInt(document.getElementById(`${prefix}StartHour`).value, 10) || 0;
+            const minute = parseInt(document.getElementById(`${prefix}StartMinute`).value, 10) || 0;
+            const ampm = document.getElementById(`${prefix}StartAMPM`).value || 'AM';
+            const durationHour = parseInt(document.getElementById(`${prefix}DurationHour`).value, 10) || 0;
+            const durationMinute = parseInt(document.getElementById(`${prefix}DurationMinute`).value, 10) || 0;
+            const ramp = document.getElementById(`${prefix}Ramp`).value === 'yes';
+
+            const hour24 = to24Hour(hour, ampm);
+            return {
+                start: { hour: hour24, minute },
+                duration: { hour: durationHour, minute: durationMinute },
+                ramp
+            };
+        }
+
+        function to24Hour(hour12, ampm) {
+            let h = hour12 % 12;
+            if (ampm === 'PM') h += 12;
+            return h;
+        }
+
+        function to12Hour(hour24, minute) {
+            let ampm = hour24 >= 12 ? 'PM' : 'AM';
+            let h = hour24 % 12;
+            if (h === 0) h = 12;
+            return { hour12: h, minute: minute || 0, ampm };
+        }
+
+        function getDeviceTypeLabel(type) {
+            const t = String(type || '').toLowerCase();
+            switch (t) {
+                case 'light': return 'Lighting';
+                case 'co2': return 'CO₂ Regulator';
+                case 'heater': return 'Heater';
+                case 'fish_feeder': return 'Fish Feeder';
+                case 'sensor': return 'Water Quality Sensor';
+                case 'repeater': return 'Repeater';
+                default: return 'Unknown';
+            }
+        }
+
+        // Load device when page is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDeviceFromQuery();
+        });
     </script>
 </body>
 </html>

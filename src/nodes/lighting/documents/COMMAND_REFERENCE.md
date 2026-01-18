@@ -192,6 +192,32 @@ commandData[0] = 31;  // Channel 3 ON
 
 ---
 
+### Status Request
+
+#### 40: Fetch Channel Status
+
+**Description:** Request the current ON/OFF state for all channels.
+
+**Payload:**
+
+- `commandData[0]` = 40
+
+**Example:**
+
+```cpp
+commandData[0] = 40;  // Status request
+```
+
+**Result:**
+
+Node replies with a STATUS message where:
+
+- `statusData[0]` = Channel 1 state (1 = ON, 0 = OFF)
+- `statusData[1]` = Channel 2 state (1 = ON, 0 = OFF)
+- `statusData[2]` = Channel 3 state (1 = ON, 0 = OFF)
+
+---
+
 ## Status Responses
 
 After processing each command, the lighting node sends a STATUS message:

@@ -177,8 +177,18 @@ bool ESPNowManager::addPeer(const uint8_t* mac, int ifidx) {
 #else
     // ESP32: Check if peer exists
     if (esp_now_is_peer_exist(mac)) {
-        // Peer already exists - this is fine, not an error
-        return true;
+        // Peer already exists - update if ifidx is requested and differs
+        if (ifidx != -1) {
+            // Read current peer (no direct getter in esp-idf public API), so best-effort: delete and re-add with desired ifidx
+            Serial.printf("[PEER] Peer exists - refreshing with ifidx=%d\n", ifidx);
+            if (esp_now_del_peer(mac) != ESP_OK) {
+                Serial.printf("[WARN] Failed to delete existing peer for refresh: %02X:%02X:...\n", mac[0], mac[1]);
+            }
+            // Continue to add below
+        } else {
+            // No requested change, keep existing peer
+            return true;
+        }
     }
     
     esp_now_peer_info_t peerInfo = {};
@@ -224,7 +234,7 @@ bool ESPNowManager::addPeer(const uint8_t* mac, int ifidx) {
     return true;
 }
 
-std::vector<ESPNowManager::PeerStatus> ESPNowManager::getPeers() const {
+std::vector<PeerStatus> ESPNowManager::getPeers() const {
     std::vector<PeerStatus> result;
     for (const auto& kv : _peers) {
         result.push_back(kv.second);
@@ -594,11 +604,25 @@ void ESPNowManager::onReceiveStatic(const uint8_t* mac, const uint8_t* data, int
 
 #ifdef ESP8266
 void ESPNowManager::onSendStatic(uint8_t* mac, uint8_t status) {
-    // Track send status if needed
+    // Track send status and log
+    Serial.printf("[ESPNowMgr][TX] Send callback to %02X:%02X:%02X:%02X:%02X:%02X status=%d (%s)\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], status, (status == 0) ? "SUCCESS" : "FAIL");
+    if (status == 0) {
+        _stats.messagesSent++; // Count confirmed
+    } else {
+        _stats.sendFailures++;
+    }
 }
 #else
 void ESPNowManager::onSendStatic(const uint8_t* mac, esp_now_send_status_t status) {
-    // Track send status if needed
+    const char* s = (status == ESP_NOW_SEND_SUCCESS) ? "SUCCESS" : "FAIL";
+    Serial.printf("[ESPNowMgr][TX] Send callback to %02X:%02X:%02X:%02X:%02X:%02X status=%d (%s)\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)status, s);
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        _stats.messagesSent++; // Count confirmed
+    } else {
+        _stats.sendFailures++;
+    }
 }
 #endif
 

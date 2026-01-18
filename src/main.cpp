@@ -1584,12 +1584,6 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     serializeJson(doc, resp);
     request->send(200, "application/json", resp);
 });
-        }
-
-        String response;
-        serializeJson(doc, response);
-        request->send(200, "application/json", response);
-    });
 
     // GET settings file download
     server.on("/api/settings/download", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1599,6 +1593,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         }
 
         String name = request->getParam("name")->value();
+
         if (!isAllowedConfigFile(name)) {
             request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid file name\"}");
             return;

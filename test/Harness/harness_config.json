@@ -1,0 +1,5 @@
+{
+  "base_url": "http://ams.local",
+  "node_mac": "DC:4F:22:65:9A:19",
+  "http_timeout": 5
+}

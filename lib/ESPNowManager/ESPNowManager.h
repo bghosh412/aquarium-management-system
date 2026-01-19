@@ -259,6 +259,10 @@ public:
     Statistics getStatistics() const { return _stats; }
     void resetStatistics() { _stats = {}; }
     void printStatistics() const;
+
+    // Helpers to modify statistics safely
+    void incrementMessagesSent();
+    void incrementSendFailures();
     
 private:
     // ========================================================================

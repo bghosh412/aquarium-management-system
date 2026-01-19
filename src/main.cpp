@@ -23,6 +23,7 @@
 #include <ESPmDNS.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <strings.h>  // for strcasecmp
 #include <esp_now.h>
 #include <ArduinoJson.h>
 #include <Update.h>
@@ -1887,7 +1888,120 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             request->send(200, "application/json", response);
         }
     });
-    
+
+    // POST delete device (remove from devices.json, unmapped-devices.json, light-devices.json, light-schedule.json)
+    server.on("/api/delete-device", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index == 0) {
+            Serial.println(" Received delete-device request");
+        }
+        if (index + len != total) return;
+
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = doc["mac"].as<String>();
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        Serial.printf(" Deleting device: %s\n", macStr.c_str());
+
+        // Normalize
+        macStr.toUpperCase();
+
+        // Remove from devices.json
+        File devicesFile = LittleFS.open("/config/devices.json", "r");
+        DynamicJsonDocument devicesDoc(8192);
+        if (devicesFile) {
+            deserializeJson(devicesDoc, devicesFile);
+            devicesFile.close();
+        }
+        JsonArray devices = devicesDoc["devices"];
+        if (!devices.isNull()) {
+            for (int i = (int)devices.size() - 1; i >= 0; i--) {
+                if (devices[i]["mac"].as<String>() == macStr) {
+                    devices.remove(i);
+                }
+            }
+            devicesFile = LittleFS.open("/config/devices.json", "w");
+            serializeJson(devicesDoc, devicesFile);
+            devicesFile.close();
+        }
+
+        // Remove from unmapped-devices.json
+        File unmappedFile = LittleFS.open("/config/unmapped-devices.json", "r");
+        DynamicJsonDocument unmappedDoc(4096);
+        if (unmappedFile) {
+            deserializeJson(unmappedDoc, unmappedFile);
+            unmappedFile.close();
+        }
+        JsonArray unmapped = unmappedDoc["unmappedDevices"];
+        if (!unmapped.isNull()) {
+            for (int i = (int)unmapped.size() - 1; i >= 0; i--) {
+                if (unmapped[i]["mac"].as<String>() == macStr) {
+                    unmapped.remove(i);
+                }
+            }
+            unmappedFile = LittleFS.open("/config/unmapped-devices.json", "w");
+            serializeJson(unmappedDoc, unmappedFile);
+            unmappedFile.close();
+        }
+
+        // Remove from light-devices.json
+        File lightFile = LittleFS.open("/config/light-devices.json", "r");
+        DynamicJsonDocument lightDoc(8192);
+        if (lightFile) {
+            deserializeJson(lightDoc, lightFile);
+            lightFile.close();
+        }
+        JsonArray lightDevices = lightDoc["lightDevices"];
+        if (!lightDevices.isNull()) {
+            for (int i = (int)lightDevices.size() - 1; i >= 0; i--) {
+                if (lightDevices[i]["mac"].as<String>() == macStr) {
+                    lightDevices.remove(i);
+                }
+            }
+            lightFile = LittleFS.open("/config/light-devices.json", "w");
+            serializeJson(lightDoc, lightFile);
+            lightFile.close();
+        }
+
+        // Remove from light-schedule.json
+        File schedFile = LittleFS.open("/config/light-schedule.json", "r");
+        DynamicJsonDocument schedDoc(4096);
+        if (schedFile) {
+            deserializeJson(schedDoc, schedFile);
+            schedFile.close();
+        }
+        JsonArray schedules = schedDoc["schedules"];
+        if (!schedules.isNull()) {
+            for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                if (schedules[i]["mac"].as<String>() == macStr) {
+                    schedules.remove(i);
+                }
+            }
+            schedFile = LittleFS.open("/config/light-schedule.json", "w");
+            serializeJson(schedDoc, schedFile);
+            schedFile.close();
+        }
+
+        // Also remove from memory and peer list
+        uint8_t mac[6];
+        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6) {
+            AquariumManager::getInstance().removeDevice(mac);
+            ESPNowManager::getInstance().removePeer(mac);
+        }
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
     // POST device command (send command to specific device)
     server.on("^\\/api\\/devices\\/([0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})\\/command$", HTTP_POST,
         [](AsyncWebServerRequest *request){}, NULL,
@@ -2085,8 +2199,17 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             }
             
             // Remove from devices.json if present
+            // Capture important metadata BEFORE removing the object to avoid invalid references
+            String detectedType = "UNKNOWN";
+            uint8_t detectedFirmware = 0;
+            uint8_t tankId = 0;
+
             if (foundIndex != -1) {
-                uint8_t tankId = foundDevice["tankId"].as<uint8_t>();
+                tankId = foundDevice["tankId"].as<uint8_t>();
+                detectedType = foundDevice.containsKey("type") ? foundDevice["type"].as<String>() : String("UNKNOWN");
+                if (detectedType.length() == 0) detectedType = "UNKNOWN";
+                detectedFirmware = foundDevice.containsKey("firmwareVersion") ? foundDevice["firmwareVersion"].as<uint8_t>() : 0;
+
                 devices.remove(foundIndex);
 
                 devicesFile = LittleFS.open("/config/devices.json", "w");
@@ -2138,13 +2261,11 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                 }
             }
 
-            String typeStr = foundDevice.containsKey("type") ? foundDevice["type"].as<String>() : String("UNKNOWN");
-            if (typeStr.length() == 0) typeStr = "UNKNOWN";
-
+            // Use captured metadata if available (captured earlier to avoid invalid ref after removal)
             JsonObject newUnmapped = unmappedDevices.createNestedObject();
             newUnmapped["mac"] = macStr;
-            newUnmapped["type"] = typeStr;
-            newUnmapped["firmwareVersion"] = foundDevice.containsKey("firmwareVersion") ? foundDevice["firmwareVersion"].as<uint8_t>() : 0;
+            newUnmapped["type"] = detectedType;
+            newUnmapped["firmwareVersion"] = detectedFirmware;
             newUnmapped["discoveredAt"] = millis();
             newUnmapped["announceCount"] = 0;
 
@@ -2295,17 +2416,42 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
         Serial.println("[HUB] ✗ Peer registration FAILED - unicast will NOT work!");
     }
     
+    // Determine tankId to include in ACK. Prefer the hub's devices.json record
+    int ackTankId = msg.header.tankId;
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    File devFile = LittleFS.open("/config/devices.json", "r");
+    if (devFile) {
+        DynamicJsonDocument devDoc(8192);
+        deserializeJson(devDoc, devFile);
+        devFile.close();
+
+        JsonArray devicesArr = devDoc["devices"];
+        if (!devicesArr.isNull()) {
+            for (JsonObject d : devicesArr) {
+                const char* listedMac = d["mac"];
+                if (listedMac && strcasecmp(listedMac, macStr) == 0) {
+                    ackTankId = d["tankId"] | 0;
+                    Serial.printf(" [HUB] ANNOUNCE: device found in devices.json (tank %d), using that for ACK\n", ackTankId);
+                    break;
+                }
+            }
+        }
+    }
+
     AckMessage ack = {};
     ack.header.type = MessageType::ACK;
-    ack.header.tankId = msg.header.tankId;
+    ack.header.tankId = ackTankId;
     ack.header.nodeType = NodeType::HUB;
     ack.header.timestamp = millis();
     ack.header.sequenceNum = 0;
     ack.assignedNodeId = 1;  // Simple assignment for now
     ack.accepted = true;
-    
+
     ESPNowManager::getInstance().send(mac, (uint8_t*)&ack, sizeof(ack));
-    
+
     if (config.debugESPNOW) {
         Serial.printf(" ACK sent to device\n\n");
     }

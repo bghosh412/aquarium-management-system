@@ -312,6 +312,41 @@ function unmapDevice() {
     });
 }
 
+function deleteDevice() {
+    if (!confirm('Delete this device completely? This will remove it from all records (devices, unmapped list, light devices, and schedules).')) {
+        return;
+    }
+
+    const btn = document.getElementById('deleteDeviceBtn');
+    btn.disabled = true;
+
+    fetch('/api/delete-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mac: deviceMac })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Remove locally
+            const devices = JSON.parse(localStorage.getItem('devices') || '[]');
+            const filtered = devices.filter(d => d.mac !== deviceMac);
+            localStorage.setItem('devices', JSON.stringify(filtered));
+
+            showNotification('Device deleted', 'success');
+            setTimeout(() => { window.location.href = 'manage-devices.html'; }, 1200);
+        } else {
+            showNotification('Failed to delete device: ' + (data.error || ''), 'error');
+            btn.disabled = false;
+        }
+    })
+    .catch(err => {
+        console.error('Delete device failed:', err);
+        showNotification('Failed to delete device', 'error');
+        btn.disabled = false;
+    });
+}
+
 function resetStatistics() {
     if (!confirm('Reset all statistics for this device?')) {
         return;

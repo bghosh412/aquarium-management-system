@@ -8,6 +8,22 @@
     <meta name="theme-color" content="#0c4a6e">
     <title>Light Control - Aquarium Hub</title>
     <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        /* Inline styles for light control buttons/icons */
+        .btn .btn-icon {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            margin-right: 0.5rem;
+            vertical-align: middle;
+        }
+        .btn .btn-icon svg { display: inline-block; vertical-align: middle; }
+        .btn.btn-success { background-color: #16a34a; border-color: #16a34a; }
+        .btn.btn-danger { background-color: #dc2626; border-color: #dc2626; }
+        /* Spinner */
+        .spinner svg { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
 </head>
 <body>
     <!-- Navbar -->
@@ -67,7 +83,7 @@
                                 <div style="font-weight: 600;">Channel 1</div>
                                 <div id="channel1Status" class="badge badge-offline">OFF</div>
                             </div>
-                            <button class="btn btn-primary" onclick="toggleChannel(1)">Toggle</button>
+                            <button id="channel1Btn" class="btn btn-primary" onclick="toggleChannel(1)"><span class="btn-icon" aria-hidden></span> <span class="btn-label">Toggle</span></button>
                         </div>
                     </div>
 
@@ -77,7 +93,7 @@
                                 <div style="font-weight: 600;">Channel 2</div>
                                 <div id="channel2Status" class="badge badge-offline">OFF</div>
                             </div>
-                            <button class="btn btn-primary" onclick="toggleChannel(2)">Toggle</button>
+                            <button id="channel2Btn" class="btn btn-primary" onclick="toggleChannel(2)"><span class="btn-icon" aria-hidden></span> <span class="btn-label">Toggle</span></button>
                         </div>
                     </div>
 
@@ -87,7 +103,7 @@
                                 <div style="font-weight: 600;">Channel 3</div>
                                 <div id="channel3Status" class="badge badge-offline">OFF</div>
                             </div>
-                            <button class="btn btn-primary" onclick="toggleChannel(3)">Toggle</button>
+                            <button id="channel3Btn" class="btn btn-primary" onclick="toggleChannel(3)"><span class="btn-icon" aria-hidden></span> <span class="btn-label">Toggle</span></button>
                         </div>
                     </div>
                 </div>
@@ -157,6 +173,12 @@
             updateBadge('channel1Status', channelStates[1]);
             updateBadge('channel2Status', channelStates[2]);
             updateBadge('channel3Status', channelStates[3]);
+
+            // Update button labels/icons to reflect current state (action to perform)
+            updateChannelButton(1, !!channelStates[1]);
+            updateChannelButton(2, !!channelStates[2]);
+            updateChannelButton(3, !!channelStates[3]);
+
             setControlStatus('Status updated', 'secondary');
         }
 
@@ -166,6 +188,34 @@
             el.className = isOn ? 'badge badge-online' : 'badge badge-offline';
         }
 
+        // Polling interval handle (used to pause/resume 60s polling)
+        let pollingIntervalId = null;
+
+        // Small inline SVG icons
+        const SVG_POWER_ON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2V12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M5.758 5.758A9 9 0 1 0 18.242 18.242" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const SVG_POWER_OFF = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 18.36A9 9 0 1 0 18 6.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 2v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+        // Spinner SVG (animated via CSS .spinner class)
+        const SVG_SPINNER = '<svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="60" stroke-dashoffset="0" fill="none"/></svg>';
+
+        function updateChannelButton(channel, isOn) {
+            const btn = document.getElementById(`channel${channel}Btn`);
+            if (!btn) return;
+            const iconEl = btn.querySelector('.btn-icon');
+            const labelEl = btn.querySelector('.btn-label');
+            if (iconEl) {
+                iconEl.innerHTML = isOn ? SVG_POWER_ON : SVG_POWER_OFF;
+                iconEl.style.display = 'inline-block';
+            }
+            // Label shows the ACTION the button will perform: 'ON' if currently OFF, 'OFF' if currently ON
+            if (labelEl) labelEl.textContent = isOn ? 'OFF' : 'ON';
+            // Update button color for clarity (green = action is to turn ON, red = action is to turn OFF)
+            if (isOn) {
+                btn.className = 'btn btn-danger';
+            } else {
+                btn.className = 'btn btn-success';
+            }
+        }
+
         async function toggleChannel(channel) {
             if (!currentDevice) return;
             const isOn = !!channelStates[channel];
@@ -173,22 +223,100 @@
             setControlStatus('Sending command...', 'secondary');
 
             try {
-                const resp = await fetch(`/api/devices/${currentDevice.mac}/command`, {
+                const resp = await fetch(`/api/devices/${encodeURIComponent(currentDevice.mac.toLowerCase())}/command`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ command })
                 });
+
                 if (!resp.ok) {
-                    throw new Error('Command failed');
+                    const txt = await resp.text();
+                    throw new Error(txt || 'Command failed');
                 }
-                // Refresh status after toggle
-                setTimeout(refreshStatus, 300);
-                setControlStatus('Command sent', 'online');
+
+                const body = await resp.json();
+                if (!body || !body.success) {
+                    throw new Error(body && body.error ? body.error : 'Command not acknowledged by hub');
+                }
+
+                // Command was sent by hub. Now wait for device STATUS ack.
+                setControlStatus('Waiting for device acknowledgment...', 'secondary');
+
+                // Disable button and show spinner while waiting
+                const btn = document.getElementById(`channel${channel}Btn`);
+                const iconEl = btn ? btn.querySelector('.btn-icon') : null;
+                const labelEl = btn ? btn.querySelector('.btn-label') : null;
+                if (btn) {
+                    btn.disabled = true;
+                    if (labelEl) labelEl.textContent = '...';
+                    if (iconEl) iconEl.innerHTML = SVG_SPINNER;
+                    btn.classList.add('loading');
+                }
+
+                // Pause regular polling
+                if (pollingIntervalId) {
+                    clearInterval(pollingIntervalId);
+                    pollingIntervalId = null;
+                }
+
+                // Wait for ack (poll /api/light-status until we receive a status or timeout)
+                const ackReceived = await waitForDeviceAck(currentDevice.mac, 30000, 1000);
+
+                if (ackReceived) {
+                    // Small delay to ensure STATUS propagation and avoid fractional UI updates
+                    await new Promise(r => setTimeout(r, 500));
+
+                    // Double-check: issue one explicit status command to make sure values are current
+                    await refreshStatus();
+                    setControlStatus('Command acknowledged', 'online');
+                } else {
+                    setControlStatus('Ack timeout - status unknown', 'offline');
+                }
+
+                // Re-enable button and restore icon/label based on current state
+                if (btn) {
+                    btn.disabled = false;
+                    btn.classList.remove('loading');
+                    updateChannelButton(channel, !!channelStates[channel]);
+                }
+
             } catch (err) {
                 console.error('Toggle failed:', err);
                 setControlStatus('Command failed', 'offline');
-                alert('Failed to toggle channel.');
+                alert('Failed to toggle channel. ' + (err && err.message ? err.message : ''));
+            } finally {
+                // Restore regular 60s polling
+                if (!pollingIntervalId) {
+                    pollingIntervalId = setInterval(refreshStatus, 60000);
+                }
             }
+        }
+
+        // Poll for device ack by calling /api/light-status repeatedly until a status is returned
+        async function waitForDeviceAck(mac, timeoutMs = 30000, pollMs = 1000) {
+            const start = Date.now();
+
+            while (Date.now() - start < timeoutMs) {
+                try {
+                    const resp = await fetch(`/api/light-status?mac=${encodeURIComponent(mac)}`);
+                    const data = await resp.json();
+
+                    if (data && data.success && data.status) {
+                        // Ack/status received
+                        channelStates = data.status;
+                        renderStatus();
+                        return true;
+                    }
+
+                    // If pending, keep waiting
+                } catch (err) {
+                    console.warn('Ack poll failed:', err);
+                }
+
+                await new Promise(r => setTimeout(r, pollMs));
+            }
+
+            return false; // Timeout
         }
 
         function setControlStatus(text, variant) {
@@ -210,9 +338,11 @@
             return turnOn ? 'LIGHT_ON' : 'LIGHT_OFF';
         }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            loadDevice();
-            setInterval(refreshStatus, 3000);
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadDevice();
+            // Ensure buttons reflect initial known state immediately (even if device reply is pending)
+            renderStatus();
+            pollingIntervalId = setInterval(refreshStatus, 60000);
         });
     </script>
 </body>

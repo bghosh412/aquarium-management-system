@@ -367,12 +367,18 @@ function loadDashboardData() {
         .then(response => response.json())
         .then(data => {
             if (data.devices && Array.isArray(data.devices)) {
-                const onlineDevices = data.devices.filter(d => d.status === 'ONLINE').length;
-                
-                // Update dashboard stats - using correct element ID
+                // Use the backend-injected `online` boolean for consistency with Manage Devices
+                const totalDevices = data.devices.length;
+                const onlineDevices = data.devices.filter(d => d.online).length;
+                const scheduleCount = data.devices.filter(d => d.schedules && d.schedules.length > 0).length;
+
+                // Update dashboard stats
                 const deviceCountElem = document.getElementById('device-count');
                 if (deviceCountElem) deviceCountElem.textContent = onlineDevices;
-                
+
+                const scheduleCountElem = document.getElementById('schedule-count');
+                if (scheduleCountElem) scheduleCountElem.textContent = scheduleCount;
+
                 // Store in localStorage for other pages
                 localStorage.setItem('devices', JSON.stringify(data.devices));
             }

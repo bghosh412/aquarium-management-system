@@ -2,6 +2,7 @@
 #include <esp_now.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <strings.h>  // for strcasecmp
 
 static const char* nodeTypeToString(NodeType type) {
     switch (type) {
@@ -188,6 +189,33 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
     Serial.printf("   - Type: %d, Tank: %d, FW: v%d\n",
                   (int)msg.header.nodeType, msg.header.tankId, msg.firmwareVersion);
     
+    // Build MAC string for JSON comparisons
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    // Check if device exists in persistent devices.json (provisioned)
+    File devFile = LittleFS.open("/config/devices.json", "r");
+    if (devFile) {
+        DynamicJsonDocument devDoc(8192);
+        deserializeJson(devDoc, devFile);
+        devFile.close();
+
+        JsonArray devicesArr = devDoc["devices"];
+        if (!devicesArr.isNull()) {
+            for (JsonObject d : devicesArr) {
+                const char* listedMac = d["mac"];
+                if (listedMac && strcasecmp(listedMac, macStr) == 0) {
+                    int listedTankId = d["tankId"] | 0;
+                    Serial.printf("   - Device found in devices.json (tank %d); sending ACK and skipping unmapped\n", listedTankId);
+                    _sendAck(mac, listedTankId, true);
+                    _stats.totalMessagesReceived++;
+                    return;
+                }
+            }
+        }
+    }
+
     // Check if device already registered
     if (_globalDeviceRegistry.find(macKey) != _globalDeviceRegistry.end()) {
         Serial.println("   - Device already registered, sending ACK");
@@ -225,7 +253,8 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
         
         bool alreadyExists = false;
         for (JsonObject device : unmappedDevices) {
-            if (device["mac"].as<String>() == String(macStr)) {
+            const char* existingMac = device["mac"];
+            if (existingMac && strcasecmp(existingMac, macStr) == 0) {
                 // Update existing entry
                 device["lastSeen"] = millis();
                 device["announceCount"] = device["announceCount"].as<int>() + 1;

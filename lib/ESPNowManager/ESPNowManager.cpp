@@ -17,14 +17,16 @@ ESPNowManager::ESPNowManager()
 #ifdef ESP32
     , _rxQueue(nullptr)
 #endif
-    , _commandCallback(nullptr)
-    , _statusCallback(nullptr)
-    , _heartbeatCallback(nullptr)
-    , _announceCallback(nullptr)
-    , _ackCallback(nullptr)
-    , _configCallback(nullptr)
-    , _unmapCallback(nullptr)
 {
+    // Initialize callbacks and other members in constructor body to avoid Wreorder warnings
+    _commandCallback = nullptr;
+    _statusCallback = nullptr;
+    _heartbeatCallback = nullptr;
+    _announceCallback = nullptr;
+    _ackCallback = nullptr;
+    _configCallback = nullptr;
+    _unmapCallback = nullptr;
+
     s_instance = this;
     memset(&_reassembly, 0, sizeof(_reassembly));
     memset(&_stats, 0, sizeof(_stats));
@@ -37,6 +39,10 @@ ESPNowManager::~ESPNowManager() {
     }
 #endif
 }
+
+// Statistics helpers
+void ESPNowManager::incrementMessagesSent() { _stats.messagesSent++; }
+void ESPNowManager::incrementSendFailures() { _stats.sendFailures++; }
 
 // ============================================================================
 // INITIALIZATION
@@ -608,9 +614,9 @@ void ESPNowManager::onSendStatic(uint8_t* mac, uint8_t status) {
     Serial.printf("[ESPNowMgr][TX] Send callback to %02X:%02X:%02X:%02X:%02X:%02X status=%d (%s)\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], status, (status == 0) ? "SUCCESS" : "FAIL");
     if (status == 0) {
-        _stats.messagesSent++; // Count confirmed
+        if (s_instance) s_instance->incrementMessagesSent();
     } else {
-        _stats.sendFailures++;
+        if (s_instance) s_instance->incrementSendFailures();
     }
 }
 #else
@@ -619,9 +625,9 @@ void ESPNowManager::onSendStatic(const uint8_t* mac, esp_now_send_status_t statu
     Serial.printf("[ESPNowMgr][TX] Send callback to %02X:%02X:%02X:%02X:%02X:%02X status=%d (%s)\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)status, s);
     if (status == ESP_NOW_SEND_SUCCESS) {
-        _stats.messagesSent++; // Count confirmed
+        if (s_instance) s_instance->incrementMessagesSent();
     } else {
-        _stats.sendFailures++;
+        if (s_instance) s_instance->incrementSendFailures();
     }
 }
 #endif

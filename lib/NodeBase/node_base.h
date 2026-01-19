@@ -32,9 +32,21 @@ struct NodeConfig {
     uint32_t announceIntervalMs;
     uint32_t heartbeatIntervalMs;
     uint32_t connectionTimeoutMs;
+    uint32_t hubHeartbeatTimeoutMs; // ms before node declares hub offline (default 600000)
     uint8_t hubReturnMac[6];   // Hub AP MAC to reply to (populated from ACK)
     bool hubReturnMacSet;      // True when hubReturnMac contains valid MAC
 };
+
+// Last seen time of hub heartbeat on node
+extern uint32_t lastHubHeartbeatReceived;
+// True when hub heartbeat timeout has been detected
+extern bool hubHeartbeatLost;
+
+// Setup base-level callbacks that nodes should call AFTER ESPNow init
+void setupNodeBaseCallbacks();
+
+// Main node base loop - nodes should call this each loop iteration
+void nodeLoop();
 
 // Global configuration (implemented in node_base.cpp)
 extern NodeConfig nodeConfig;

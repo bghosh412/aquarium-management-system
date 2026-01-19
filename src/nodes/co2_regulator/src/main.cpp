@@ -108,6 +108,9 @@ void setup() {
     
     setupHardware();
     setupESPNow();
+
+    // Register NodeBase callbacks (heartbeat handler, etc.)
+    setupNodeBaseCallbacks();
     
     currentState = NodeState::ANNOUNCING;
     Serial.println(" CO2 regulator node ready\n");

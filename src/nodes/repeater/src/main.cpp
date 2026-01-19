@@ -282,6 +282,9 @@ void setup() {
     
     loadRepeaterConfig();
     setupESPNow();
+
+    // Register NodeBase callbacks (hub heartbeat handler)
+    setupNodeBaseCallbacks();
     
     // Send initial announce
     delay(1000);

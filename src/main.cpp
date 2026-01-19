@@ -46,6 +46,7 @@
 struct HubConfig {
     bool heartbeatEnabled;
     uint32_t heartbeatIntervalSec;
+    uint32_t hubHeartbeatIntervalSec; // seconds
     bool aggressiveMemoryManagement;
     uint32_t heapWarningThresholdKB;
     uint32_t psramWarningThresholdKB;
@@ -60,6 +61,9 @@ struct HubConfig {
     bool debugWebSocket;
     String otaFirmwareUrl;
     String otaLittlefsUrl;
+
+    // Test-only: expose test endpoints when true (disabled by default)
+    bool hubTestMode; // HUB_TEST_MODE (false by default) 
 };
 
 struct LightChannelStatus {
@@ -270,6 +274,9 @@ void loadConfiguration() {
     // Set defaults
     config.heartbeatEnabled = true;
     config.heartbeatIntervalSec = 30;
+    // Hub will broadcast its own heartbeat periodically (seconds)
+    config.hubHeartbeatIntervalSec = 120;  // Default 120s
+
     config.aggressiveMemoryManagement = true;
     config.heapWarningThresholdKB = 50;
     config.psramWarningThresholdKB = 100;
@@ -284,6 +291,9 @@ void loadConfiguration() {
     config.debugWebSocket = false;
     config.otaFirmwareUrl = "";
     config.otaLittlefsUrl = "";
+
+    // Test mode disabled by default (only enable in test environments)
+    config.hubTestMode = false;
     
     // Load from file
     if (!LittleFS.exists("/config/hub_config.txt")) {
@@ -324,6 +334,8 @@ void loadConfiguration() {
             config.heartbeatEnabled = (value == "true");
         } else if (key == "HEARTBEAT_INTERVAL_SEC") {
             config.heartbeatIntervalSec = value.toInt();
+        } else if (key == "HUB_HEARTBEAT_INTERVAL_SEC") {
+            config.hubHeartbeatIntervalSec = value.toInt();
         } else if (key == "AGGRESSIVE_MEMORY_MANAGEMENT") {
             config.aggressiveMemoryManagement = (value == "true");
         } else if (key == "HEAP_WARNING_THRESHOLD_KB") {
@@ -352,6 +364,8 @@ void loadConfiguration() {
             config.otaFirmwareUrl = value;
         } else if (key == "LITTLEFS_OTA_URL") {
             config.otaLittlefsUrl = value;
+        } else if (key == "HUB_TEST_MODE") {
+            config.hubTestMode = (value == "true");
         }
     }
     
@@ -361,6 +375,7 @@ void loadConfiguration() {
     Serial.printf("   - Heartbeat: %s (%ds)\n", 
                   config.heartbeatEnabled ? "ON" : "OFF", 
                   config.heartbeatIntervalSec);
+    Serial.printf("   - Hub Heartbeat Interval: %ds\n", config.hubHeartbeatIntervalSec);
     Serial.printf("   - Memory Management: %s\n", 
                   config.aggressiveMemoryManagement ? "AGGRESSIVE" : "NORMAL");
     Serial.printf("   - mDNS: %s.local\n", config.mdnsHostname.c_str());
@@ -1329,6 +1344,47 @@ void setupWebServer() {
         String jsonData;
         serializeJson(doc, jsonData);
         request->send(200, "application/json", jsonData);
+    });
+
+    // TEST endpoint: force a device into fail-safe (TEST MODE MUST BE ENABLED)
+    server.on("/api/test/force-failsafe", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (!config.hubTestMode) {
+            request->send(403, "application/json", "{\"success\":false,\"error\":\"Test mode disabled\"}");
+            return;
+        }
+
+        // Accept mac param in POST body (form-data) or as query param
+        String macStr;
+        if (request->hasParam("mac", true)) {
+            macStr = request->getParam("mac", true)->value();
+        } else if (request->hasParam("mac")) {
+            macStr = request->getParam("mac")->value();
+        } else {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac parameter\"}");
+            return;
+        }
+
+        uint8_t mac[6];
+        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                   &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid mac format\"}");
+            return;
+        }
+
+        Device* device = AquariumManager::getInstance().getDevice(mac);
+        if (!device) {
+            request->send(404, "application/json", "{\"success\":false,\"error\":\"Device not found\"}");
+            return;
+        }
+
+        uint8_t cmd[1] = { 0xFF }; // 0xFF reserved for FORCE_FAILSAFE test command
+        bool ok = device->sendCommand(cmd, 1);
+        if (!ok) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to send command\"}");
+            return;
+        }
+
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Force-failsafe command sent\"}");
     });
 
     // GET light schedule for a device
@@ -2457,6 +2513,39 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
     }
 }
 
+void sendHubHeartbeat() {
+    HeartbeatMessage msg = {};
+    msg.header.type = MessageType::HEARTBEAT;
+    msg.header.tankId = 0;  // Hub-level heartbeat
+    msg.header.nodeType = NodeType::HUB;
+    msg.header.timestamp = millis();
+    msg.header.sequenceNum = 0;
+    msg.health = 100;
+    msg.uptimeMinutes = millis() / 60000;
+    msg.nodeUnixTime = 0;
+
+    uint8_t broadcast[] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    ESPNowManager::getInstance().send(broadcast, (uint8_t*)&msg, sizeof(msg));
+
+    if (config.debugESPNOW) {
+        Serial.printf("[HUB HB] Broadcast heartbeat (interval=%ds)\n", config.hubHeartbeatIntervalSec);
+    }
+}
+
+void hubHeartbeatTask(void* param) {
+    (void)param;
+    while(true) {
+        if (config.hubHeartbeatIntervalSec > 0) {
+            sendHubHeartbeat();
+            vTaskDelay(pdMS_TO_TICKS((uint32_t)config.hubHeartbeatIntervalSec * 1000));
+        } else {
+            // Sleep for a while if disabled
+            vTaskDelay(pdMS_TO_TICKS(60000));
+        }
+    }
+}
+
+
 void onHeartbeatReceived(const uint8_t* mac, const HeartbeatMessage& msg) {
     // Skip dummy test devices (MACs starting with AA:BB:CC)
     if (mac[0] == 0xAA && mac[1] == 0xBB && mac[2] == 0xCC) {
@@ -2652,6 +2741,20 @@ void setup() {
         0                        // Core 0 (ESP-NOW + scheduler)
     );
     Serial.printf(" Watchdog task created on Core 0 (priority 2)\n");
+
+    // Start hub heartbeat broadcaster task (if enabled in config)
+    if (config.hubHeartbeatIntervalSec > 0) {
+        xTaskCreatePinnedToCore(
+            hubHeartbeatTask,      // Task function
+            "HubHeartbeat",       // Name
+            4096,                  // Stack size
+            NULL,                  // Parameters
+            1,                     // Priority
+            NULL,                  // Task handle
+            1                      // Core 1
+        );
+        Serial.println(" Hub Heartbeat task created on Core 1");
+    }
 
     // Start Web UI task on Core 1 (Web UI core)
     xTaskCreatePinnedToCore(

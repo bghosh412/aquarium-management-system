@@ -124,6 +124,9 @@ void setup() {
     
     setupHardware();
     setupESPNow();
+
+    // Register NodeBase callbacks (heartbeat handler, etc.)
+    setupNodeBaseCallbacks();
     
     currentState = NodeState::ANNOUNCING;
     Serial.println(" Heater node ready\n");

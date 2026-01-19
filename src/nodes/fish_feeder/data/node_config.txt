@@ -1,0 +1,13 @@
+# Fish Feeder Node Configuration
+NODE_TANK_ID=0
+NODE_NAME=UnmappedFeeder
+FIRMWARE_VERSION=1
+ESPNOW_CHANNEL=11
+DEBUG_SERIAL=true
+DEBUG_ESPNOW=true
+DEBUG_HARDWARE=false
+ANNOUNCE_INTERVAL_MS=5000
+HEARTBEAT_INTERVAL_MS=30000
+CONNECTION_TIMEOUT_MS=90000
+# Hub heartbeat timeout (ms) - if node does not receive hub heartbeat for this long, enter fail-safe
+HUB_HEARTBEAT_TIMEOUT_MS=600000

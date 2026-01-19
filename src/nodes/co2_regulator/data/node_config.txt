@@ -1,10 +1,8 @@
-# Lighting Node Configuration
+# CO2 Regulator Node Configuration
 # Format: KEY=VALUE (no spaces around =)
-# Hub will update NODE_TANK_ID and NODE_NAME during provisioning
 
-# Node Identity (0 = unmapped, waiting for hub provisioning)
 NODE_TANK_ID=0
-NODE_NAME=UnmappedLight
+NODE_NAME=UnmappedCO2
 FIRMWARE_VERSION=1
 
 # ESP-NOW Settings
@@ -20,6 +18,4 @@ ANNOUNCE_INTERVAL_MS=5000
 HEARTBEAT_INTERVAL_MS=30000
 CONNECTION_TIMEOUT_MS=90000
 # Hub heartbeat timeout (ms) - if node does not receive hub heartbeat for this long, enter fail-safe
-# Hub heartbeat timeout (ms) - if node does not receive hub heartbeat for this long, enter fail-safe
-# Default 600000 ms (10 minutes)
 HUB_HEARTBEAT_TIMEOUT_MS=600000

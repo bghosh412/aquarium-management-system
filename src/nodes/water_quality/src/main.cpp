@@ -141,6 +141,9 @@ void setup() {
     
     setupHardware();
     setupESPNow();
+
+    // Register NodeBase callbacks (heartbeat handler, etc.)
+    setupNodeBaseCallbacks();
     
     currentState = NodeState::ANNOUNCING;
     Serial.println(" Water quality node ready\n");

@@ -52,10 +52,19 @@ void setupHardware() {
 
 void enterFailSafeMode() {
     if (nodeConfig.debugSerial) {
-        Serial.println("[WARN] FAIL-SAFE: Holding last lighting state (safe for lights)");
+        Serial.println("[WARN] FAIL-SAFE: Hub heartbeat lost - turning OFF all lights for safety");
     }
-    // Lights can safely maintain last state
-    // No action needed - current state preserved
+    // Force all channels OFF
+    lightState.channel1On = false;
+    lightState.channel2On = false;
+    lightState.channel3On = false;
+
+    // Apply immediately
+    updateHardware();
+
+    if (nodeConfig.debugESPNOW) {
+        Serial.println("[OK] Fail-safe applied: ch1=0 ch2=0 ch3=0");
+    }
 }
 
 static void readPinStatus(uint8_t* statusData) {
@@ -142,6 +151,13 @@ void handleCommand(const uint8_t* mac, const uint8_t* data, size_t len) {
             if (nodeConfig.debugESPNOW) {
                 Serial.println("| [OK] Status request");
             }
+            break;
+
+        case 0xFF: // TEST: Force fail-safe
+            if (nodeConfig.debugSerial) {
+                Serial.println("[TEST] Force-failsafe command received - forcing fail-safe");
+            }
+            enterFailSafeMode();
             break;
 
         default:
@@ -247,6 +263,9 @@ void setup() {
     ESPNowManager::getInstance().onCommandReceived(onCommandReceivedWrapper);
     ESPNowManager::getInstance().onConfigReceived(onConfigReceivedWrapper);
     ESPNowManager::getInstance().onUnmapReceived(onUnmapReceivedWrapper);
+
+    // Register base node callbacks (hub heartbeat handler, etc.)
+    setupNodeBaseCallbacks();
     
     Serial.println("[OK] ESPNowManager ready");
     Serial.printf("   - Channel: %d\n", nodeConfig.espnowChannel);
@@ -262,17 +281,13 @@ void setup() {
 }
 
 void loop() {
-    // Process ESP-NOW messages
-    ESPNowManager::getInstance().processQueue();
+    // Delegate processing, heartbeats, and hub-liveness checks to NodeBase
+    nodeLoop();
     
     // Update hardware state
     updateHardware();
     
-    // Send periodic heartbeat using NodeBase
-    if (millis() - lastHeartbeatSent >= nodeConfig.heartbeatIntervalMs) {
-        lastHeartbeatSent = millis();
-        sendHeartbeat();
-    }
+    // Heartbeat is handled by NodeBase::nodeLoop() - no action required here
     
     // Send periodic ANNOUNCE for discovery (only when unmapped)
     static unsigned long lastAnnounce = 0;
@@ -306,6 +321,8 @@ void loop() {
             Serial.println("-----------------------------------------\n");
         }
     }
+
+
     
     delay(10);
 }

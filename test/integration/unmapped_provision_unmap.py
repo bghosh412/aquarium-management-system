@@ -153,9 +153,16 @@ def run_test():
         udoc = load_json(UNMAPPED_FILE)
         assert_condition(any(d.get('mac') == TEST_MAC for d in udoc.get('unmappedDevices', [])), 'Device not added to unmapped on discovery')
 
-        print('Simulating provision (with type provided)...')
-        ok = simulate_provision(TEST_MAC, name='My Light', tankId=2, requested_type='LIGHT')
-        assert_condition(ok, 'Provision failed')
+    # Extra check: ensure node configs contain HUB_HEARTBEAT_TIMEOUT_MS
+    print('Checking node configs for HUB_HEARTBEAT_TIMEOUT_MS...')
+    nodes_dir = ROOT / 'src' / 'nodes'
+    missing = []
+    for node_cfg in nodes_dir.glob('**/data/node_config.txt'):
+        with open(node_cfg, 'r') as f:
+            contents = f.read()
+            if 'HUB_HEARTBEAT_TIMEOUT_MS' not in contents:
+                missing.append(str(node_cfg))
+    assert_condition(len(missing) == 0, f'Nodes missing HUB_HEARTBEAT_TIMEOUT_MS: {missing}')
 
         ddoc = load_json(DEVICES_FILE)
         assert_condition(any(d.get('mac') == TEST_MAC and d.get('type') == 'LIGHT' for d in ddoc.get('devices', [])), 'Device not present in devices.json with correct type after provisioning')

@@ -21,7 +21,12 @@ uint32_t lastHeartbeatSent = 0;
 uint8_t messageSequence = 0;
 uint32_t nodeUnixTime = 0;  // Synchronized Unix timestamp
 uint32_t nodeBootMillis = 0;  // millis() when time was synced
+// Hub heartbeat tracking (node-side)
+uint32_t lastHubHeartbeatReceived = 0;
+bool hubHeartbeatLost = false;
 
+// Forward declaration for internal handler
+static void onHubHeartbeatReceivedInternal(const uint8_t* mac, const HeartbeatMessage& msg);
 // ============================================================================
 // CONFIGURATION MANAGEMENT
 // ============================================================================
@@ -43,6 +48,7 @@ void loadNodeConfiguration(NodeType defaultType, const char* defaultName) {
     nodeConfig.announceIntervalMs = 5000;
     nodeConfig.heartbeatIntervalMs = 30000;
     nodeConfig.connectionTimeoutMs = 90000;
+    nodeConfig.hubHeartbeatTimeoutMs = 600000; // 10 minutes default
     
     // Attempt to load from filesystem
     if (!LittleFS.begin()) {
@@ -108,6 +114,8 @@ void loadNodeConfiguration(NodeType defaultType, const char* defaultName) {
             nodeConfig.heartbeatIntervalMs = value.toInt();
         } else if (key == "CONNECTION_TIMEOUT_MS") {
             nodeConfig.connectionTimeoutMs = value.toInt();
+        } else if (key == "HUB_HEARTBEAT_TIMEOUT_MS") {
+            nodeConfig.hubHeartbeatTimeoutMs = value.toInt();
         }
     }
     
@@ -286,10 +294,56 @@ void sendHeartbeat() {
     // Broadcast to hub
     uint8_t broadcast[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     ESPNowManager::getInstance().send(broadcast, (uint8_t*)&msg, sizeof(msg));
+    lastHeartbeatSent = millis();
     
     if (nodeConfig.debugESPNOW) {
         Serial.printf("[HB] Heartbeat sent (uptime: %dmin, time: %u, ch=%d)\n",
                       msg.uptimeMinutes, currentUnixTime, nodeConfig.espnowChannel);
+    }
+}
+
+// Internal handler for hub heartbeat
+static void onHubHeartbeatReceivedInternal(const uint8_t* mac, const HeartbeatMessage& msg) {
+    // Only treat heartbeats from a HUB nodeType as hub heartbeat
+    if (msg.header.nodeType == NodeType::HUB) {
+        lastHubHeartbeatReceived = millis();
+        if (hubHeartbeatLost) {
+            // Recovered
+            hubHeartbeatLost = false;
+            if (nodeConfig.debugSerial) {
+                Serial.println("[HB] Hub heartbeat restored - leaving fail-safe");
+            }
+        }
+        if (nodeConfig.debugESPNOW) {
+            Serial.printf("[HB] Hub heartbeat received (time: %u)\n", msg.header.timestamp);
+        }
+    }
+}
+
+void setupNodeBaseCallbacks() {
+    // Register hub heartbeat handler so nodes can detect hub liveness
+    ESPNowManager::getInstance().onHeartbeatReceived(onHubHeartbeatReceivedInternal);
+}
+
+void nodeLoop() {
+    // Process ESP-NOW messages
+    ESPNowManager::getInstance().processQueue();
+
+    // Send our heartbeat periodically
+    if (millis() - lastHeartbeatSent >= nodeConfig.heartbeatIntervalMs) {
+        sendHeartbeat();
+    }
+
+    // Check hub heartbeat timeout
+    if (lastHubHeartbeatReceived > 0 && nodeConfig.hubHeartbeatTimeoutMs > 0) {
+        uint32_t elapsed = millis() - lastHubHeartbeatReceived;
+        if (!hubHeartbeatLost && elapsed > nodeConfig.hubHeartbeatTimeoutMs) {
+            hubHeartbeatLost = true;
+            if (nodeConfig.debugSerial) {
+                Serial.printf("[HB] Hub heartbeat missed for %u ms - entering fail-safe\n", elapsed);
+            }
+            enterFailSafeMode();
+        }
     }
 }
 

@@ -4,7 +4,7 @@
 
 # Heartbeat Monitoring
 HEARTBEAT_ENABLED=true
-HEARTBEAT_INTERVAL_SEC=30
+HEARTBEAT_INTERVAL_SEC=120
 
 # Memory Management
 AGGRESSIVE_MEMORY_MANAGEMENT=true
@@ -22,6 +22,16 @@ MDNS_HOSTNAME=ams
 # ESP-NOW Settings
 ESPNOW_CHANNEL=11
 ESPNOW_MAX_PEERS=20
+
+# Hub heartbeat - broadcast interval in seconds
+# Hub will broadcast a HEARTBEAT every HUB_HEARTBEAT_INTERVAL_SEC seconds (default 120)
+# Hub heartbeat - broadcast interval in seconds
+# Hub will broadcast a HEARTBEAT every HUB_HEARTBEAT_INTERVAL_SEC seconds (default 120)
+HUB_HEARTBEAT_INTERVAL_SEC=120
+
+# Test mode: when enabled, hub exposes debug/test-only APIs (force fail-safe)
+# Set to true for automated integration tests only
+HUB_TEST_MODE=false
 
 # Debug Settings
 DEBUG_SERIAL=true

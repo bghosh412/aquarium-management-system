@@ -587,7 +587,19 @@ void ESPNowManager::onReceiveStatic(const uint8_t* mac, const uint8_t* data, int
             Serial.print(" ");
         }
     }
-    Serial.printf(" | isHub=%d\n", s_instance ? (int)s_instance->_isHub : -1);
+    // Provide more helpful context: whether THIS device is a hub, and whether the sender
+    // appears to be a HUB (based on the MessageHeader nodeType) and the message type.
+    if (len >= (int)sizeof(MessageHeader)) {
+        MessageHeader* hdr = (MessageHeader*)data;
+        bool senderIsHub = (hdr->nodeType == NodeType::HUB);
+        Serial.printf(" | deviceIsHub=%d senderType=%d (isSenderHub=%d) msgType=%d\n",
+                      s_instance ? (int)s_instance->_isHub : -1,
+                      (int)hdr->nodeType,
+                      senderIsHub ? 1 : 0,
+                      (int)hdr->type);
+    } else {
+        Serial.printf(" | deviceIsHub=%d\n", s_instance ? (int)s_instance->_isHub : -1);
+    }
     
     // Queue message for processing in main loop (ISR-safe)
     RxQueueEntry entry;
@@ -813,6 +825,10 @@ void ESPNowManager::processStatus(const uint8_t* mac, const StatusMessage& statu
 }
 
 void ESPNowManager::processHeartbeat(const uint8_t* mac, const HeartbeatMessage& heartbeat) {
+    // Helpful debug: log sender and message details
+    Serial.printf("[HB] Heartbeat received from %02X:%02X:%02X:%02X:%02X:%02X - type=%d nodeType=%d time=%u\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)heartbeat.header.type, (int)heartbeat.header.nodeType, heartbeat.header.timestamp);
+
     // Update peer status (hub only)
     if (_isHub) {
         updatePeerHeartbeat(mac);

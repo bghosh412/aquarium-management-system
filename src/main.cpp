@@ -29,6 +29,7 @@
 #include <Update.h>
 #include <WiFiClientSecure.h>
 #include <map>
+#include <time.h>  // For NTP time
 #include "protocol/messages.h"
 #include "models/Aquarium.h"
 #include "managers/AquariumManager.h"
@@ -88,6 +89,10 @@ HubConfig config;
 // Task handles
 TaskHandle_t watchdogTaskHandle = NULL;
 TaskHandle_t webUiTaskHandle = NULL;
+TaskHandle_t schedulerTaskHandle = NULL;
+
+// NTP time tracking
+static bool ntpSynced = false;
 
 // ESPNowManager callbacks declared here
 void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg);
@@ -426,6 +431,173 @@ void aggressiveMemoryCleanup() {
 }
 
 // ============================================================================
+// LIGHT SCHEDULER TASK - Time-based light control
+// ============================================================================
+
+// Helper: Parse MAC string to bytes
+static bool parseMacAddress(const char* macStr, uint8_t* mac) {
+    return sscanf(macStr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6;
+}
+
+// Helper: Send light command via ESP-NOW using ESPNowManager
+static void sendLightCommand(const uint8_t* mac, uint8_t command) {
+    CommandMessage cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.header.type = MessageType::COMMAND;
+    cmd.header.tankId = 1;
+    cmd.header.nodeType = NodeType::HUB;
+    cmd.header.timestamp = millis();
+    cmd.header.sequenceNum = 0;
+    cmd.commandId = millis() & 0xFF;
+    cmd.commandSeqID = 0;
+    cmd.finalCommand = true;
+    cmd.commandData[0] = command;  // Light command: 10/11=CH1, 20/21=CH2, 30/31=CH3
+    
+    // Use ESPNowManager which handles peer registration - skip online check for scheduler
+    bool result = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+    Serial.printf("[SCHEDULER] Sent command %d to %02X:%02X:%02X:%02X:%02X:%02X - %s\n",
+                  command, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                  result ? "OK" : "FAILED");
+}
+
+// Structure to track last command sent per channel to avoid duplicate sends
+struct ChannelState {
+    bool ch1_on;
+    bool ch2_on;
+    bool ch3_on;
+    int lastCheckMinute;
+};
+static std::map<String, ChannelState> g_channelStates;
+
+void schedulerTask(void* parameter) {
+    Serial.printf("[SCHEDULER] Task started on core %d\n", xPortGetCoreID());
+    
+    // Wait for NTP to sync (timeout after 30 seconds)
+    int waitCount = 0;
+    while (!ntpSynced && waitCount < 60) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        waitCount++;
+    }
+    
+    if (!ntpSynced) {
+        Serial.println("[SCHEDULER] Warning: NTP not synced, scheduler may not work correctly");
+    }
+    
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xCheckInterval = pdMS_TO_TICKS(30000);  // Check every 30 seconds
+    
+    while (true) {
+        // Get current time
+        struct tm timeinfo;
+        if (!getLocalTime(&timeinfo)) {
+            Serial.println("[SCHEDULER] Failed to get local time");
+            vTaskDelayUntil(&xLastWakeTime, xCheckInterval);
+            continue;
+        }
+        
+        int currentHour = timeinfo.tm_hour;
+        int currentMinute = timeinfo.tm_min;
+        int currentTimeMinutes = currentHour * 60 + currentMinute;
+        
+        Serial.printf("[SCHEDULER] Checking schedules at %02d:%02d\n", currentHour, currentMinute);
+        
+        // Load and parse light schedule
+        File file = LittleFS.open("/config/schedule/light-schedule.json", "r");
+        if (!file) {
+            Serial.println("[SCHEDULER] No schedule file found");
+            vTaskDelayUntil(&xLastWakeTime, xCheckInterval);
+            continue;
+        }
+        
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, file);
+        file.close();
+        
+        if (error) {
+            Serial.printf("[SCHEDULER] JSON parse error: %s\n", error.c_str());
+            vTaskDelayUntil(&xLastWakeTime, xCheckInterval);
+            continue;
+        }
+        
+        JsonArray schedules = doc["schedules"].as<JsonArray>();
+        
+        for (JsonObject sched : schedules) {
+            const char* macStr = sched["mac"];
+            if (!macStr) continue;
+            
+            String macKey = String(macStr);
+            uint8_t mac[6];
+            if (!parseMacAddress(macStr, mac)) {
+                Serial.printf("[SCHEDULER] Invalid MAC: %s\n", macStr);
+                continue;
+            }
+            
+            // Initialize channel state if needed
+            if (g_channelStates.find(macKey) == g_channelStates.end()) {
+                g_channelStates[macKey] = {false, false, false, -1};
+            }
+            ChannelState& state = g_channelStates[macKey];
+            
+            // Skip if we already checked this minute
+            if (state.lastCheckMinute == currentTimeMinutes) {
+                continue;
+            }
+            state.lastCheckMinute = currentTimeMinutes;
+            
+            JsonObject schedule = sched["schedule"];
+            
+            // Check each time period (morning, evening, etc.)
+            for (JsonPair period : schedule) {
+                JsonObject periodData = period.value().as<JsonObject>();
+                
+                // Check each channel in this period
+                // Channel 1
+                if (periodData.containsKey("channel1")) {
+                    JsonObject ch1 = periodData["channel1"];
+                    int startMinutes = ch1["start"]["hour"].as<int>() * 60 + ch1["start"]["minute"].as<int>();
+                    int offMinutes = ch1["offTime"]["hour"].as<int>() * 60 + ch1["offTime"]["minute"].as<int>();
+                    
+                    bool shouldBeOn = (currentTimeMinutes >= startMinutes && currentTimeMinutes < offMinutes);
+                    if (shouldBeOn != state.ch1_on) {
+                        sendLightCommand(mac, shouldBeOn ? 11 : 10);  // 11=CH1_ON, 10=CH1_OFF
+                        state.ch1_on = shouldBeOn;
+                    }
+                }
+                
+                // Channel 2
+                if (periodData.containsKey("channel2")) {
+                    JsonObject ch2 = periodData["channel2"];
+                    int startMinutes = ch2["start"]["hour"].as<int>() * 60 + ch2["start"]["minute"].as<int>();
+                    int offMinutes = ch2["offTime"]["hour"].as<int>() * 60 + ch2["offTime"]["minute"].as<int>();
+                    
+                    bool shouldBeOn = (currentTimeMinutes >= startMinutes && currentTimeMinutes < offMinutes);
+                    if (shouldBeOn != state.ch2_on) {
+                        sendLightCommand(mac, shouldBeOn ? 21 : 20);  // 21=CH2_ON, 20=CH2_OFF
+                        state.ch2_on = shouldBeOn;
+                    }
+                }
+                
+                // Channel 3
+                if (periodData.containsKey("channel3")) {
+                    JsonObject ch3 = periodData["channel3"];
+                    int startMinutes = ch3["start"]["hour"].as<int>() * 60 + ch3["start"]["minute"].as<int>();
+                    int offMinutes = ch3["offTime"]["hour"].as<int>() * 60 + ch3["offTime"]["minute"].as<int>();
+                    
+                    bool shouldBeOn = (currentTimeMinutes >= startMinutes && currentTimeMinutes < offMinutes);
+                    if (shouldBeOn != state.ch3_on) {
+                        sendLightCommand(mac, shouldBeOn ? 31 : 30);  // 31=CH3_ON, 30=CH3_OFF
+                        state.ch3_on = shouldBeOn;
+                    }
+                }
+            }
+        }
+        
+        vTaskDelayUntil(&xLastWakeTime, xCheckInterval);
+    }
+}
+
+// ============================================================================
 // WATCHDOG TASK (Core 0) - Device Health Monitoring
 // ============================================================================
 
@@ -550,11 +722,11 @@ bool setupFilesystem() {
 void setupWiFi() {
     Serial.println(" Starting WiFi configuration...");
     
-    // CRITICAL: Force WiFi to STA mode only (not AP+STA)
-    // ESP-NOW peer registration with ifidx=WIFI_IF_STA requires STA-only mode
-    // Set WiFi to AP only for test: Hub acting purely as AP (receiver)
-    WiFi.mode(WIFI_AP);
-    Serial.println(" [HUB] WiFi mode set to: WIFI_AP (AP only - test)");
+    // Use AP+STA mode to allow both:
+    // - STA: Connect to home WiFi for NTP time sync
+    // - AP: Fallback config portal and ESP-NOW
+    WiFi.mode(WIFI_AP_STA);
+    Serial.println(" [HUB] WiFi mode set to: WIFI_AP_STA (dual mode for NTP + ESP-NOW)");
 
 
     
@@ -582,6 +754,29 @@ void setupWiFi() {
     Serial.printf("   - IP: %s\n", WiFi.localIP().toString().c_str());
     Serial.printf("   - RSSI: %d dBm\n", WiFi.RSSI());
     Serial.printf("   - Hostname: %s\n", WiFi.getHostname());
+    
+    // Configure NTP time synchronization
+    Serial.println(" Configuring NTP time sync...");
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");  // GMT offset 0, daylight offset 0
+    setenv("TZ", "IST-5:30", 1);  // India Standard Time (UTC+5:30)
+    tzset();
+    
+    // Wait for NTP sync (max 10 seconds)
+    struct tm timeinfo;
+    int ntpRetry = 0;
+    while (!getLocalTime(&timeinfo) && ntpRetry < 20) {
+        Serial.print(".");
+        delay(500);
+        ntpRetry++;
+    }
+    if (ntpRetry < 20) {
+        ntpSynced = true;
+        Serial.printf("\n   - NTP synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+                      timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+        Serial.println("\n   - NTP sync failed (will retry in scheduler)");
+    }
     
     // CRITICAL: Set WiFi channel to match ESP-NOW channel
     // WiFi STA and ESP-NOW must use the same channel
@@ -990,11 +1185,24 @@ void setupWebServer() {
     
     // API endpoints
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
+        struct tm timeinfo;
+        bool hasTime = getLocalTime(&timeinfo);
+        
         String json = "{";
         json += "\"uptime\":" + String(millis() / 1000) + ",";
         json += "\"heap_free\":" + String(ESP.getFreeHeap()) + ",";
         json += "\"psram_free\":" + String(ESP.getFreePsram()) + ",";
-        json += "\"wifi_rssi\":" + String(WiFi.RSSI());
+        json += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
+        json += "\"ntp_synced\":" + String(ntpSynced ? "true" : "false") + ",";
+        if (hasTime) {
+            char timeBuf[32];
+            snprintf(timeBuf, sizeof(timeBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+                     timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                     timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+            json += "\"time\":\"" + String(timeBuf) + "\"";
+        } else {
+            json += "\"time\":null";
+        }
         json += "}";
         request->send(200, "application/json", json);
     });
@@ -2849,10 +3057,13 @@ void setupESPNow() {
 // ============================================================================
 
 void setup() {
-    // Initialize serial
+    // Initialize serial - HWCDC needs time to enumerate after boot
+    delay(2000);  // Wait for USB CDC to enumerate
     Serial.begin(115200);
-    delay(1000);  // Wait for serial to stabilize
+    while (!Serial && millis() < 5000);  // Wait up to 5s for serial connection
+    delay(500);
     
+    Serial.println("=== SERIAL INITIALIZED ===");
     Serial.println("\n\n");
     Serial.println("");
     Serial.println("   AQUARIUM MANAGEMENT SYSTEM - HUB");
@@ -2930,6 +3141,18 @@ void setup() {
         1                        // Core 1 (Web UI)
     );
     Serial.printf(" Web UI task created on Core 1 (priority 1)\n");
+    
+    // Start Light Scheduler task on Core 1
+    xTaskCreatePinnedToCore(
+        schedulerTask,           // Task function
+        "LightScheduler",        // Name
+        8192,                    // Stack size (needs JSON parsing)
+        NULL,                    // Parameters
+        1,                       // Priority
+        &schedulerTaskHandle,    // Task handle
+        1                        // Core 1
+    );
+    Serial.printf(" Light Scheduler task created on Core 1 (priority 1)\n");
     
     Serial.println();
     Serial.println("");

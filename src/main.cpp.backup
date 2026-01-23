@@ -1,0 +1,13 @@
+#include <Arduino.h>
+
+void setup() {
+    Serial.begin(115200);
+    delay(3000);
+    Serial.println("=== ESP32-S3 Serial Test ===");
+    Serial.println("If you see this, Serial is working!");
+}
+
+void loop() {
+    Serial.println("Heartbeat...");
+    delay(1000);
+}

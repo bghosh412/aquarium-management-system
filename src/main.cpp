@@ -1419,6 +1419,33 @@ void setupWebServer() {
             }
         }
 
+        // If schedule exists and uses offTime, compute duration fields for UI convenience
+        if (!found.isNull()) {
+            JsonObject sched = found["schedule"].as<JsonObject>();
+            if (!sched.isNull()) {
+                const char* periods[] = {"morning", "evening"};
+                for (const char* p : periods) {
+                    if (sched.containsKey(p)) {
+                        JsonObject sec = sched[p].as<JsonObject>();
+                        if (sec.containsKey("start") && sec.containsKey("offTime")) {
+                            int sh = sec["start"]["hour"] | 0;
+                            int sm = sec["start"]["minute"] | 0;
+                            int oh = sec["offTime"]["hour"] | 0;
+                            int om = sec["offTime"]["minute"] | 0;
+                            int startMinutes = sh * 60 + sm;
+                            int offMinutes = oh * 60 + om;
+                            int diff = (offMinutes - startMinutes + 24*60) % (24*60);
+                            int dh = diff / 60;
+                            int dm = diff % 60;
+                            JsonObject dur = sec.createNestedObject("duration");
+                            dur["hour"] = dh;
+                            dur["minute"] = dm;
+                        }
+                    }
+                }
+            }
+        }
+
         DynamicJsonDocument responseDoc(2048);
         responseDoc["success"] = true;
         if (!found.isNull()) {
@@ -1480,7 +1507,44 @@ void setupWebServer() {
         newEntry["mac"] = macStr;
         newEntry["tankId"] = body["tankId"] | 0;
         newEntry["deviceName"] = body["deviceName"] | "";
-        newEntry["schedule"] = schedule;
+        // Build schedule with offTime fields computed from start + duration
+        JsonObject newSched = newEntry.createNestedObject("schedule");
+        const char* periods[] = {"morning","evening"};
+        for (const char* p : periods) {
+            if (schedule.containsKey(p)) {
+                JsonObject sec = schedule[p].as<JsonObject>();
+                JsonObject dest = newSched.createNestedObject(p);
+                if (sec.containsKey("start")) {
+                    JsonObject s = sec["start"].as<JsonObject>();
+                    dest.createNestedObject("start");
+                    // Normalize start time to valid 24-hour values
+                    int sh = s["hour"] | 0;
+                    int sm = s["minute"] | 0;
+                    sh = ((sh % 24) + 24) % 24; // ensure 0-23
+                    sm = (sm % 60 + 60) % 60;   // ensure 0-59
+                    dest["start"]["hour"] = sh;
+                    dest["start"]["minute"] = sm;
+                }
+                if (sec.containsKey("duration")) {
+                    JsonObject d = sec["duration"].as<JsonObject>();
+                    int sh = dest["start"]["hour"] | 0;
+                    int sm = dest["start"]["minute"] | 0;
+                    int dh = d["hour"] | 0;
+                    int dm = d["minute"] | 0;
+                    // Normalize duration and compute offTime (24-hour wrap)
+                    dh = max(0, dh);
+                    dm = ((dm % 60) + 60) % 60;
+                    int startMinutes = sh*60 + sm;
+                    int offMinutes = (startMinutes + dh*60 + dm) % (24*60);
+                    dest.createNestedObject("offTime");
+                    dest["offTime"]["hour"] = offMinutes / 60;
+                    dest["offTime"]["minute"] = offMinutes % 60;
+                }
+                if (sec.containsKey("ramp")) {
+                    dest["ramp"] = sec["ramp"];
+                }
+            }
+        }
         newEntry["updatedAt"] = millis();
 
         file = LittleFS.open("/config/light-schedule.json", "w");
@@ -1641,6 +1705,23 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     serializeJson(doc, resp);
     request->send(200, "application/json", resp);
 });
+
+    // GET settings file list
+    server.on("/api/settings/files", HTTP_GET, [](AsyncWebServerRequest *request){
+        DynamicJsonDocument doc(256);
+        JsonArray files = doc.createNestedArray("files");
+
+        for (const char* fileName : kConfigJsonFiles) {
+            String path = String("/config/") + fileName;
+            if (LittleFS.exists(path)) {
+                files.add(String(fileName));
+            }
+        }
+
+        String resp;
+        serializeJson(doc, resp);
+        request->send(200, "application/json", resp);
+    });
 
     // GET settings file download
     server.on("/api/settings/download", HTTP_GET, [](AsyncWebServerRequest *request){

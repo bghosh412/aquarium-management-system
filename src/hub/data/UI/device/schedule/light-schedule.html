@@ -207,14 +207,30 @@
         populateDropdown('morningStartMinute', [0, 15, 30, 45]);
         populateAMPM('morningStartAMPM');
         populateDropdown('morningDurationHour', Array.from({length: 13}, (_, i) => i), false);
-        populateDropdown('morningDurationMinute', Array.from({length: 60}, (_, i) => i));
+        populateDropdown('morningDurationMinute', [0, 15, 30, 45]);
         
         // Evening Start Time: hour (0-11), minute (0,15,30,45), AM/PM
         populateDropdown('eveningStartHour', Array.from({length: 12}, (_, i) => i), false);
         populateDropdown('eveningStartMinute', [0, 15, 30, 45]);
         populateAMPM('eveningStartAMPM');
         populateDropdown('eveningDurationHour', Array.from({length: 13}, (_, i) => i), false);
-        populateDropdown('eveningDurationMinute', Array.from({length: 60}, (_, i) => i));
+        populateDropdown('eveningDurationMinute', [0, 15, 30, 45]);
+
+        // Enforce duration minute options explicitly (fixes deploy/caching edge cases)
+        (function enforceDurationMinutes(){
+            const minutes = [0,15,30,45];
+            ['morningDurationMinute','eveningDurationMinute'].forEach(id => {
+                const sel = document.getElementById(id);
+                if (!sel) return;
+                sel.innerHTML = '';
+                minutes.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m;
+                    opt.textContent = String(m).padStart(2,'0');
+                    sel.appendChild(opt);
+                });
+            });
+        })();
 
         // Button handlers
         let currentDevice = null;

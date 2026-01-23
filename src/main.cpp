@@ -511,10 +511,15 @@ bool setupFilesystem() {
         }
     }
 
+    // Ensure schedule directory exists
+    if (!LittleFS.exists("/config/schedule")) {
+        LittleFS.mkdir("/config/schedule");
+    }
+
     // Initialize light-schedule.json if it doesn't exist
-    if (!LittleFS.exists("/config/light-schedule.json")) {
+    if (!LittleFS.exists("/config/schedule/light-schedule.json")) {
         Serial.println(" Creating light-schedule.json...");
-        File file = LittleFS.open("/config/light-schedule.json", "w");
+        File file = LittleFS.open("/config/schedule/light-schedule.json", "w");
         if (file) {
             file.print("{\"schedules\":[]}");
             file.close();
@@ -1395,7 +1400,7 @@ void setupWebServer() {
         }
 
         String macStr = request->getParam("mac")->value();
-        File file = LittleFS.open("/config/light-schedule.json", "r");
+        File file = LittleFS.open("/config/schedule/light-schedule.json", "r");
         if (!file) {
             request->send(200, "application/json", "{\"success\":true,\"schedule\":null}");
             return;
@@ -1419,37 +1424,92 @@ void setupWebServer() {
             }
         }
 
-        // If schedule exists and uses offTime, compute duration fields for UI convenience
-        if (!found.isNull()) {
-            JsonObject sched = found["schedule"].as<JsonObject>();
-            if (!sched.isNull()) {
-                const char* periods[] = {"morning", "evening"};
-                for (const char* p : periods) {
-                    if (sched.containsKey(p)) {
-                        JsonObject sec = sched[p].as<JsonObject>();
-                        if (sec.containsKey("start") && sec.containsKey("offTime")) {
-                            int sh = sec["start"]["hour"] | 0;
-                            int sm = sec["start"]["minute"] | 0;
-                            int oh = sec["offTime"]["hour"] | 0;
-                            int om = sec["offTime"]["minute"] | 0;
-                            int startMinutes = sh * 60 + sm;
-                            int offMinutes = oh * 60 + om;
-                            int diff = (offMinutes - startMinutes + 24*60) % (24*60);
-                            int dh = diff / 60;
-                            int dm = diff % 60;
-                            JsonObject dur = sec.createNestedObject("duration");
-                            dur["hour"] = dh;
-                            dur["minute"] = dm;
-                        }
-                    }
-                }
-            }
-        }
-
         DynamicJsonDocument responseDoc(2048);
         responseDoc["success"] = true;
+
         if (!found.isNull()) {
-            responseDoc["schedule"] = found;
+            JsonObject responseSchedule = responseDoc.createNestedObject("schedule");
+            responseSchedule["mac"] = found["mac"] | "";
+            responseSchedule["tankId"] = found["tankId"] | 0;
+            responseSchedule["deviceName"] = found["deviceName"] | "";
+
+            JsonObject sched = responseSchedule.createNestedObject("schedule");
+            JsonObject storedSched = found["schedule"].as<JsonObject>();
+
+            auto buildUiSection = [&](const char* key) {
+                if (storedSched.isNull() || !storedSched.containsKey(key)) {
+                    return;
+                }
+
+                JsonObject section = storedSched[key].as<JsonObject>();
+                JsonObject outSection = sched.createNestedObject(key);
+
+                if (section.containsKey("channel1")) {
+                    JsonObject ch1 = section["channel1"].as<JsonObject>();
+                    JsonObject ch2 = section["channel2"].as<JsonObject>();
+                    JsonObject ch3 = section["channel3"].as<JsonObject>();
+
+                    int sh = ch1["start"]["hour"] | 0;
+                    int sm = ch1["start"]["minute"] | 0;
+                    int oh = ch1["offTime"]["hour"] | 0;
+                    int om = ch1["offTime"]["minute"] | 0;
+
+                    int startMinutes = (sh * 60 + sm) % (24*60);
+                    int offMinutes = (oh * 60 + om) % (24*60);
+                    int diff = (offMinutes - startMinutes + 24*60) % (24*60);
+
+                    JsonObject start = outSection.createNestedObject("start");
+                    start["hour"] = (startMinutes / 60) % 24;
+                    start["minute"] = startMinutes % 60;
+
+                    JsonObject duration = outSection.createNestedObject("duration");
+                    duration["hour"] = diff / 60;
+                    duration["minute"] = diff % 60;
+
+                    bool ramp = false;
+                    if (!ch2.isNull() && !ch3.isNull()) {
+                        int ch1Start = startMinutes;
+                        int ch1Off = offMinutes;
+                        int ch2Start = ((ch2["start"]["hour"] | 0) * 60 + (ch2["start"]["minute"] | 0)) % (24*60);
+                        int ch2Off = ((ch2["offTime"]["hour"] | 0) * 60 + (ch2["offTime"]["minute"] | 0)) % (24*60);
+                        int ch3Start = ((ch3["start"]["hour"] | 0) * 60 + (ch3["start"]["minute"] | 0)) % (24*60);
+                        int ch3Off = ((ch3["offTime"]["hour"] | 0) * 60 + (ch3["offTime"]["minute"] | 0)) % (24*60);
+
+                        bool ch2Matches = (ch2Start == (ch1Start + 5) % (24*60)) &&
+                                          (ch2Off == (ch1Off - 5 + 24*60) % (24*60));
+                        bool ch3Matches = (ch3Start == (ch2Start + 5) % (24*60)) &&
+                                          (ch3Off == (ch2Off - 5 + 24*60) % (24*60));
+                        ramp = ch2Matches && ch3Matches;
+                    }
+
+                    outSection["ramp"] = ramp;
+                } else if (section.containsKey("start") && section.containsKey("offTime")) {
+                    JsonObject s = section["start"].as<JsonObject>();
+                    JsonObject o = section["offTime"].as<JsonObject>();
+
+                    int sh = s["hour"] | 0;
+                    int sm = s["minute"] | 0;
+                    int oh = o["hour"] | 0;
+                    int om = o["minute"] | 0;
+
+                    int startMinutes = (sh * 60 + sm) % (24*60);
+                    int offMinutes = (oh * 60 + om) % (24*60);
+                    int diff = (offMinutes - startMinutes + 24*60) % (24*60);
+
+                    JsonObject start = outSection.createNestedObject("start");
+                    start["hour"] = (startMinutes / 60) % 24;
+                    start["minute"] = startMinutes % 60;
+
+                    JsonObject duration = outSection.createNestedObject("duration");
+                    duration["hour"] = diff / 60;
+                    duration["minute"] = diff % 60;
+
+                    outSection["ramp"] = section["ramp"] | false;
+                }
+            };
+
+            buildUiSection("morning");
+            buildUiSection("evening");
         } else {
             responseDoc["schedule"] = nullptr;
         }
@@ -1483,7 +1543,7 @@ void setupWebServer() {
             return;
         }
 
-        File file = LittleFS.open("/config/light-schedule.json", "r");
+        File file = LittleFS.open("/config/schedule/light-schedule.json", "r");
         DynamicJsonDocument doc(4096);
         if (file) {
             deserializeJson(doc, file);
@@ -1507,47 +1567,69 @@ void setupWebServer() {
         newEntry["mac"] = macStr;
         newEntry["tankId"] = body["tankId"] | 0;
         newEntry["deviceName"] = body["deviceName"] | "";
-        // Build schedule with offTime fields computed from start + duration
+
         JsonObject newSched = newEntry.createNestedObject("schedule");
         const char* periods[] = {"morning","evening"};
+
         for (const char* p : periods) {
-            if (schedule.containsKey(p)) {
-                JsonObject sec = schedule[p].as<JsonObject>();
-                JsonObject dest = newSched.createNestedObject(p);
-                if (sec.containsKey("start")) {
-                    JsonObject s = sec["start"].as<JsonObject>();
-                    dest.createNestedObject("start");
-                    // Normalize start time to valid 24-hour values
-                    int sh = s["hour"] | 0;
-                    int sm = s["minute"] | 0;
-                    sh = ((sh % 24) + 24) % 24; // ensure 0-23
-                    sm = (sm % 60 + 60) % 60;   // ensure 0-59
-                    dest["start"]["hour"] = sh;
-                    dest["start"]["minute"] = sm;
-                }
-                if (sec.containsKey("duration")) {
-                    JsonObject d = sec["duration"].as<JsonObject>();
-                    int sh = dest["start"]["hour"] | 0;
-                    int sm = dest["start"]["minute"] | 0;
-                    int dh = d["hour"] | 0;
-                    int dm = d["minute"] | 0;
-                    // Normalize duration and compute offTime (24-hour wrap)
-                    dh = max(0, dh);
-                    dm = ((dm % 60) + 60) % 60;
-                    int startMinutes = sh*60 + sm;
-                    int offMinutes = (startMinutes + dh*60 + dm) % (24*60);
-                    dest.createNestedObject("offTime");
-                    dest["offTime"]["hour"] = offMinutes / 60;
-                    dest["offTime"]["minute"] = offMinutes % 60;
-                }
-                if (sec.containsKey("ramp")) {
-                    dest["ramp"] = sec["ramp"];
-                }
+            if (!schedule.containsKey(p)) {
+                continue;
+            }
+
+            JsonObject sec = schedule[p].as<JsonObject>();
+            JsonObject dest = newSched.createNestedObject(p);
+
+            JsonObject s = sec["start"].as<JsonObject>();
+            JsonObject d = sec["duration"].as<JsonObject>();
+            bool ramp = sec["ramp"] | false;
+
+            int sh = s["hour"] | 0;
+            int sm = s["minute"] | 0;
+            int dh = d["hour"] | 0;
+            int dm = d["minute"] | 0;
+
+            sh = ((sh % 24) + 24) % 24;
+            sm = ((sm % 60) + 60) % 60;
+            dh = max(0, dh);
+            dm = ((dm % 60) + 60) % 60;
+
+            int startMinutes = sh * 60 + sm;
+            int offMinutes = (startMinutes + dh * 60 + dm) % (24*60);
+
+            auto setChannel = [&](JsonObject channel, int startMin, int offMin) {
+                JsonObject startObj = channel.createNestedObject("start");
+                startObj["hour"] = (startMin / 60) % 24;
+                startObj["minute"] = startMin % 60;
+                JsonObject offObj = channel.createNestedObject("offTime");
+                offObj["hour"] = (offMin / 60) % 24;
+                offObj["minute"] = offMin % 60;
+            };
+
+            JsonObject ch1 = dest.createNestedObject("channel1");
+            JsonObject ch2 = dest.createNestedObject("channel2");
+            JsonObject ch3 = dest.createNestedObject("channel3");
+
+            if (!ramp) {
+                setChannel(ch1, startMinutes, offMinutes);
+                setChannel(ch2, startMinutes, offMinutes);
+                setChannel(ch3, startMinutes, offMinutes);
+            } else {
+                int ch1Start = startMinutes;
+                int ch1Off = offMinutes;
+                int ch2Start = (ch1Start + 5) % (24*60);
+                int ch2Off = (ch1Off - 5 + 24*60) % (24*60);
+                int ch3Start = (ch2Start + 5) % (24*60);
+                int ch3Off = (ch2Off - 5 + 24*60) % (24*60);
+
+                setChannel(ch1, ch1Start, ch1Off);
+                setChannel(ch2, ch2Start, ch2Off);
+                setChannel(ch3, ch3Start, ch3Off);
             }
         }
+
         newEntry["updatedAt"] = millis();
 
-        file = LittleFS.open("/config/light-schedule.json", "w");
+        file = LittleFS.open("/config/schedule/light-schedule.json", "w");
         if (!file) {
             request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write light-schedule.json\"}");
             return;
@@ -2110,7 +2192,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         }
 
         // Remove from light-schedule.json
-        File schedFile = LittleFS.open("/config/light-schedule.json", "r");
+        File schedFile = LittleFS.open("/config/schedule/light-schedule.json", "r");
         DynamicJsonDocument schedDoc(4096);
         if (schedFile) {
             deserializeJson(schedDoc, schedFile);
@@ -2123,7 +2205,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     schedules.remove(i);
                 }
             }
-            schedFile = LittleFS.open("/config/light-schedule.json", "w");
+            schedFile = LittleFS.open("/config/schedule/light-schedule.json", "w");
             serializeJson(schedDoc, schedFile);
             schedFile.close();
         }

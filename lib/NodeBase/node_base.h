@@ -91,6 +91,15 @@ void sendAnnounce();
 void sendStatusAck(const uint8_t* mac, uint8_t commandId, uint8_t statusCode, const uint8_t* data = nullptr, size_t dataLen = 0);
 
 // ============================================================================
+// OTA COMMAND HANDLING (Common to all nodes)
+// ============================================================================
+
+// Checks if command is an OTA command and handles it
+// Returns true if command was an OTA command (handled internally)
+// Returns false if command should be passed to device-specific handleCommand()
+bool handleOtaCommand(const uint8_t* mac, const CommandMessage& cmd);
+
+// ============================================================================
 // FUNCTIONS THAT MUST BE IMPLEMENTED BY EACH NODE TYPE
 // ============================================================================
 

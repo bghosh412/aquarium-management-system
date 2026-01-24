@@ -20,6 +20,7 @@ ESPNowManager::ESPNowManager()
 {
     // Initialize callbacks and other members in constructor body to avoid Wreorder warnings
     _commandCallback = nullptr;
+    _rawCommandCallback = nullptr;
     _statusCallback = nullptr;
     _heartbeatCallback = nullptr;
     _announceCallback = nullptr;
@@ -435,6 +436,10 @@ void ESPNowManager::onCommandReceived(void (*callback)(const uint8_t* mac, const
     _commandCallback = callback;
 }
 
+void ESPNowManager::onRawCommandReceived(bool (*callback)(const uint8_t* mac, const CommandMessage& cmd)) {
+    _rawCommandCallback = callback;
+}
+
 void ESPNowManager::onStatusReceived(void (*callback)(const uint8_t* mac, const StatusMessage& status)) {
     _statusCallback = callback;
 }
@@ -575,30 +580,19 @@ void ESPNowManager::onReceiveStatic(const uint8_t* mac, const uint8_t* data, int
 #endif
     if (!s_instance || !s_instance->_initialized) return;
     
-    // Debug: Log every received message
-    Serial.printf("[RX] Got %d bytes from %02X:%02X:%02X:%02X:%02X:%02X\n",
-                 len, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-    // UNCONDITIONAL raw hex dump for debugging
-    Serial.print("[RX-RAW] ");
-    for (int i = 0; i < len; i++) {
-        Serial.printf("%02X", data[i]);
-        if (i + 1 < len) {
-            Serial.print(" ");
-        }
-    }
-    // Provide more helpful context: whether THIS device is a hub, and whether the sender
-    // appears to be a HUB (based on the MessageHeader nodeType) and the message type.
+    // Only log non-COMMAND messages to avoid OOM during OTA (thousands of chunks)
+    // COMMAND messages (type 4) are OTA chunks - don't log them
+    bool shouldLog = true;
     if (len >= (int)sizeof(MessageHeader)) {
         MessageHeader* hdr = (MessageHeader*)data;
-        bool senderIsHub = (hdr->nodeType == NodeType::HUB);
-        Serial.printf(" | deviceIsHub=%d senderType=%d (isSenderHub=%d) msgType=%d\n",
-                      s_instance ? (int)s_instance->_isHub : -1,
-                      (int)hdr->nodeType,
-                      senderIsHub ? 1 : 0,
-                      (int)hdr->type);
-    } else {
-        Serial.printf(" | deviceIsHub=%d\n", s_instance ? (int)s_instance->_isHub : -1);
+        if (hdr->type == MessageType::COMMAND) {
+            shouldLog = false;  // Skip logging for OTA chunks
+        }
+    }
+    
+    if (shouldLog) {
+        Serial.printf("[RX] Got %d bytes from %02X:%02X:%02X:%02X:%02X:%02X\n",
+                     len, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
     
     // Queue message for processing in main loop (ISR-safe)
@@ -647,21 +641,21 @@ void ESPNowManager::onSendStatic(const uint8_t* mac, esp_now_send_status_t statu
 void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* data, int len) {
     _stats.messagesReceived++;
     
-    Serial.printf("[ESPNowMgr] processReceivedMessage: len=%d\n", len);
-    
     // Validate minimum size
     if (len < sizeof(MessageHeader)) {
-        Serial.println("[ERR] Message too small");
         return;
     }
     
     MessageHeader* header = (MessageHeader*)data;
-    Serial.printf("[ESPNowMgr] MessageType=%d (0x%02X)\n", (int)header->type, (uint8_t)header->type);
+    
+    // Only log non-COMMAND messages to avoid OOM during OTA
+    if (header->type != MessageType::COMMAND) {
+        Serial.printf("[ESPNowMgr] MessageType=%d (0x%02X)\n", (int)header->type, (uint8_t)header->type);
+    }
     
     // Check for duplicate (sequence number validation)
     if (isDuplicate(mac, header->sequenceNum)) {
         _stats.duplicatesIgnored++;
-        Serial.printf(" Duplicate message ignored (seq %d)\n", header->sequenceNum);
         return;
     }
     
@@ -677,8 +671,6 @@ void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* da
             Serial.println("[ESPNowMgr] Routing to processStatus");
             if (len >= sizeof(StatusMessage)) {
                 processStatus(mac, *(StatusMessage*)data);
-            } else {
-                Serial.printf("[ERR] STATUS too small: %d < %d\n", len, sizeof(StatusMessage));
             }
             break;
             
@@ -733,11 +725,18 @@ void ESPNowManager::processReceivedMessage(const uint8_t* mac, const uint8_t* da
 void ESPNowManager::processCommand(const uint8_t* mac, const CommandMessage& cmd) {
     // Commands are for nodes only
     if (_isHub) {
-        Serial.println("[WARN]  Hub received COMMAND (unexpected)");
         return;
     }
     
     _stats.fragmentsReceived++;
+    
+    // First, check if the raw command callback wants to handle this (for OTA)
+    if (_rawCommandCallback) {
+        if (_rawCommandCallback(mac, cmd)) {
+            // Command was handled by raw callback (e.g., OTA)
+            return;
+        }
+    }
     
     // Check if this is a fragmented message
     if (cmd.commandSeqID == 0 && cmd.finalCommand) {

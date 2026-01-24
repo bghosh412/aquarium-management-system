@@ -1,6 +1,13 @@
 #include "node_base.h"
 #include "ESPNowManager.h"
 
+// ESP8266 OTA support
+#ifdef ESP8266
+    #include <Updater.h>
+#else
+    #include <Update.h>
+#endif
+
 // ============================================================================
 // SHARED NODE BASE IMPLEMENTATION
 // ============================================================================
@@ -24,6 +31,52 @@ uint32_t nodeBootMillis = 0;  // millis() when time was synced
 // Hub heartbeat tracking (node-side)
 uint32_t lastHubHeartbeatReceived = 0;
 bool hubHeartbeatLost = false;
+
+// ============================================================================
+// OTA STATE (Common to all nodes)
+// ============================================================================
+
+// Maximum chunks we can track (12000 chunks = ~348KB firmware)
+#define OTA_MAX_CHUNKS 12000
+#define OTA_BITSET_SIZE ((OTA_MAX_CHUNKS + 7) / 8)  // 1500 bytes
+
+struct OtaState {
+    bool active;            // OTA transfer in progress
+    uint8_t type;           // OTA_CMD_FIRMWARE_CHUNK or OTA_CMD_CONFIG_CHUNK
+    uint8_t commandId;      // Command ID for this OTA session
+    uint32_t totalSize;     // Expected total bytes
+    uint32_t receivedBytes; // Bytes received so far
+    uint16_t expectedChunk; // Next expected chunk index (for sequential check)
+    uint16_t totalChunks;   // Total expected chunks (calculated from totalSize)
+    uint16_t chunksReceived; // Count of chunks received
+    uint16_t highestChunkIdx; // Highest chunkIndex received
+    uint8_t* buffer;        // Buffer for config file (heap allocated)
+    size_t bufferSize;      // Size of allocated buffer
+    bool beginCalled;       // For firmware: Update.begin() called
+    uint8_t* receivedBitset; // Bitset tracking received chunkIndex (NOT commandSeqID)
+};
+
+static OtaState otaState = {0};
+
+// Helper to set/check bitset - uses chunkIndex (0-based)
+static inline void otaSetChunkReceived(uint16_t chunkIndex) {
+    if (otaState.receivedBitset && chunkIndex < OTA_MAX_CHUNKS) {
+        otaState.receivedBitset[chunkIndex / 8] |= (1 << (chunkIndex % 8));
+    }
+}
+
+static inline bool otaIsChunkReceived(uint16_t chunkIndex) {
+    if (otaState.receivedBitset && chunkIndex < OTA_MAX_CHUNKS) {
+        return (otaState.receivedBitset[chunkIndex / 8] & (1 << (chunkIndex % 8))) != 0;
+    }
+    return false;
+}
+
+// Forward declarations
+static void handleOtaBegin(const uint8_t* mac, const CommandMessage& cmd);
+static void handleOtaChunk(const uint8_t* mac, const CommandMessage& cmd);
+static void handleOtaEnd(const uint8_t* mac, const CommandMessage& cmd);
+static void resetOtaState();
 
 // Forward declaration for internal handler
 static void onHubHeartbeatReceivedInternal(const uint8_t* mac, const HeartbeatMessage& msg);
@@ -473,5 +526,310 @@ void sendStatusAck(const uint8_t* mac, uint8_t commandId, uint8_t statusCode, co
             Serial.println("[ERR] STATUS message failed to send - check peer registration and channel");
             Serial.flush();
         }
+    }
+}
+
+// ============================================================================
+// OTA COMMAND HANDLERS (Common to all nodes)
+// ============================================================================
+
+static void resetOtaState() {
+    if (otaState.buffer != nullptr) {
+        free(otaState.buffer);
+        otaState.buffer = nullptr;
+    }
+    if (otaState.receivedBitset != nullptr) {
+        free(otaState.receivedBitset);
+        otaState.receivedBitset = nullptr;
+    }
+    if (otaState.type == OTA_CMD_FIRMWARE_CHUNK && otaState.beginCalled) {
+        Update.end(false);  // ESP8266 doesn't have abort(), use end(false)
+    }
+    memset(&otaState, 0, sizeof(otaState));
+}
+
+static void handleOtaBegin(const uint8_t* mac, const CommandMessage& cmd) {
+    // Reset any previous OTA state
+    resetOtaState();
+    
+    otaState.type = cmd.commandData[1];  // Firmware or config
+    memcpy(&otaState.totalSize, &cmd.commandData[2], 4);
+    uint8_t chunkSize = cmd.commandData[6];
+    
+    otaState.active = true;
+    otaState.commandId = cmd.commandId;
+    otaState.receivedBytes = 0;
+    otaState.expectedChunk = 0;
+    otaState.chunksReceived = 0;
+    otaState.highestChunkIdx = 0;
+    
+    // Calculate total expected chunks
+    otaState.totalChunks = (otaState.totalSize + chunkSize - 1) / chunkSize;
+    
+    // Allocate bitset for tracking received chunks (by chunkIndex)
+    otaState.receivedBitset = (uint8_t*)malloc(OTA_BITSET_SIZE);
+    if (otaState.receivedBitset) {
+        memset(otaState.receivedBitset, 0, OTA_BITSET_SIZE);
+    } else {
+        Serial.println("[OTA] WARN: Could not allocate bitset for chunk tracking");
+    }
+    
+    if (nodeConfig.debugSerial) {
+        Serial.printf("[OTA] BEGIN type=0x%02X size=%u chunkSize=%u totalChunks=%u\n", 
+                      otaState.type, otaState.totalSize, chunkSize, otaState.totalChunks);
+    }
+    
+    if (otaState.type == OTA_CMD_CONFIG_CHUNK) {
+        // Allocate buffer for config file
+        otaState.buffer = (uint8_t*)malloc(otaState.totalSize + 1);
+        if (otaState.buffer == nullptr) {
+            Serial.println("[OTA] ERROR: Failed to allocate config buffer");
+            sendStatusAck(mac, cmd.commandId, OTA_STATUS_BEGIN_ERR, nullptr, 0);
+            resetOtaState();
+            return;
+        }
+        otaState.bufferSize = otaState.totalSize + 1;
+        memset(otaState.buffer, 0, otaState.bufferSize);
+        
+    } else if (otaState.type == OTA_CMD_FIRMWARE_CHUNK) {
+        // Start firmware update
+        if (!Update.begin(otaState.totalSize)) {
+            Serial.printf("[OTA] ERROR: Update.begin failed: %s\n", Update.getErrorString());
+            sendStatusAck(mac, cmd.commandId, OTA_STATUS_BEGIN_ERR, nullptr, 0);
+            resetOtaState();
+            return;
+        }
+        otaState.beginCalled = true;
+        Serial.println("[OTA] Firmware update started");
+    }
+    
+    sendStatusAck(mac, cmd.commandId, OTA_STATUS_BEGIN_OK, nullptr, 0);
+}
+
+// Track when we last requested a BEGIN re-send to avoid spamming
+static uint32_t lastBeginRequestTime = 0;
+static const uint32_t BEGIN_REQUEST_INTERVAL_MS = 500;  // Don't spam requests
+
+static void handleOtaChunk(const uint8_t* mac, const CommandMessage& cmd) {
+    uint8_t chunkType = cmd.commandData[0];  // 0xF1 or 0xC1
+    uint16_t chunkIndex;
+    memcpy(&chunkIndex, &cmd.commandData[1], 2);
+    
+    if (!otaState.active) {
+        // We're receiving chunks without BEGIN - request hub to re-send BEGIN
+        // Only log every 500 chunks to reduce serial flooding
+        if (chunkIndex % 500 == 0) {
+            Serial.printf("[OTA] WARN: Chunk %u (type 0x%02X) no OTA active\n", 
+                          chunkIndex, chunkType);
+        }
+        
+        // Request BEGIN re-send (but don't spam - limit to every 500ms)
+        uint32_t now = millis();
+        if (now - lastBeginRequestTime > BEGIN_REQUEST_INTERVAL_MS) {
+            lastBeginRequestTime = now;
+            
+            // Send a special status indicating we need BEGIN
+            // Use OTA_STATUS_NEED_BEGIN (0x10) to tell hub to re-send BEGIN
+            uint8_t requestData[2];
+            requestData[0] = chunkType;  // Tell hub what type of BEGIN we need
+            requestData[1] = 0;
+            Serial.printf("[OTA] Requesting BEGIN re-send for type 0x%02X\n", chunkType);
+            sendStatusAck(mac, cmd.commandId, OTA_STATUS_NEED_BEGIN, requestData, 2);
+        }
+        return;
+    }
+    
+    // chunkIndex already parsed above
+    
+    // Track this chunk as received by chunkIndex
+    otaSetChunkReceived(chunkIndex);
+    otaState.chunksReceived++;
+    if (chunkIndex > otaState.highestChunkIdx) {
+        otaState.highestChunkIdx = chunkIndex;
+    }
+    
+    // Data is in commandData[3..31] (up to 29 bytes)
+    const uint8_t* chunkData = &cmd.commandData[3];
+    size_t remaining = otaState.totalSize - otaState.receivedBytes;
+    size_t chunkDataLen = (remaining > 29) ? 29 : remaining;
+    
+    if (otaState.type == OTA_CMD_CONFIG_CHUNK) {
+        // Append to buffer at correct position based on chunkIndex
+        size_t offset = chunkIndex * 29;
+        if (offset + chunkDataLen <= otaState.bufferSize - 1) {
+            memcpy(otaState.buffer + offset, chunkData, chunkDataLen);
+        }
+    } else if (otaState.type == OTA_CMD_FIRMWARE_CHUNK) {
+        // For firmware, we need sequential writes - track if out of order
+        if (chunkIndex != otaState.expectedChunk) {
+            Serial.printf("[OTA] WARN: Expected chunk %u, got %u\n", 
+                         otaState.expectedChunk, chunkIndex);
+        }
+        // Write to flash
+        size_t written = Update.write((uint8_t*)chunkData, chunkDataLen);
+        if (written != chunkDataLen) {
+            Serial.printf("[OTA] ERROR: Write failed, expected %u, wrote %u\n", chunkDataLen, written);
+            sendStatusAck(mac, cmd.commandId, OTA_STATUS_CHUNK_ERR, nullptr, 0);
+            return;
+        }
+    }
+    
+    otaState.receivedBytes += chunkDataLen;
+    otaState.expectedChunk = chunkIndex + 1;
+    
+    // Progress logging every 500 chunks
+    if (otaState.chunksReceived % 500 == 0 && nodeConfig.debugSerial) {
+        Serial.printf("[OTA] Progress: %u/%u bytes (chunk %u/%u, received %u)\n", 
+                      otaState.receivedBytes, otaState.totalSize, 
+                      chunkIndex, otaState.totalChunks, otaState.chunksReceived);
+    }
+    
+    // Check if this was the last chunk (finalCommand=true from hub)
+    // When all chunks received, send READY_END status to request END command
+    if (cmd.finalCommand && otaState.chunksReceived >= otaState.totalChunks) {
+        Serial.printf("[OTA] All %u chunks received! Sending READY_END status\n", otaState.chunksReceived);
+        uint8_t readyData[4];
+        readyData[0] = otaState.type;  // Firmware or config
+        memcpy(&readyData[1], &otaState.chunksReceived, 2);  // Chunks received
+        sendStatusAck(mac, cmd.commandId, OTA_STATUS_READY_END, readyData, 3);
+    }
+    
+    // Don't send per-chunk ACK to improve throughput
+    // sendStatusAck(mac, cmd.commandId, OTA_STATUS_CHUNK_OK, nullptr, 0);
+}
+
+static void handleOtaEnd(const uint8_t* mac, const CommandMessage& cmd) {
+    if (!otaState.active) {
+        if (nodeConfig.debugSerial) {
+            Serial.println("[OTA] WARN: END received but no OTA active");
+        }
+        return;
+    }
+    
+    uint8_t otaType = cmd.commandData[1];
+    
+    if (nodeConfig.debugSerial) {
+        Serial.printf("[OTA] END type=0x%02X received=%u total=%u finalCmd=%d\n", 
+                      otaType, otaState.receivedBytes, otaState.totalSize, 
+                      cmd.finalCommand);
+        Serial.printf("[OTA] Chunks received: %u/%u, highestChunkIdx: %u\n",
+                      otaState.chunksReceived, otaState.totalChunks, otaState.highestChunkIdx);
+    }
+    
+    // Check for missing chunks using chunkIndex tracking (0 to totalChunks-1)
+    bool hasMissing = false;
+    uint16_t missingCount = 0;
+    
+    Serial.printf("[OTA] Checking for missing chunks (expected: 0 to %u)...\n", otaState.totalChunks - 1);
+    
+    for (uint16_t i = 0; i < otaState.totalChunks && i < OTA_MAX_CHUNKS; i++) {
+        if (!otaIsChunkReceived(i)) {
+            if (!hasMissing) {
+                Serial.println("[OTA] MISSING CHUNKS:");
+                hasMissing = true;
+            }
+            // Print first 20 missing chunks individually, then summarize
+            if (missingCount < 20) {
+                Serial.printf("[OTA]   Missing chunkIndex: %u\n", i);
+            }
+            missingCount++;
+        }
+    }
+    
+    if (hasMissing) {
+        Serial.printf("[OTA] ERROR: Total missing chunks: %u out of %u\n", missingCount, otaState.totalChunks);
+        Serial.printf("[OTA] Transfer FAILED due to packet loss\n");
+        sendStatusAck(mac, cmd.commandId, OTA_STATUS_APPLY_ERR, nullptr, 0);
+        resetOtaState();
+        return;
+    }
+    
+    Serial.printf("[OTA] All %u chunks received successfully!\n", otaState.totalChunks);
+    
+    if (otaType == OTA_CMD_CONFIG_CHUNK && otaState.type == OTA_CMD_CONFIG_CHUNK) {
+        // Write config to filesystem
+        otaState.buffer[otaState.receivedBytes] = '\0';  // Null terminate
+        
+        // Ensure filesystem is mounted
+        if (!LittleFS.begin()) {
+            Serial.println("[OTA] ERROR: LittleFS mount failed");
+            sendStatusAck(mac, cmd.commandId, OTA_STATUS_APPLY_ERR, nullptr, 0);
+            resetOtaState();
+            return;
+        }
+        
+        File file = LittleFS.open("/node_config.txt", "w");
+        if (!file) {
+            Serial.println("[OTA] ERROR: Failed to open config file for writing");
+            sendStatusAck(mac, cmd.commandId, OTA_STATUS_APPLY_ERR, nullptr, 0);
+            resetOtaState();
+            return;
+        }
+        
+        file.write(otaState.buffer, otaState.receivedBytes);
+        file.close();
+        
+        Serial.println("[OTA] Config file saved successfully");
+        sendStatusAck(mac, cmd.commandId, OTA_STATUS_APPLY_OK, nullptr, 0);
+        resetOtaState();
+        
+        // Reload configuration
+        Serial.println("[OTA] Reloading configuration...");
+        loadNodeConfiguration(nodeConfig.nodeType, nodeConfig.nodeName.c_str());
+        
+    } else if (otaType == OTA_CMD_FIRMWARE_CHUNK && otaState.type == OTA_CMD_FIRMWARE_CHUNK) {
+        // Finish firmware update
+        if (!Update.end(true)) {
+            Serial.printf("[OTA] ERROR: Update.end failed: %s\n", Update.getErrorString());
+            sendStatusAck(mac, cmd.commandId, OTA_STATUS_APPLY_ERR, nullptr, 0);
+            resetOtaState();
+            return;
+        }
+        
+        if (!Update.isFinished()) {
+            Serial.println("[OTA] ERROR: Update not finished");
+            sendStatusAck(mac, cmd.commandId, OTA_STATUS_APPLY_ERR, nullptr, 0);
+            resetOtaState();
+            return;
+        }
+        
+        Serial.println("[OTA] Firmware update successful! Rebooting in 2 seconds...");
+        sendStatusAck(mac, cmd.commandId, OTA_STATUS_APPLY_OK, nullptr, 0);
+        resetOtaState();
+        
+        delay(2000);
+        ESP.restart();
+    }
+}
+
+// Called by ESPNowManager when a command is received
+// This function checks for OTA commands and handles them
+bool handleOtaCommand(const uint8_t* mac, const CommandMessage& cmd) {
+    uint8_t cmdType = cmd.commandData[0];
+    
+    // Only log BEGIN and END commands to avoid OOM (chunks = 11,000+)
+    if (cmdType == OTA_CMD_OTA_BEGIN || cmdType == OTA_CMD_OTA_END) {
+        Serial.printf("[OTA] cmd=0x%02X seqID=%u final=%d\n", 
+                      cmdType, cmd.commandSeqID, cmd.finalCommand);
+    }
+    
+    switch (cmdType) {
+        case OTA_CMD_OTA_BEGIN:
+            Serial.println("[OTA] BEGIN");
+            handleOtaBegin(mac, cmd);
+            return true;
+            
+        case OTA_CMD_CONFIG_CHUNK:
+        case OTA_CMD_FIRMWARE_CHUNK:
+            handleOtaChunk(mac, cmd);
+            return true;
+            
+        case OTA_CMD_OTA_END:
+            Serial.println("[OTA] END");
+            handleOtaEnd(mac, cmd);
+            return true;
+            
+        default:
+            return false;  // Not an OTA command
     }
 }

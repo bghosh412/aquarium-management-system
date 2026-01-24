@@ -30,3 +30,8 @@ DEBUG_WEBSOCKET=false
 
 # ntfy.sh Notification
 NTFY_TOPIC=ams-hub-bg
+
+# Node OTA Settings
+# Base URL for lighting node OTA updates
+# Expected files: version.txt, firmware.bin, node_config.txt
+LIGHT_NODE_OTA_URL=

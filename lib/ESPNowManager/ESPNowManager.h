@@ -172,6 +172,13 @@ public:
     void onCommandReceived(void (*callback)(const uint8_t* mac, const uint8_t* data, size_t len));
     
     /**
+     * @brief Set callback for raw command messages (receives full CommandMessage)
+     * @param callback Function that returns true if command was handled, false to pass to regular callback
+     * This is called BEFORE the regular command callback, useful for OTA handling
+     */
+    void onRawCommandReceived(bool (*callback)(const uint8_t* mac, const CommandMessage& cmd));
+    
+    /**
      * @brief Set callback for received status messages
      * @param callback Function to call when status received
      */
@@ -301,6 +308,7 @@ public:
     
     // Callbacks
     void (*_commandCallback)(const uint8_t* mac, const uint8_t* data, size_t len);
+    bool (*_rawCommandCallback)(const uint8_t* mac, const CommandMessage& cmd);  // OTA handler
     void (*_statusCallback)(const uint8_t* mac, const StatusMessage& status);
     void (*_heartbeatCallback)(const uint8_t* mac, const HeartbeatMessage& heartbeat);
     void (*_ackCallback)(const uint8_t* mac, const AckMessage& ack);

@@ -263,6 +263,9 @@ void setup() {
     ESPNowManager::getInstance().onCommandReceived(onCommandReceivedWrapper);
     ESPNowManager::getInstance().onConfigReceived(onConfigReceivedWrapper);
     ESPNowManager::getInstance().onUnmapReceived(onUnmapReceivedWrapper);
+    
+    // Register OTA handler (common to all nodes via NodeBase)
+    ESPNowManager::getInstance().onRawCommandReceived(handleOtaCommand);
 
     // Register base node callbacks (hub heartbeat handler, etc.)
     setupNodeBaseCallbacks();

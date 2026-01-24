@@ -100,6 +100,47 @@ struct UnmapMessage {
     uint8_t reserved[8];  // Reserved for future use
 } __attribute__((packed));
 
+// ============================================================================
+// OTA COMMAND TYPES (Common to all nodes)
+// ============================================================================
+// These commands are used for over-the-air updates
+// F01 = Firmware OTA chunk
+// N01 = Node config file chunk
+
+// OTA command identifiers (first byte of commandData)
+#define OTA_CMD_FIRMWARE_CHUNK   0xF1  // F01: Firmware binary chunk
+#define OTA_CMD_CONFIG_CHUNK     0xC1  // C01: Config file chunk (node_config.txt)
+#define OTA_CMD_OTA_BEGIN        0xA0  // Begin OTA transfer
+#define OTA_CMD_OTA_END          0xA1  // End OTA transfer (apply)
+
+// OTA begin payload structure (commandData for OTA_CMD_OTA_BEGIN)
+// commandData[0] = OTA_CMD_OTA_BEGIN
+// commandData[1] = OTA type (0xF1=firmware, 0xC1=config)
+// commandData[2-5] = Total size (uint32_t, little-endian)
+// commandData[6] = Chunk size (max chunk payload size)
+
+// OTA chunk payload structure (commandData for OTA_CMD_FIRMWARE_CHUNK/OTA_CMD_CONFIG_CHUNK)
+// commandData[0] = Command type (0xF1 or 0xC1)
+// commandData[1-2] = Chunk index (uint16_t, little-endian)
+// commandData[3-31] = Data (up to 29 bytes per chunk)
+
+// OTA end payload structure (commandData for OTA_CMD_OTA_END)
+// commandData[0] = OTA_CMD_OTA_END
+// commandData[1] = OTA type (0xF1=firmware, 0xC1=config)
+// commandData[2-5] = CRC32 checksum (optional, 0 to skip)
+
+// OTA status codes (in StatusMessage.statusCode)
+#define OTA_STATUS_OK            0x00  // Success
+#define OTA_STATUS_ERROR         0x01  // General error
+#define OTA_STATUS_CHUNK_OK      0x10  // Chunk received OK
+#define OTA_STATUS_CHUNK_ERR     0x11  // Chunk receive error
+#define OTA_STATUS_BEGIN_OK      0x20  // OTA begin OK
+#define OTA_STATUS_BEGIN_ERR     0x21  // OTA begin error
+#define OTA_STATUS_NEED_BEGIN    0x22  // Node needs BEGIN re-send (missed initial BEGIN)
+#define OTA_STATUS_READY_END     0x25  // Node received all chunks, ready for END
+#define OTA_STATUS_APPLY_OK      0x30  // OTA applied, rebooting
+#define OTA_STATUS_APPLY_ERR     0x31  // OTA apply failed
+
 // Maximum message size check (ESP-NOW limit is 250 bytes)
 static_assert(sizeof(AnnounceMessage) <= 250, "AnnounceMessage too large for ESP-NOW");
 static_assert(sizeof(AckMessage) <= 250, "AckMessage too large for ESP-NOW");

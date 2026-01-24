@@ -111,6 +111,12 @@ struct NodeOtaState {
     bool firmwareSent;
     bool firmwareWaitingEnd;  // True when waiting for READY_END from node
     uint8_t lastCommandId;    // Track command ID for END response
+    // Multi-device support
+    uint8_t targetMacs[10][6];  // Up to 10 light devices
+    uint8_t targetCount;        // Number of devices to update
+    uint8_t currentTarget;      // Current device index being updated
+    uint8_t devicesUpdated;     // Number of devices successfully updated
+    uint8_t devicesFailed;      // Number of devices that failed
 } nodeOtaState = {0};
 
 // NTP time tracking
@@ -626,41 +632,35 @@ void schedulerTask(void* parameter) {
 // NODE OTA TASK - Async OTA Transfer to Nodes
 // ============================================================================
 
-void nodeOtaTask(void* parameter) {
-    Serial.printf("[NodeOTA] Task started on core %d\n", xPortGetCoreID());
+// Helper function to send OTA to a single device
+static bool sendOtaToDevice(uint8_t* targetMac, WiFiClient* client) {
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             targetMac[0], targetMac[1], targetMac[2],
+             targetMac[3], targetMac[4], targetMac[5]);
+    Serial.printf("[NodeOTA] Sending OTA to device %s\n", macStr);
     
-    // Download and send config if available
-    std::unique_ptr<WiFiClient> client;
-    if (nodeOtaState.baseUrl.startsWith("https://")) {
-        std::unique_ptr<WiFiClientSecure> secureClient(new WiFiClientSecure());
-        secureClient->setInsecure();
-        client = std::move(secureClient);
-    } else {
-        client = std::unique_ptr<WiFiClient>(new WiFiClient());
-    }
-
+    // Copy target MAC for status callbacks
+    memcpy(nodeOtaState.targetMac, targetMac, 6);
+    
+    // Reset per-device state
+    nodeOtaState.configChunksSent = 0;
+    nodeOtaState.firmwareChunksSent = 0;
+    nodeOtaState.configSent = false;
+    nodeOtaState.firmwareSent = false;
+    nodeOtaState.firmwareWaitingEnd = false;
+    
     HTTPClient http;
+    bool deviceSuccess = false;
 
-    // Step 1: Download and send node_config.txt
-    if (http.begin(*client, nodeOtaState.baseUrl + "node_config.txt")) {
-        int httpCode = http.GET();
-        if (httpCode == HTTP_CODE_OK) {
-            String configContent = http.getString();
-            http.end();
-
-            // Save locally
-            if (!LittleFS.exists("/ota")) LittleFS.mkdir("/ota");
-            if (!LittleFS.exists("/ota/light")) LittleFS.mkdir("/ota/light");
+    // Step 1: Send config if available (from previously saved file)
+    if (LittleFS.exists("/ota/light/node_config.txt")) {
+        File configFile = LittleFS.open("/ota/light/node_config.txt", "r");
+        if (configFile) {
+            String configContent = configFile.readString();
+            configFile.close();
             
-            File localConfig = LittleFS.open("/ota/light/node_config.txt", "w");
-            if (localConfig) {
-                localConfig.print(configContent);
-                localConfig.close();
-                nodeOtaState.configSaved = true;
-                Serial.printf("[NodeOTA] Saved node_config.txt (%d bytes)\n", configContent.length());
-            }
-
-            // Send OTA_BEGIN for config (send multiple times for reliability)
+            // Send OTA_BEGIN for config
             CommandMessage beginMsg = {};
             beginMsg.header.type = MessageType::COMMAND;
             beginMsg.header.tankId = 0;
@@ -675,13 +675,11 @@ void nodeOtaTask(void* parameter) {
             memcpy(&beginMsg.commandData[2], &totalSize, 4);
             beginMsg.commandData[6] = 29;
 
-            // Send OTA_BEGIN multiple times for reliability
             for (int i = 0; i < 5; i++) {
-                Serial.printf("[NodeOTA] Sending OTA_BEGIN for config (attempt %d/5)\n", i + 1);
-                ESPNowManager::getInstance().send(nodeOtaState.targetMac, (uint8_t*)&beginMsg, sizeof(beginMsg));
-                vTaskDelay(pdMS_TO_TICKS(100));  // 100ms between attempts
+                ESPNowManager::getInstance().send(targetMac, (uint8_t*)&beginMsg, sizeof(beginMsg));
+                vTaskDelay(pdMS_TO_TICKS(100));
             }
-            vTaskDelay(pdMS_TO_TICKS(500));  // Extra delay before chunks
+            vTaskDelay(pdMS_TO_TICKS(500));
 
             // Send config chunks
             uint16_t chunkIndex = 0;
@@ -705,7 +703,7 @@ void nodeOtaTask(void* parameter) {
                 memcpy(&chunkMsg.commandData[1], &chunkIndex, 2);
                 memcpy(&chunkMsg.commandData[3], configContent.c_str() + offset, thisChunkSize);
 
-                ESPNowManager::getInstance().send(nodeOtaState.targetMac, (uint8_t*)&chunkMsg, sizeof(chunkMsg));
+                ESPNowManager::getInstance().send(targetMac, (uint8_t*)&chunkMsg, sizeof(chunkMsg));
                 
                 offset += thisChunkSize;
                 chunkIndex++;
@@ -713,7 +711,7 @@ void nodeOtaTask(void* parameter) {
                 vTaskDelay(pdMS_TO_TICKS(30));
             }
 
-            // Send OTA_END for config (send multiple times for reliability)
+            // Send OTA_END for config
             CommandMessage endMsg = {};
             endMsg.header.type = MessageType::COMMAND;
             endMsg.header.tankId = 0;
@@ -725,30 +723,169 @@ void nodeOtaTask(void* parameter) {
             endMsg.commandData[0] = OTA_CMD_OTA_END;
             endMsg.commandData[1] = OTA_CMD_CONFIG_CHUNK;
 
-            // Send OTA_END multiple times for reliability
             for (int i = 0; i < 5; i++) {
-                Serial.printf("[NodeOTA] Sending OTA_END for config (attempt %d/5)\n", i + 1);
-                ESPNowManager::getInstance().send(nodeOtaState.targetMac, (uint8_t*)&endMsg, sizeof(endMsg));
-                vTaskDelay(pdMS_TO_TICKS(100));  // 100ms between attempts
+                ESPNowManager::getInstance().send(targetMac, (uint8_t*)&endMsg, sizeof(endMsg));
+                vTaskDelay(pdMS_TO_TICKS(100));
             }
             
             nodeOtaState.configSent = true;
-            Serial.printf("[NodeOTA] Config sent: %d chunks\n", chunkIndex);
+            Serial.printf("[NodeOTA] Config sent to %s: %d chunks\n", macStr, chunkIndex);
             vTaskDelay(pdMS_TO_TICKS(500));
-        } else {
-            http.end();
-            Serial.printf("[NodeOTA] node_config.txt not available (HTTP %d)\n", httpCode);
         }
     }
 
-    // Step 2: Download and send firmware.bin
-    if (http.begin(*client, nodeOtaState.baseUrl + "firmware.bin")) {
+    // Step 2: Send firmware if available
+    if (LittleFS.exists("/ota/light/firmware.bin")) {
+        File fwFile = LittleFS.open("/ota/light/firmware.bin", "r");
+        if (fwFile) {
+            size_t fwSize = fwFile.size();
+            nodeOtaState.totalFirmwareChunks = (fwSize + 28) / 29;
+            Serial.printf("[NodeOTA] Sending firmware to %s (%d bytes, ~%d chunks)\n", 
+                          macStr, fwSize, nodeOtaState.totalFirmwareChunks);
+
+            // Send OTA_BEGIN for firmware
+            CommandMessage beginMsg = {};
+            beginMsg.header.type = MessageType::COMMAND;
+            beginMsg.header.tankId = 0;
+            beginMsg.header.nodeType = NodeType::HUB;
+            beginMsg.header.timestamp = millis();
+            beginMsg.commandId = generateCommandId();
+            nodeOtaState.lastCommandId = beginMsg.commandId;
+            beginMsg.commandSeqID = 0;
+            beginMsg.finalCommand = false;
+            beginMsg.commandData[0] = OTA_CMD_OTA_BEGIN;
+            beginMsg.commandData[1] = OTA_CMD_FIRMWARE_CHUNK;
+            uint32_t totalSize = fwSize;
+            memcpy(&beginMsg.commandData[2], &totalSize, 4);
+            beginMsg.commandData[6] = 29;
+
+            for (int i = 0; i < 5; i++) {
+                ESPNowManager::getInstance().send(targetMac, (uint8_t*)&beginMsg, sizeof(beginMsg));
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+
+            // Stream firmware chunks
+            uint8_t buffer[29];
+            uint16_t chunkIndex = 0;
+            size_t totalSent = 0;
+
+            while (fwFile.available()) {
+                size_t bytesRead = fwFile.read(buffer, 29);
+                if (bytesRead == 0) break;
+                
+                bool isLastChunk = !fwFile.available();
+
+                CommandMessage chunkMsg = {};
+                chunkMsg.header.type = MessageType::COMMAND;
+                chunkMsg.header.tankId = 0;
+                chunkMsg.header.nodeType = NodeType::HUB;
+                chunkMsg.header.timestamp = millis();
+                chunkMsg.commandId = beginMsg.commandId;
+                chunkMsg.commandSeqID = chunkIndex + 1;
+                chunkMsg.finalCommand = isLastChunk;
+                chunkMsg.commandData[0] = OTA_CMD_FIRMWARE_CHUNK;
+                memcpy(&chunkMsg.commandData[1], &chunkIndex, 2);
+                memcpy(&chunkMsg.commandData[3], buffer, bytesRead);
+
+                ESPNowManager::getInstance().send(targetMac, (uint8_t*)&chunkMsg, sizeof(chunkMsg));
+                
+                totalSent += bytesRead;
+                chunkIndex++;
+                nodeOtaState.firmwareChunksSent = chunkIndex;
+                
+                if (chunkIndex % 500 == 0) {
+                    Serial.printf("[NodeOTA] Progress %s: %d/%d bytes (%d%%)\n", 
+                                  macStr, totalSent, fwSize, (totalSent * 100) / fwSize);
+                }
+                
+                if (isLastChunk) {
+                    Serial.printf("[NodeOTA] Last chunk sent to %s (index %d)\n", macStr, chunkIndex - 1);
+                }
+                vTaskDelay(pdMS_TO_TICKS(30));
+            }
+
+            fwFile.close();
+
+            // Wait for READY_END from node
+            nodeOtaState.firmwareSent = true;
+            nodeOtaState.firmwareWaitingEnd = true;
+            Serial.printf("[NodeOTA] Firmware sent to %s: %d chunks. Waiting for READY_END...\n", macStr, chunkIndex);
+            
+            uint32_t waitStart = millis();
+            while (nodeOtaState.firmwareWaitingEnd && (millis() - waitStart < 30000)) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            
+            if (nodeOtaState.firmwareWaitingEnd) {
+                Serial.printf("[NodeOTA] WARN: %s timed out waiting for READY_END, sending END anyway\n", macStr);
+                CommandMessage endMsg = {};
+                endMsg.header.type = MessageType::COMMAND;
+                endMsg.header.tankId = 0;
+                endMsg.header.nodeType = NodeType::HUB;
+                endMsg.header.timestamp = millis();
+                endMsg.commandId = beginMsg.commandId;
+                endMsg.commandSeqID = chunkIndex + 1;
+                endMsg.finalCommand = true;
+                endMsg.commandData[0] = OTA_CMD_OTA_END;
+                endMsg.commandData[1] = OTA_CMD_FIRMWARE_CHUNK;
+
+                for (int i = 0; i < 5; i++) {
+                    ESPNowManager::getInstance().send(targetMac, (uint8_t*)&endMsg, sizeof(endMsg));
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            }
+            
+            deviceSuccess = true;
+        }
+    }
+
+    return deviceSuccess || nodeOtaState.configSent;
+}
+
+void nodeOtaTask(void* parameter) {
+    Serial.printf("[NodeOTA] Task started on core %d, updating %d device(s)\n", 
+                  xPortGetCoreID(), nodeOtaState.targetCount);
+    
+    // Download files first (only once)
+    std::unique_ptr<WiFiClient> client;
+    if (nodeOtaState.baseUrl.startsWith("https://")) {
+        std::unique_ptr<WiFiClientSecure> secureClient(new WiFiClientSecure());
+        secureClient->setInsecure();
+        client = std::move(secureClient);
+    } else {
+        client = std::unique_ptr<WiFiClient>(new WiFiClient());
+    }
+
+    HTTPClient http;
+    
+    // Create OTA directory
+    if (!LittleFS.exists("/ota")) LittleFS.mkdir("/ota");
+    if (!LittleFS.exists("/ota/light")) LittleFS.mkdir("/ota/light");
+
+    // Download node_config.txt (optional)
+    if (http.begin(*client.get(), nodeOtaState.baseUrl + "node_config.txt")) {
+        int httpCode = http.GET();
+        if (httpCode == HTTP_CODE_OK) {
+            String configContent = http.getString();
+            File localConfig = LittleFS.open("/ota/light/node_config.txt", "w");
+            if (localConfig) {
+                localConfig.print(configContent);
+                localConfig.close();
+                nodeOtaState.configSaved = true;
+                Serial.printf("[NodeOTA] Downloaded node_config.txt (%d bytes)\n", configContent.length());
+            }
+        }
+        http.end();
+    }
+
+    // Download firmware.bin (required)
+    if (http.begin(*client.get(), nodeOtaState.baseUrl + "firmware.bin")) {
         int httpCode = http.GET();
         if (httpCode == HTTP_CODE_OK) {
             int contentLength = http.getSize();
             Serial.printf("[NodeOTA] Downloading firmware.bin (%d bytes)\n", contentLength);
             
-            // Save to local filesystem
             File localFirmware = LittleFS.open("/ota/light/firmware.bin", "w");
             if (localFirmware) {
                 WiFiClient* dlStream = http.getStreamPtr();
@@ -770,138 +907,73 @@ void nodeOtaTask(void* parameter) {
                 }
                 localFirmware.close();
                 nodeOtaState.firmwareSaved = true;
-                Serial.printf("[NodeOTA] Saved firmware.bin (%d bytes)\n", dlTotal);
+                Serial.printf("[NodeOTA] Downloaded firmware.bin (%d bytes)\n", dlTotal);
             }
-            http.end();
-            
-            // Stream from saved file
-            if (nodeOtaState.firmwareSaved) {
-                File fwFile = LittleFS.open("/ota/light/firmware.bin", "r");
-                if (fwFile) {
-                    size_t fwSize = fwFile.size();
-                    nodeOtaState.totalFirmwareChunks = (fwSize + 28) / 29;
-                    Serial.printf("[NodeOTA] Sending firmware (%d bytes, ~%d chunks, ~%d seconds)\n", 
-                                  fwSize, nodeOtaState.totalFirmwareChunks, 
-                                  (nodeOtaState.totalFirmwareChunks * 30) / 1000);
+        }
+        http.end();
+    }
 
-                    // Send OTA_BEGIN for firmware (send multiple times for reliability)
-                    CommandMessage beginMsg = {};
-                    beginMsg.header.type = MessageType::COMMAND;
-                    beginMsg.header.tankId = 0;
-                    beginMsg.header.nodeType = NodeType::HUB;
-                    beginMsg.header.timestamp = millis();
-                    beginMsg.commandId = generateCommandId();
-                    nodeOtaState.lastCommandId = beginMsg.commandId;  // Store for READY_END handler
-                    beginMsg.commandSeqID = 0;
-                    beginMsg.finalCommand = false;
-                    beginMsg.commandData[0] = OTA_CMD_OTA_BEGIN;
-                    beginMsg.commandData[1] = OTA_CMD_FIRMWARE_CHUNK;
-                    uint32_t totalSize = fwSize;
-                    memcpy(&beginMsg.commandData[2], &totalSize, 4);
-                    beginMsg.commandData[6] = 29;
+    // Check if we have anything to send
+    if (!nodeOtaState.configSaved && !nodeOtaState.firmwareSaved) {
+        nodeOtaState.error = "No OTA files downloaded";
+        nodeOtaState.completed = true;
+        nodeOtaState.success = false;
+        Serial.println("[NodeOTA] ERROR: No OTA files available");
+        goto cleanup;
+    }
 
-                    // Send OTA_BEGIN multiple times for reliability
-                    for (int i = 0; i < 5; i++) {
-                        Serial.printf("[NodeOTA] Sending OTA_BEGIN for firmware (attempt %d/5)\n", i + 1);
-                        ESPNowManager::getInstance().send(nodeOtaState.targetMac, (uint8_t*)&beginMsg, sizeof(beginMsg));
-                        vTaskDelay(pdMS_TO_TICKS(100));  // 100ms between attempts
-                    }
-                    vTaskDelay(pdMS_TO_TICKS(500));  // Extra delay before chunks
-
-                    // Stream chunks
-                    uint8_t buffer[29];
-                    uint16_t chunkIndex = 0;
-                    size_t totalSent = 0;
-
-                    while (fwFile.available()) {
-                        size_t bytesRead = fwFile.read(buffer, 29);
-                        if (bytesRead == 0) break;
-                        
-                        // Check if this is the last chunk
-                        bool isLastChunk = !fwFile.available();
-
-                        CommandMessage chunkMsg = {};
-                        chunkMsg.header.type = MessageType::COMMAND;
-                        chunkMsg.header.tankId = 0;
-                        chunkMsg.header.nodeType = NodeType::HUB;
-                        chunkMsg.header.timestamp = millis();
-                        chunkMsg.commandId = beginMsg.commandId;
-                        chunkMsg.commandSeqID = chunkIndex + 1;
-                        chunkMsg.finalCommand = isLastChunk;  // Mark last chunk for READY_END detection
-                        chunkMsg.commandData[0] = OTA_CMD_FIRMWARE_CHUNK;
-                        memcpy(&chunkMsg.commandData[1], &chunkIndex, 2);
-                        memcpy(&chunkMsg.commandData[3], buffer, bytesRead);
-
-                        ESPNowManager::getInstance().send(nodeOtaState.targetMac, (uint8_t*)&chunkMsg, sizeof(chunkMsg));
-                        
-                        totalSent += bytesRead;
-                        chunkIndex++;
-                        nodeOtaState.firmwareChunksSent = chunkIndex;
-                        
-                        // Progress every 500 chunks (~14KB)
-                        if (chunkIndex % 500 == 0) {
-                            Serial.printf("[NodeOTA] Firmware progress: %d/%d bytes (%d%%)\n", 
-                                          totalSent, fwSize, (totalSent * 100) / fwSize);
-                        }
-                        
-                        if (isLastChunk) {
-                            Serial.printf("[NodeOTA] Last chunk sent (index %d, finalCommand=true)\n", chunkIndex - 1);
-                        }
-                        vTaskDelay(pdMS_TO_TICKS(30));
-                    }
-
-                    fwFile.close();
-
-                    // DON'T send OTA_END immediately - wait for READY_END from node
-                    // The node will send READY_END when it has received all chunks
-                    // Then our READY_END handler (in processStatus) will send OTA_END
-                    
-                    nodeOtaState.firmwareSent = true;
-                    nodeOtaState.firmwareWaitingEnd = true;  // Flag to track we're waiting
-                    Serial.printf("[NodeOTA] Firmware chunks sent: %d chunks, %d bytes. Waiting for READY_END...\n", chunkIndex, totalSent);
-                    
-                    // Wait up to 30 seconds for READY_END response
-                    uint32_t waitStart = millis();
-                    while (nodeOtaState.firmwareWaitingEnd && (millis() - waitStart < 30000)) {
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                    
-                    if (nodeOtaState.firmwareWaitingEnd) {
-                        Serial.println("[NodeOTA] WARN: Timed out waiting for READY_END, sending END anyway");
-                        // Send OTA_END multiple times as fallback
-                        CommandMessage endMsg = {};
-                        endMsg.header.type = MessageType::COMMAND;
-                        endMsg.header.tankId = 0;
-                        endMsg.header.nodeType = NodeType::HUB;
-                        endMsg.header.timestamp = millis();
-                        endMsg.commandId = beginMsg.commandId;
-                        endMsg.commandSeqID = chunkIndex + 1;
-                        endMsg.finalCommand = true;
-                        endMsg.commandData[0] = OTA_CMD_OTA_END;
-                        endMsg.commandData[1] = OTA_CMD_FIRMWARE_CHUNK;
-
-                        for (int i = 0; i < 5; i++) {
-                            Serial.printf("[NodeOTA] Sending OTA_END for firmware (fallback attempt %d/5)\n", i + 1);
-                            ESPNowManager::getInstance().send(nodeOtaState.targetMac, (uint8_t*)&endMsg, sizeof(endMsg));
-                            vTaskDelay(pdMS_TO_TICKS(100));
-                        }
-                    }
-                }
-            }
+    // Send OTA to each target device
+    for (nodeOtaState.currentTarget = 0; 
+         nodeOtaState.currentTarget < nodeOtaState.targetCount; 
+         nodeOtaState.currentTarget++) {
+        
+        uint8_t* targetMac = nodeOtaState.targetMacs[nodeOtaState.currentTarget];
+        
+        // Ensure node is registered as peer
+        ESPNowManager::getInstance().addPeer(targetMac);
+        
+        // Send OTA to this device
+        bool success = sendOtaToDevice(targetMac, client.get());
+        
+        if (success) {
+            nodeOtaState.devicesUpdated++;
+            Serial.printf("[NodeOTA] Device %d/%d updated successfully\n", 
+                          nodeOtaState.currentTarget + 1, nodeOtaState.targetCount);
         } else {
-            http.end();
-            Serial.printf("[NodeOTA] firmware.bin not available (HTTP %d)\n", httpCode);
+            nodeOtaState.devicesFailed++;
+            Serial.printf("[NodeOTA] Device %d/%d FAILED\n", 
+                          nodeOtaState.currentTarget + 1, nodeOtaState.targetCount);
+        }
+        
+        // Delay between devices to allow reboot
+        if (nodeOtaState.currentTarget < nodeOtaState.targetCount - 1) {
+            Serial.println("[NodeOTA] Waiting 5 seconds before next device...");
+            vTaskDelay(pdMS_TO_TICKS(5000));
         }
     }
 
     // Complete
     nodeOtaState.completed = true;
-    nodeOtaState.success = (nodeOtaState.configSent || nodeOtaState.firmwareSent);
-    if (!nodeOtaState.success) {
-        nodeOtaState.error = "No files transferred";
+    nodeOtaState.success = (nodeOtaState.devicesUpdated > 0);
+    if (nodeOtaState.devicesFailed > 0) {
+        char errBuf[64];
+        snprintf(errBuf, sizeof(errBuf), "%d of %d devices failed", 
+                 nodeOtaState.devicesFailed, nodeOtaState.targetCount);
+        nodeOtaState.error = errBuf;
     }
-    Serial.printf("[NodeOTA] Transfer complete: config=%d, firmware=%d\n", 
-                  nodeOtaState.configSent, nodeOtaState.firmwareSent);
+    Serial.printf("[NodeOTA] Complete: %d updated, %d failed\n", 
+                  nodeOtaState.devicesUpdated, nodeOtaState.devicesFailed);
+
+cleanup:
+    // Delete downloaded OTA files
+    if (LittleFS.exists("/ota/light/firmware.bin")) {
+        LittleFS.remove("/ota/light/firmware.bin");
+        Serial.println("[NodeOTA] Deleted /ota/light/firmware.bin");
+    }
+    if (LittleFS.exists("/ota/light/node_config.txt")) {
+        LittleFS.remove("/ota/light/node_config.txt");
+        Serial.println("[NodeOTA] Deleted /ota/light/node_config.txt");
+    }
     
     nodeOtaState.active = false;
     nodeOtaTaskHandle = NULL;
@@ -2606,7 +2678,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "application/json", response);
     });
 
-    // POST Apply light node update (async)
+    // POST Apply light node update (async) - updates ALL online LIGHT devices
     server.on("/api/nodes/light/apply-update", HTTP_POST, [](AsyncWebServerRequest *request){
         // Check if OTA already in progress
         if (nodeOtaState.active) {
@@ -2622,9 +2694,9 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         String baseUrl = config.lightNodeOtaUrl;
         if (!baseUrl.endsWith("/")) baseUrl += "/";
 
-        // Find target light device MAC
-        uint8_t targetMac[6] = {0};
-        bool foundTarget = false;
+        // Find ALL online light devices
+        uint8_t targetCount = 0;
+        uint8_t targetMacs[10][6] = {0};  // Up to 10 devices
 
         File devFile = LittleFS.open("/config/devices.json", "r");
         if (devFile) {
@@ -2633,14 +2705,14 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                 JsonArray devices = devDoc["devices"];
                 for (JsonObject device : devices) {
                     String type = device["type"].as<String>();
-                    String status = device["status"].as<String>();
-                    if (type == "LIGHT" && status == "ONLINE") {
+                    bool isOnline = device["online"].as<bool>();
+                    if (type == "LIGHT" && isOnline && targetCount < 10) {
                         String macStr = device["mac"].as<String>();
                         if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                                  &targetMac[0], &targetMac[1], &targetMac[2],
-                                  &targetMac[3], &targetMac[4], &targetMac[5]) == 6) {
-                            foundTarget = true;
-                            break;
+                                  &targetMacs[targetCount][0], &targetMacs[targetCount][1], 
+                                  &targetMacs[targetCount][2], &targetMacs[targetCount][3], 
+                                  &targetMacs[targetCount][4], &targetMacs[targetCount][5]) == 6) {
+                            targetCount++;
                         }
                     }
                 }
@@ -2648,19 +2720,18 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             devFile.close();
         }
 
-        if (!foundTarget) {
-            request->send(200, "application/json", "{\"success\":false,\"error\":\"No online light device found\"}");
+        if (targetCount == 0) {
+            request->send(200, "application/json", "{\"success\":false,\"error\":\"No online light devices found\"}");
             return;
         }
-
-        // Ensure node is registered as peer
-        ESPNowManager::getInstance().addPeer(targetMac);
 
         // Initialize OTA state
         memset(&nodeOtaState, 0, sizeof(nodeOtaState));
         nodeOtaState.active = true;
         nodeOtaState.baseUrl = baseUrl;
-        memcpy(nodeOtaState.targetMac, targetMac, 6);
+        nodeOtaState.targetCount = targetCount;
+        memcpy(nodeOtaState.targetMacs, targetMacs, sizeof(targetMacs));
+        memcpy(nodeOtaState.targetMac, targetMacs[0], 6);  // First target
 
         // Start OTA task
         xTaskCreatePinnedToCore(
@@ -2673,11 +2744,18 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             0  // Core 0
         );
 
-        Serial.printf("[NodeOTA] Started async transfer to %02X:%02X:%02X:%02X:%02X:%02X\n",
-                      targetMac[0], targetMac[1], targetMac[2],
-                      targetMac[3], targetMac[4], targetMac[5]);
+        Serial.printf("[NodeOTA] Started async transfer to %d device(s)\n", targetCount);
+        for (int i = 0; i < targetCount; i++) {
+            Serial.printf("  [%d] %02X:%02X:%02X:%02X:%02X:%02X\n", i + 1,
+                          targetMacs[i][0], targetMacs[i][1], targetMacs[i][2],
+                          targetMacs[i][3], targetMacs[i][4], targetMacs[i][5]);
+        }
 
-        request->send(200, "application/json", "{\"success\":true,\"status\":\"started\",\"message\":\"OTA transfer started in background\"}");
+        char response[128];
+        snprintf(response, sizeof(response), 
+                 "{\"success\":true,\"status\":\"started\",\"message\":\"OTA transfer started for %d device(s)\",\"deviceCount\":%d}", 
+                 targetCount, targetCount);
+        request->send(200, "application/json", response);
     });
 
     // GET OTA transfer status
@@ -2695,6 +2773,10 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         doc["firmwareSent"] = nodeOtaState.firmwareSent;
         doc["firmwareChunks"] = nodeOtaState.firmwareChunksSent;
         doc["firmwareTotalChunks"] = nodeOtaState.totalFirmwareChunks;
+        doc["deviceCount"] = nodeOtaState.targetCount;
+        doc["currentDevice"] = nodeOtaState.currentTarget + 1;
+        doc["devicesUpdated"] = nodeOtaState.devicesUpdated;
+        doc["devicesFailed"] = nodeOtaState.devicesFailed;
         
         if (nodeOtaState.totalFirmwareChunks > 0) {
             doc["progress"] = (nodeOtaState.firmwareChunksSent * 100) / nodeOtaState.totalFirmwareChunks;

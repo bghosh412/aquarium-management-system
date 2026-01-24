@@ -84,22 +84,62 @@ let lightNodeOtaInfo = {
     availableVersion: null
 };
 
+function updateStatusBadge(type, message) {
+    const badge = document.getElementById('lightNodeStatusBadge');
+    const icon = document.getElementById('lightNodeStatusIcon');
+    const text = document.getElementById('lightNodeStatusText');
+    
+    badge.style.display = 'flex';
+    badge.style.alignItems = 'center';
+    badge.style.gap = '0.5rem';
+    
+    switch(type) {
+        case 'checking':
+            badge.style.background = 'rgba(59, 130, 246, 0.1)';
+            badge.style.borderLeft = '4px solid var(--color-primary)';
+            icon.textContent = '🔄';
+            break;
+        case 'uptodate':
+            badge.style.background = 'rgba(16, 185, 129, 0.1)';
+            badge.style.borderLeft = '4px solid var(--color-accent)';
+            icon.textContent = '✅';
+            break;
+        case 'available':
+            badge.style.background = 'rgba(245, 158, 11, 0.1)';
+            badge.style.borderLeft = '4px solid var(--color-accent-warning)';
+            icon.textContent = '🆕';
+            break;
+        case 'error':
+            badge.style.background = 'rgba(239, 68, 68, 0.1)';
+            badge.style.borderLeft = '4px solid var(--color-accent-danger)';
+            icon.textContent = '❌';
+            break;
+        case 'success':
+            badge.style.background = 'rgba(16, 185, 129, 0.1)';
+            badge.style.borderLeft = '4px solid var(--color-accent)';
+            icon.textContent = '✅';
+            break;
+    }
+    text.textContent = message;
+}
+
 function checkLightNodeUpdate() {
-    const statusDiv = document.getElementById('lightNodeUpdateStatus');
     const fileListDiv = document.getElementById('lightNodeUpdateFiles');
     const fileList = document.getElementById('lightNodeFileList');
     const availableVersionSpan = document.getElementById('lightNodeAvailableVersion');
     const applyBtn = document.getElementById('applyLightNodeUpdateBtn');
+    const progressSection = document.getElementById('lightNodeProgressSection');
 
-    statusDiv.innerHTML = '<div style="color: var(--color-primary);">Checking for updates...</div>';
+    updateStatusBadge('checking', 'Checking for updates...');
     fileListDiv.style.display = 'none';
+    progressSection.style.display = 'none';
     applyBtn.disabled = true;
 
     fetch('/api/nodes/light/check-update', { method: 'POST' })
         .then(response => response.json())
         .then(data => {
             if (data.error) {
-                statusDiv.innerHTML = `<div style="color: var(--color-accent-danger);">${data.error}</div>`;
+                updateStatusBadge('error', data.error);
                 availableVersionSpan.textContent = '--';
                 return;
             }
@@ -114,7 +154,7 @@ function checkLightNodeUpdate() {
             availableVersionSpan.textContent = data.availableVersion ? `v${data.availableVersion}` : '--';
 
             if (!data.hasUpdate) {
-                statusDiv.innerHTML = '<div style="color: var(--color-accent);">✓ Node is up to date</div>';
+                updateStatusBadge('uptodate', 'Node firmware is up to date');
                 return;
             }
 
@@ -128,50 +168,150 @@ function checkLightNodeUpdate() {
             }
             fileListDiv.style.display = 'block';
 
-            statusDiv.innerHTML = '<div style="color: var(--color-accent);">✓ Update available! Click "Apply Update" to proceed.</div>';
+            updateStatusBadge('available', 'Update available! Click "Apply Update" to install.');
             applyBtn.disabled = false;
         })
         .catch(error => {
             console.error('Check update failed:', error);
-            statusDiv.innerHTML = '<div style="color: var(--color-accent-danger);">Failed to check for updates.</div>';
+            updateStatusBadge('error', 'Failed to check for updates');
         });
 }
 
 function applyLightNodeUpdate() {
-    const statusDiv = document.getElementById('lightNodeUpdateStatus');
     const applyBtn = document.getElementById('applyLightNodeUpdateBtn');
+    const checkBtn = document.getElementById('checkLightNodeUpdateBtn');
+    const progressSection = document.getElementById('lightNodeProgressSection');
+    const progressBar = document.getElementById('lightNodeProgressBar');
+    const progressText = document.getElementById('lightNodeProgressText');
+    const progressPercent = document.getElementById('lightNodeProgressPercent');
+    const deviceInfo = document.getElementById('lightNodeDeviceInfo');
 
     if (!lightNodeOtaInfo.hasUpdate) {
-        statusDiv.innerHTML = '<div style="color: var(--color-accent-warning);">No update available. Check for updates first.</div>';
+        updateStatusBadge('error', 'No update available. Check for updates first.');
         return;
     }
 
+    // Disable buttons during update
     applyBtn.disabled = true;
-    statusDiv.innerHTML = '<div style="color: var(--color-primary);">Downloading and sending OTA update to node...</div>';
-
-    // Show progress
-    const progressDiv = document.createElement('div');
-    progressDiv.id = 'otaProgress';
-    progressDiv.style.cssText = 'margin-top: 0.5rem; padding: 0.5rem; background: var(--color-bg-secondary); border-radius: var(--radius-sm);';
-    progressDiv.innerHTML = '<div id="otaProgressText">Starting...</div><progress id="otaProgressBar" value="0" max="100" style="width: 100%; margin-top: 0.5rem;"></progress>';
-    statusDiv.appendChild(progressDiv);
+    checkBtn.disabled = true;
+    
+    // Show and reset progress section
+    progressSection.style.display = 'block';
+    progressBar.style.width = '0%';
+    progressText.textContent = 'Starting OTA update...';
+    progressPercent.textContent = '0%';
+    deviceInfo.textContent = '';
+    
+    updateStatusBadge('checking', 'Downloading and sending OTA update...');
 
     // Start OTA process
     fetch('/api/nodes/light/apply-update', { method: 'POST' })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                statusDiv.innerHTML = '<div style="color: var(--color-accent);">✓ OTA update sent successfully! Node will reboot.</div>';
-                // Refresh version after a delay
-                setTimeout(loadLightNodeVersion, 10000);
+                if (data.deviceCount > 1) {
+                    deviceInfo.textContent = `Updating ${data.deviceCount} device(s)...`;
+                }
+                // Start polling for status
+                pollOtaStatus();
             } else {
-                statusDiv.innerHTML = `<div style="color: var(--color-accent-danger);">${data.error || 'Update failed'}</div>`;
+                updateStatusBadge('error', data.error || 'Update failed');
+                progressSection.style.display = 'none';
                 applyBtn.disabled = false;
+                checkBtn.disabled = false;
             }
         })
         .catch(error => {
             console.error('Apply update failed:', error);
-            statusDiv.innerHTML = '<div style="color: var(--color-accent-danger);">Failed to apply update.</div>';
+            updateStatusBadge('error', 'Failed to apply update');
+            progressSection.style.display = 'none';
             applyBtn.disabled = false;
+            checkBtn.disabled = false;
         });
+}
+
+let otaPollInterval = null;
+
+function pollOtaStatus() {
+    // Clear any existing poll
+    if (otaPollInterval) {
+        clearInterval(otaPollInterval);
+    }
+
+    otaPollInterval = setInterval(() => {
+        fetch('/api/nodes/light/ota-status')
+            .then(response => response.json())
+            .then(data => {
+                const progressBar = document.getElementById('lightNodeProgressBar');
+                const progressText = document.getElementById('lightNodeProgressText');
+                const progressPercent = document.getElementById('lightNodeProgressPercent');
+                const deviceInfo = document.getElementById('lightNodeDeviceInfo');
+
+                if (progressBar && progressText) {
+                    const progress = data.progress || 0;
+                    progressBar.style.width = `${progress}%`;
+                    progressPercent.textContent = `${progress}%`;
+                    
+                    if (data.deviceCount > 1) {
+                        deviceInfo.textContent = `Device ${data.currentDevice}/${data.deviceCount} • ${data.devicesUpdated} updated • ${data.devicesFailed} failed`;
+                    }
+
+                    if (data.active) {
+                        if (data.firmwareSaved && !data.firmwareSent) {
+                            progressText.textContent = `Sending firmware: ${data.firmwareChunks}/${data.firmwareTotalChunks} chunks`;
+                        } else if (data.configSaved && !data.configSent) {
+                            progressText.textContent = `Sending config: ${data.configChunks}/${data.configTotalChunks} chunks`;
+                        } else if (data.firmwareSent) {
+                            progressText.textContent = 'Waiting for node confirmation...';
+                            progressBar.style.background = 'var(--color-accent-warning)';
+                        } else {
+                            progressText.textContent = 'Downloading files...';
+                        }
+                    }
+
+                    if (data.completed) {
+                        clearInterval(otaPollInterval);
+                        otaPollInterval = null;
+
+                        const applyBtn = document.getElementById('applyLightNodeUpdateBtn');
+                        const checkBtn = document.getElementById('checkLightNodeUpdateBtn');
+                        const progressSection = document.getElementById('lightNodeProgressSection');
+                        
+                        if (data.success) {
+                            progressBar.style.width = '100%';
+                            progressBar.style.background = 'var(--color-accent)';
+                            progressPercent.textContent = '100%';
+                            progressText.textContent = 'Update complete!';
+                            
+                            let msg = 'OTA update completed successfully!';
+                            if (data.deviceCount > 1) {
+                                msg += ` (${data.devicesUpdated}/${data.deviceCount} devices updated)`;
+                            }
+                            if (data.devicesFailed > 0) {
+                                msg += ` Warning: ${data.devicesFailed} device(s) failed.`;
+                                updateStatusBadge('available', msg);
+                            } else {
+                                updateStatusBadge('success', msg);
+                            }
+                            // Refresh version after a delay
+                            setTimeout(loadLightNodeVersion, 5000);
+                            // Hide progress bar after delay
+                            setTimeout(() => { progressSection.style.display = 'none'; }, 3000);
+                        } else {
+                            progressBar.style.background = 'var(--color-accent-danger)';
+                            progressText.textContent = 'Update failed';
+                            updateStatusBadge('error', data.error || 'Update failed');
+                        }
+                        
+                        // Re-enable buttons but keep Apply disabled (need to check again)
+                        checkBtn.disabled = false;
+                        applyBtn.disabled = true;
+                        lightNodeOtaInfo.hasUpdate = false;
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Poll status failed:', error);
+            });
+    }, 1000);  // Poll every second
 }

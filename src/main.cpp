@@ -60,9 +60,15 @@ struct HubConfig {
     bool debugSerial;
     bool debugESPNOW;
     bool debugWebSocket;
-    String otaFirmwareUrl;
-    String otaLittlefsUrl;
-    String lightNodeOtaUrl;  // Base URL for lighting node OTA
+    
+    // Hub OTA Configuration
+    String hubFirmwareOtaUrl;     // Base URL for hub firmware OTA
+    String hubLittlefsOtaUrl;     // Base URL for hub LittleFS OTA
+    String hubFirmwareVersion;    // Current installed firmware version (e.g., "1.0.0")
+    String hubLittlefsVersion;    // Current installed LittleFS version (e.g., "1.0.0")
+    
+    // Node OTA Configuration
+    String lightNodeOtaUrl;       // Base URL for lighting node OTA
 
     // Test-only: expose test endpoints when true (disabled by default)
     bool hubTestMode; // HUB_TEST_MODE (false by default) 
@@ -175,6 +181,175 @@ bool isAllowedConfigFile(const String& name) {
     }
     return false;
 }
+
+// ============================================================================
+// SEMANTIC VERSION COMPARISON
+// ============================================================================
+
+/**
+ * @brief Parse semantic version string (e.g., "1.2.3") into components
+ * @param version Version string
+ * @param major Output major version
+ * @param minor Output minor version  
+ * @param patch Output patch version
+ * @return true if parsing succeeded
+ */
+bool parseSemanticVersion(const String& version, int& major, int& minor, int& patch) {
+    major = minor = patch = 0;
+    
+    // Trim whitespace and 'v' prefix if present
+    String v = version;
+    v.trim();
+    if (v.startsWith("v") || v.startsWith("V")) {
+        v = v.substring(1);
+    }
+    
+    int firstDot = v.indexOf('.');
+    if (firstDot < 0) {
+        // Single number version (e.g., "1")
+        major = v.toInt();
+        return true;
+    }
+    
+    major = v.substring(0, firstDot).toInt();
+    String rest = v.substring(firstDot + 1);
+    
+    int secondDot = rest.indexOf('.');
+    if (secondDot < 0) {
+        // Two-part version (e.g., "1.2")
+        minor = rest.toInt();
+        return true;
+    }
+    
+    minor = rest.substring(0, secondDot).toInt();
+    patch = rest.substring(secondDot + 1).toInt();
+    return true;
+}
+
+/**
+ * @brief Compare two semantic versions
+ * @param version1 First version string
+ * @param version2 Second version string
+ * @return >0 if version1 > version2, <0 if version1 < version2, 0 if equal
+ */
+int compareSemanticVersions(const String& version1, const String& version2) {
+    int major1, minor1, patch1;
+    int major2, minor2, patch2;
+    
+    parseSemanticVersion(version1, major1, minor1, patch1);
+    parseSemanticVersion(version2, major2, minor2, patch2);
+    
+    if (major1 != major2) return major1 - major2;
+    if (minor1 != minor2) return minor1 - minor2;
+    return patch1 - patch2;
+}
+
+/**
+ * @brief Fetch remote version from URL
+ * @param baseUrl Base URL (trailing slash optional)
+ * @param versionOut Output version string
+ * @return true if fetch succeeded
+ */
+bool fetchRemoteVersion(const String& baseUrl, String& versionOut) {
+    String url = baseUrl;
+    if (!url.endsWith("/")) url += "/";
+    url += "version.txt";
+    
+    std::unique_ptr<WiFiClient> client;
+    if (url.startsWith("https://")) {
+        std::unique_ptr<WiFiClientSecure> secureClient(new WiFiClientSecure());
+        secureClient->setInsecure();
+        client = std::move(secureClient);
+    } else {
+        client = std::unique_ptr<WiFiClient>(new WiFiClient());
+    }
+    
+    HTTPClient http;
+    if (!http.begin(*client, url)) {
+        Serial.printf("[OTA] Failed to connect to %s\n", url.c_str());
+        return false;
+    }
+    
+    int httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK) {
+        Serial.printf("[OTA] version.txt fetch failed: HTTP %d\n", httpCode);
+        http.end();
+        return false;
+    }
+    
+    versionOut = http.getString();
+    versionOut.trim();
+    http.end();
+    
+    Serial.printf("[OTA] Remote version: %s\n", versionOut.c_str());
+    return true;
+}
+
+/**
+ * @brief Update a specific key in hub_config.txt
+ * @param key The key to update
+ * @param newValue The new value
+ * @return true if update succeeded
+ */
+bool updateHubConfigValue(const String& key, const String& newValue) {
+    const char* configPath = "/config/hub_config.txt";
+    
+    if (!LittleFS.exists(configPath)) {
+        Serial.println("[Config] hub_config.txt not found");
+        return false;
+    }
+    
+    // Read existing content
+    File file = LittleFS.open(configPath, "r");
+    if (!file) {
+        Serial.println("[Config] Failed to open hub_config.txt for reading");
+        return false;
+    }
+    
+    String content = file.readString();
+    file.close();
+    
+    // Find and replace the key
+    String searchKey = key + "=";
+    int keyStart = content.indexOf("\n" + searchKey);
+    if (keyStart < 0) {
+        keyStart = content.indexOf(searchKey);
+        if (keyStart != 0) {
+            // Key not found at start, try to append
+            Serial.printf("[Config] Key %s not found, appending\n", key.c_str());
+            content += "\n" + key + "=" + newValue;
+        }
+    } else {
+        keyStart++; // Skip the newline
+    }
+    
+    if (keyStart >= 0) {
+        int valueStart = keyStart + searchKey.length();
+        int valueEnd = content.indexOf('\n', valueStart);
+        if (valueEnd < 0) valueEnd = content.length();
+        
+        String before = content.substring(0, valueStart);
+        String after = content.substring(valueEnd);
+        content = before + newValue + after;
+    }
+    
+    // Write back
+    file = LittleFS.open(configPath, "w");
+    if (!file) {
+        Serial.println("[Config] Failed to open hub_config.txt for writing");
+        return false;
+    }
+    
+    file.print(content);
+    file.close();
+    
+    Serial.printf("[Config] Updated %s=%s\n", key.c_str(), newValue.c_str());
+    return true;
+}
+
+// ============================================================================
+// OTA UPDATE FUNCTIONS
+// ============================================================================
 
 bool performOtaUpdate(const String& url, bool isLittleFs, String& errorOut) {
     if (url.length() == 0) {
@@ -322,8 +497,14 @@ void loadConfiguration() {
     config.debugSerial = true;
     config.debugESPNOW = false;
     config.debugWebSocket = false;
-    config.otaFirmwareUrl = "";
-    config.otaLittlefsUrl = "";
+    
+    // Hub OTA defaults
+    config.hubFirmwareOtaUrl = "";
+    config.hubLittlefsOtaUrl = "";
+    config.hubFirmwareVersion = "1.0.0";
+    config.hubLittlefsVersion = "1.0.0";
+    
+    // Node OTA defaults
     config.lightNodeOtaUrl = "";
 
     // Test mode disabled by default (only enable in test environments)
@@ -394,10 +575,14 @@ void loadConfiguration() {
             config.debugESPNOW = (value == "true");
         } else if (key == "DEBUG_WEBSOCKET") {
             config.debugWebSocket = (value == "true");
-        } else if (key == "FIRMWARE_OTA_URL") {
-            config.otaFirmwareUrl = value;
-        } else if (key == "LITTLEFS_OTA_URL") {
-            config.otaLittlefsUrl = value;
+        } else if (key == "HUB_FIRMWARE_OTA_URL") {
+            config.hubFirmwareOtaUrl = value;
+        } else if (key == "HUB_LITTLEFS_OTA_URL") {
+            config.hubLittlefsOtaUrl = value;
+        } else if (key == "HUB_FIRMWARE_VERSION") {
+            config.hubFirmwareVersion = value;
+        } else if (key == "HUB_LITTLEFS_VERSION") {
+            config.hubLittlefsVersion = value;
         } else if (key == "LIGHT_NODE_OTA_URL") {
             config.lightNodeOtaUrl = value;
         } else if (key == "HUB_TEST_MODE") {
@@ -2476,11 +2661,13 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         }
     );
 
-    // GET OTA URLs
+    // GET OTA URLs and versions
     server.on("/api/settings/ota-urls", HTTP_GET, [](AsyncWebServerRequest *request){
         JsonDocument doc;
-        doc["firmwareUrl"] = config.otaFirmwareUrl;
-        doc["littlefsUrl"] = config.otaLittlefsUrl;
+        doc["hubFirmwareUrl"] = config.hubFirmwareOtaUrl;
+        doc["hubLittlefsUrl"] = config.hubLittlefsOtaUrl;
+        doc["hubFirmwareVersion"] = config.hubFirmwareVersion;
+        doc["hubLittlefsVersion"] = config.hubLittlefsVersion;
         doc["lightNodeOtaUrl"] = config.lightNodeOtaUrl;
 
         String response;
@@ -2499,48 +2686,151 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     return;
                 }
                 
-                if (doc.containsKey("firmwareUrl")) {
-                    config.otaFirmwareUrl = doc["firmwareUrl"].as<String>();
+                if (doc.containsKey("hubFirmwareUrl")) {
+                    config.hubFirmwareOtaUrl = doc["hubFirmwareUrl"].as<String>();
                 }
-                if (doc.containsKey("littlefsUrl")) {
-                    config.otaLittlefsUrl = doc["littlefsUrl"].as<String>();
+                if (doc.containsKey("hubLittlefsUrl")) {
+                    config.hubLittlefsOtaUrl = doc["hubLittlefsUrl"].as<String>();
                 }
                 if (doc.containsKey("lightNodeOtaUrl")) {
                     config.lightNodeOtaUrl = doc["lightNodeOtaUrl"].as<String>();
                 }
                 
-                Serial.printf("[Config] OTA URLs updated: lightNodeOtaUrl=%s\n", config.lightNodeOtaUrl.c_str());
+                Serial.printf("[Config] OTA URLs updated\n");
                 request->send(200, "application/json", "{\"success\":true}");
             }
         }
     );
 
-    // POST OTA firmware update
+    // GET Hub OTA check - check for available updates
+    server.on("/api/hub/ota/check", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+        
+        // Check firmware update
+        if (config.hubFirmwareOtaUrl.length() > 0) {
+            String remoteVersion;
+            if (fetchRemoteVersion(config.hubFirmwareOtaUrl, remoteVersion)) {
+                doc["firmware"]["currentVersion"] = config.hubFirmwareVersion;
+                doc["firmware"]["availableVersion"] = remoteVersion;
+                doc["firmware"]["hasUpdate"] = compareSemanticVersions(remoteVersion, config.hubFirmwareVersion) > 0;
+                doc["firmware"]["url"] = config.hubFirmwareOtaUrl;
+            } else {
+                doc["firmware"]["error"] = "Failed to fetch firmware version";
+            }
+        } else {
+            doc["firmware"]["error"] = "HUB_FIRMWARE_OTA_URL not configured";
+        }
+        
+        // Check LittleFS update
+        if (config.hubLittlefsOtaUrl.length() > 0) {
+            String remoteVersion;
+            if (fetchRemoteVersion(config.hubLittlefsOtaUrl, remoteVersion)) {
+                doc["littlefs"]["currentVersion"] = config.hubLittlefsVersion;
+                doc["littlefs"]["availableVersion"] = remoteVersion;
+                doc["littlefs"]["hasUpdate"] = compareSemanticVersions(remoteVersion, config.hubLittlefsVersion) > 0;
+                doc["littlefs"]["url"] = config.hubLittlefsOtaUrl;
+            } else {
+                doc["littlefs"]["error"] = "Failed to fetch LittleFS version";
+            }
+        } else {
+            doc["littlefs"]["error"] = "HUB_LITTLEFS_OTA_URL not configured";
+        }
+
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST OTA firmware update with version check
     server.on("/api/ota/firmware", HTTP_POST, [](AsyncWebServerRequest *request){
+        // Check if URL is configured
+        if (config.hubFirmwareOtaUrl.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"HUB_FIRMWARE_OTA_URL not configured\"}");
+            return;
+        }
+        
+        // Check version before updating
+        String remoteVersion;
+        if (!fetchRemoteVersion(config.hubFirmwareOtaUrl, remoteVersion)) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to fetch remote version\"}");
+            return;
+        }
+        
+        if (compareSemanticVersions(remoteVersion, config.hubFirmwareVersion) <= 0) {
+            String response = "{\"success\":false,\"error\":\"No update available. Current: " + 
+                              config.hubFirmwareVersion + ", Remote: " + remoteVersion + "\"}";
+            request->send(200, "application/json", response);
+            return;
+        }
+        
+        // Build firmware URL
+        String firmwareUrl = config.hubFirmwareOtaUrl;
+        if (!firmwareUrl.endsWith("/")) firmwareUrl += "/";
+        firmwareUrl += "firmware.bin";
+        
+        Serial.printf("[OTA] Updating firmware from %s to %s\n", 
+                      config.hubFirmwareVersion.c_str(), remoteVersion.c_str());
+        
         String error;
-        bool ok = performOtaUpdate(config.otaFirmwareUrl, false, error);
+        bool ok = performOtaUpdate(firmwareUrl, false, error);
         if (!ok) {
             String response = String("{\"success\":false,\"error\":\"") + error + "\"}";
             request->send(500, "application/json", response);
             return;
         }
+        
+        // Update version in hub_config.txt before reboot
+        updateHubConfigValue("HUB_FIRMWARE_VERSION", remoteVersion);
+        config.hubFirmwareVersion = remoteVersion;
 
-        request->send(200, "application/json", "{\"success\":true}");
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Firmware updated, rebooting...\"}");
         delay(1000);
         ESP.restart();
     });
 
-    // POST OTA LittleFS update
+    // POST OTA LittleFS update with version check
     server.on("/api/ota/littlefs", HTTP_POST, [](AsyncWebServerRequest *request){
+        // Check if URL is configured
+        if (config.hubLittlefsOtaUrl.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"HUB_LITTLEFS_OTA_URL not configured\"}");
+            return;
+        }
+        
+        // Check version before updating
+        String remoteVersion;
+        if (!fetchRemoteVersion(config.hubLittlefsOtaUrl, remoteVersion)) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to fetch remote version\"}");
+            return;
+        }
+        
+        if (compareSemanticVersions(remoteVersion, config.hubLittlefsVersion) <= 0) {
+            String response = "{\"success\":false,\"error\":\"No update available. Current: " + 
+                              config.hubLittlefsVersion + ", Remote: " + remoteVersion + "\"}";
+            request->send(200, "application/json", response);
+            return;
+        }
+        
+        // Build LittleFS URL
+        String littlefsUrl = config.hubLittlefsOtaUrl;
+        if (!littlefsUrl.endsWith("/")) littlefsUrl += "/";
+        littlefsUrl += "littlefs.bin";
+        
+        Serial.printf("[OTA] Updating LittleFS from %s to %s\n", 
+                      config.hubLittlefsVersion.c_str(), remoteVersion.c_str());
+        
         String error;
-        bool ok = performOtaUpdate(config.otaLittlefsUrl, true, error);
+        bool ok = performOtaUpdate(littlefsUrl, true, error);
         if (!ok) {
             String response = String("{\"success\":false,\"error\":\"") + error + "\"}";
             request->send(500, "application/json", response);
             return;
         }
+        
+        // Update version in hub_config.txt before reboot
+        updateHubConfigValue("HUB_LITTLEFS_VERSION", remoteVersion);
+        config.hubLittlefsVersion = remoteVersion;
 
-        request->send(200, "application/json", "{\"success\":true}");
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"LittleFS updated, rebooting...\"}");
         delay(1000);
         ESP.restart();
     });

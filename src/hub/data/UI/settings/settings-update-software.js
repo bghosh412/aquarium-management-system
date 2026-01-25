@@ -8,9 +8,14 @@ function loadOtaUrls() {
     fetch('/api/settings/ota-urls')
         .then(response => response.json())
         .then(data => {
-            document.getElementById('firmwareUrl').value = data.firmwareUrl || '';
-            document.getElementById('littlefsUrl').value = data.littlefsUrl || '';
-            document.getElementById('lightNodeOtaUrl').value = data.lightNodeOtaUrl || '';
+            // Hub OTA URLs and versions
+            document.getElementById('hubFirmwareUrl').value = data.hubFirmwareUrl || 'Not configured';
+            document.getElementById('hubLittlefsUrl').value = data.hubLittlefsUrl || 'Not configured';
+            document.getElementById('hubFirmwareCurrentVersion').textContent = data.hubFirmwareVersion || '--';
+            document.getElementById('hubLittlefsCurrentVersion').textContent = data.hubLittlefsVersion || '--';
+            
+            // Light node OTA URL
+            document.getElementById('lightNodeOtaUrl').value = data.lightNodeOtaUrl || 'Not configured';
         })
         .catch(error => {
             console.error('Error loading OTA URLs:', error);
@@ -34,40 +39,108 @@ function loadLightNodeVersion() {
         });
 }
 
-function setupButtons() {
-    const updateStatus = document.getElementById('updateStatus');
+// Hub OTA state
+let hubFirmwareHasUpdate = false;
+let hubLittlefsHasUpdate = false;
 
+function setupButtons() {
+    const hubUpdateStatus = document.getElementById('hubUpdateStatus');
+
+    // Hub Firmware Check button
+    document.getElementById('checkHubFirmwareBtn').addEventListener('click', () => {
+        hubUpdateStatus.innerHTML = '<div style="color: var(--color-primary);">🔍 Checking for firmware updates...</div>';
+        fetch('/api/hub/ota/check')
+            .then(response => response.json())
+            .then(data => {
+                if (data.firmware && !data.firmware.error) {
+                    document.getElementById('hubFirmwareAvailableVersion').textContent = data.firmware.availableVersion || '--';
+                    hubFirmwareHasUpdate = data.firmware.hasUpdate;
+                    document.getElementById('updateFirmwareBtn').disabled = !data.firmware.hasUpdate;
+                    
+                    if (data.firmware.hasUpdate) {
+                        hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent-warning);">🆕 Firmware update available!</div>';
+                    } else {
+                        hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent);">✅ Firmware is up to date</div>';
+                    }
+                } else {
+                    hubUpdateStatus.innerHTML = `<div style="color: var(--color-accent-danger);">❌ ${data.firmware?.error || 'Check failed'}</div>`;
+                }
+            })
+            .catch(error => {
+                console.error('Firmware check failed:', error);
+                hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent-danger);">❌ Check failed</div>';
+            });
+    });
+
+    // Hub LittleFS Check button
+    document.getElementById('checkHubLittlefsBtn').addEventListener('click', () => {
+        hubUpdateStatus.innerHTML = '<div style="color: var(--color-primary);">🔍 Checking for LittleFS updates...</div>';
+        fetch('/api/hub/ota/check')
+            .then(response => response.json())
+            .then(data => {
+                if (data.littlefs && !data.littlefs.error) {
+                    document.getElementById('hubLittlefsAvailableVersion').textContent = data.littlefs.availableVersion || '--';
+                    hubLittlefsHasUpdate = data.littlefs.hasUpdate;
+                    document.getElementById('updateLittlefsBtn').disabled = !data.littlefs.hasUpdate;
+                    
+                    if (data.littlefs.hasUpdate) {
+                        hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent-warning);">🆕 LittleFS update available!</div>';
+                    } else {
+                        hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent);">✅ LittleFS is up to date</div>';
+                    }
+                } else {
+                    hubUpdateStatus.innerHTML = `<div style="color: var(--color-accent-danger);">❌ ${data.littlefs?.error || 'Check failed'}</div>`;
+                }
+            })
+            .catch(error => {
+                console.error('LittleFS check failed:', error);
+                hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent-danger);">❌ Check failed</div>';
+            });
+    });
+
+    // Hub Firmware Update button
     document.getElementById('updateFirmwareBtn').addEventListener('click', () => {
-        updateStatus.innerHTML = '<div style="color: var(--color-primary);">Updating firmware...</div>';
+        if (!confirm('Update hub firmware? The hub will reboot after the update.')) return;
+        
+        hubUpdateStatus.innerHTML = '<div style="color: var(--color-primary);">⏳ Updating firmware... Please wait.</div>';
+        document.getElementById('updateFirmwareBtn').disabled = true;
+        
         fetch('/api/ota/firmware', { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    updateStatus.innerHTML = '<div style="color: var(--color-accent);">Firmware update started. Hub will reboot if successful.</div>';
+                    hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent);">✅ Firmware updated! Hub is rebooting...</div>';
                 } else {
-                    updateStatus.innerHTML = `<div style="color: var(--color-accent-danger);">${data.error || 'Update failed'}</div>`;
+                    hubUpdateStatus.innerHTML = `<div style="color: var(--color-accent-danger);">❌ ${data.error || 'Update failed'}</div>`;
+                    document.getElementById('updateFirmwareBtn').disabled = !hubFirmwareHasUpdate;
                 }
             })
             .catch(error => {
                 console.error('Firmware update failed:', error);
-                updateStatus.innerHTML = '<div style="color: var(--color-accent-danger);">Update failed.</div>';
+                hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent-danger);">❌ Update failed (connection lost - hub may be rebooting)</div>';
             });
     });
 
+    // Hub LittleFS Update button
     document.getElementById('updateLittlefsBtn').addEventListener('click', () => {
-        updateStatus.innerHTML = '<div style="color: var(--color-primary);">Updating LittleFS...</div>';
+        if (!confirm('Update hub LittleFS? The hub will reboot after the update.')) return;
+        
+        hubUpdateStatus.innerHTML = '<div style="color: var(--color-primary);">⏳ Updating LittleFS... Please wait.</div>';
+        document.getElementById('updateLittlefsBtn').disabled = true;
+        
         fetch('/api/ota/littlefs', { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    updateStatus.innerHTML = '<div style="color: var(--color-accent);">LittleFS update started. Hub will reboot if successful.</div>';
+                    hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent);">✅ LittleFS updated! Hub is rebooting...</div>';
                 } else {
-                    updateStatus.innerHTML = `<div style="color: var(--color-accent-danger);">${data.error || 'Update failed'}</div>`;
+                    hubUpdateStatus.innerHTML = `<div style="color: var(--color-accent-danger);">❌ ${data.error || 'Update failed'}</div>`;
+                    document.getElementById('updateLittlefsBtn').disabled = !hubLittlefsHasUpdate;
                 }
             })
             .catch(error => {
                 console.error('LittleFS update failed:', error);
-                updateStatus.innerHTML = '<div style="color: var(--color-accent-danger);">Update failed.</div>';
+                hubUpdateStatus.innerHTML = '<div style="color: var(--color-accent-danger);">❌ Update failed (connection lost - hub may be rebooting)</div>';
             });
     });
 

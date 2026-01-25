@@ -625,10 +625,11 @@ img {
 /* ===== Settings Layout ===== */
 .settings-layout {
     display: grid;
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: 1fr; /* single column layout for settings pages */
     gap: 1.5rem;
 }
 
+/* Make the settings nav default vertical (sidebar style) */
 .settings-nav {
     display: flex;
     flex-direction: column;
@@ -646,6 +647,32 @@ img {
     border: 1px solid transparent;
     background: var(--bg-secondary);
     transition: var(--transition);
+}
+
+/* Inline settings nav variant for pages that need a horizontal secondary nav */
+.settings-nav--inline {
+    display: flex;
+    flex-direction: row;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 0.25rem 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.settings-nav--inline a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 10px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    border: 1px solid transparent;
+    background: var(--bg-secondary);
+    transition: var(--transition);
+    white-space: nowrap;
 }
 
 .settings-nav a:hover {
@@ -1428,6 +1455,24 @@ input[type="range"]::-moz-range-thumb:hover {
     50% {
         opacity: 0.5;
     }
+}
+
+/* Small inline spinner */
+.small-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--bg-tertiary);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
 /* ===== Collapsible Sections ===== */

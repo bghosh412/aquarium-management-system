@@ -53,11 +53,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Update uptime every second
     uptimeInterval = setInterval(updateUptime, 1000);
     
-    // Update stats every 5 seconds
-    setInterval(() => {
-        updateSystemStats();
-        loadDashboardData();  // Refresh dashboard data
-    }, 5000);
+    // Update stats every 5 seconds — only on the dashboard page
+    const pathname = window.location.pathname || '/';
+    if (pathname === '/' || pathname.endsWith('/index.html')) {
+        setInterval(() => {
+            updateSystemStats();
+            loadDashboardData();  // Refresh dashboard data
+        }, 5000);
+    }
 });
 
 // WebSocket connection management

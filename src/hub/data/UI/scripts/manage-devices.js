@@ -7,9 +7,14 @@ let selectedDevices = new Set();
 document.addEventListener('DOMContentLoaded', () => {
     loadDevices();
     loadTankFilter();
-    
-    // Refresh device list every 5 seconds
-    setInterval(loadDevices, 5000);
+
+    // Do not auto-refresh in background. Refresh on visibility/focus instead.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            loadDevices();
+        }
+    });
+    window.addEventListener('focus', () => loadDevices());
 });
 
 function loadDevices() {
@@ -47,8 +52,8 @@ function loadTankFilter() {
                 
                 data.aquariums.forEach(tank => {
                     const option = document.createElement('option');
-                    option.value = tank.tankId;
-                    option.textContent = `Tank ${tank.tankId} - ${tank.name}`;
+                    option.value = tank.id;
+                    option.textContent = `Tank ${tank.id} - ${tank.name}`;
                     tankFilter.appendChild(option);
                 });
             }
@@ -61,8 +66,8 @@ function loadTankFilter() {
             
             aquariums.forEach(tank => {
                 const option = document.createElement('option');
-                option.value = tank.tankId;
-                option.textContent = `Tank ${tank.tankId} - ${tank.name}`;
+                option.value = tank.id;
+                option.textContent = `Tank ${tank.id} - ${tank.name}`;
                 tankFilter.appendChild(option);
             });
         });
@@ -76,18 +81,18 @@ function filterDevices() {
     filteredDevices = allDevices.filter(device => {
         let matches = true;
         
-        if (tankFilter !== 'all' && device.tankId !== parseInt(tankFilter)) {
+            if (tankFilter !== 'all' && String(device.tankId) !== String(tankFilter)) {
             matches = false;
         }
         
-        if (typeFilter !== 'all' && device.type !== typeFilter) {
+        if (typeFilter !== 'all' && String(device.type || '').toLowerCase() !== String(typeFilter).toLowerCase()) {
             matches = false;
         }
         
         if (statusFilter !== 'all') {
             if (statusFilter === 'online' && !device.online) matches = false;
             if (statusFilter === 'offline' && device.online) matches = false;
-            if (statusFilter === 'error' && !device.hasError) matches = false;
+            if (statusFilter === 'error' && device.hasError !== true) matches = false;
         }
         
         return matches;
@@ -177,6 +182,7 @@ function renderDevices() {
 }
 
 function getDeviceIcon(type) {
+    const typeLower = String(type || '').toLowerCase();
     const icons = {
         'light': '💡',
         'co2': '🫧',
@@ -185,7 +191,7 @@ function getDeviceIcon(type) {
         'sensor': '📊',
         'repeater': '📡'
     };
-    return icons[type] || '🔌';
+    return icons[typeLower] || '🔌';
 }
 
 function getDeviceTypeName(type) {

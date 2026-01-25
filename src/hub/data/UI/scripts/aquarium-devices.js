@@ -10,26 +10,51 @@ document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
     currentTankId = parseInt(params.get('tankId')) || parseInt(localStorage.getItem('selectedTankId'));
     
-    // If no tankId provided, try to pick the first aquarium from localStorage.
+    // If no tankId provided, try to pick the first aquarium from localStorage or from the hub API.
     if (!currentTankId) {
         const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
         if (aquariums.length > 0) {
             currentTankId = aquariums[0].id;
             localStorage.setItem('selectedTankId', currentTankId);
         } else {
-            // No aquariums available — show friendly empty state and stop further loading
-            document.getElementById('aquariumName').textContent = 'No Aquarium Selected';
-            // Ensure devices empty state is visible
-            document.getElementById('devicesGrid').style.display = 'none';
-            const empty = document.getElementById('emptyState');
-            if (empty) {
-                empty.style.display = 'block';
-                empty.querySelector('h2').textContent = 'No Aquarium Selected';
-                empty.querySelector('p').textContent = 'Please add an aquarium first or select one from the Aquariums page.';
-            }
+            // Try fetching aquariums from API to pick the first one
+            fetch('/api/aquariums')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.aquariums && data.aquariums.length > 0) {
+                        currentTankId = data.aquariums[0].id;
+                        localStorage.setItem('selectedTankId', currentTankId);
+                        // proceed to load
+                        loadAquariumData();
+                        loadDevices();
+                        setupFilters();
+                    } else {
+                        showNoAquariumSelected();
+                    }
+                })
+                .catch(err => {
+                    console.error('Failed to fetch aquariums:', err);
+                    showNoAquariumSelected();
+                });
+            // Stop further execution here — callbacks handle loading
             return;
         }
     }
++
++function showNoAquariumSelected() {
++    document.getElementById('aquariumName').textContent = 'No Aquarium Selected';
++    // Ensure devices empty state is visible
++    const grid = document.getElementById('devicesGrid');
++    if (grid) grid.style.display = 'none';
++    const empty = document.getElementById('emptyState');
++    if (empty) {
++        empty.style.display = 'block';
++        empty.querySelector('h2').textContent = 'No Aquarium Selected';
++        empty.querySelector('p').textContent = 'Please add an aquarium first or select one from the Aquariums page.';
++    }
++    return;
++}
+
     
     loadAquariumData();
     loadDevices();
@@ -49,15 +74,35 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function loadAquariumData() {
+    // Show inline spinner next to aquarium name
+    showAquariumLoading(true);
+
     // Load from API
     fetch('/api/aquariums')
         .then(response => response.json())
         .then(data => {
             if (data.aquariums && Array.isArray(data.aquariums)) {
                 currentAquarium = data.aquariums.find(a => a.id === currentTankId);
+                if (!currentAquarium && data.aquariums.length > 0) {
+                    // Auto-select first aquarium
+                    currentTankId = data.aquariums[0].id;
+                    currentAquarium = data.aquariums[0];
+                    localStorage.setItem('selectedTankId', currentTankId);
+
+                    // Emit an event for other modules
+                    window.dispatchEvent(new CustomEvent('defaultAquariumSelected', { detail: { tankId: currentTankId } }));
+                    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
+                        sendCommand({ type: 'defaultAquariumSelected', tankId: currentTankId });
+                    }
+                }
+
                 if (currentAquarium) {
                     displayAquariumInfo();
+                } else {
+                    showNoAquariumSelected();
                 }
+            } else {
+                showNoAquariumSelected();
             }
         })
         .catch(error => {
@@ -67,12 +112,21 @@ function loadAquariumData() {
             currentAquarium = aquariums.find(a => a.id === currentTankId);
             if (currentAquarium) {
                 displayAquariumInfo();
+            } else {
+                showNoAquariumSelected();
             }
+        })
+        .finally(() => {
+            showAquariumLoading(false);
         });
 }
 
 function displayAquariumInfo() {
     document.getElementById('aquariumName').textContent = currentAquarium.name;
+    // Remove any spinner if present
+    const spinner = document.getElementById('aquariumLoading');
+    if (spinner) spinner.remove();
+
     document.getElementById('tankId').textContent = currentAquarium.id;
     document.getElementById('volume').textContent = currentAquarium.volumeLiters;
     document.getElementById('location').textContent = currentAquarium.location || 'Not specified';
@@ -87,6 +141,10 @@ function displayAquariumInfo() {
 }
 
 function loadDevices() {
+    // Show loading placeholder
+    const grid = document.getElementById('devicesGrid');
+    grid.innerHTML = '<div style="padding:1.5rem; color: var(--text-secondary);">Loading devices...</div>';
+
     // Load from API
     fetch('/api/devices')
         .then(response => response.json())
@@ -94,6 +152,9 @@ function loadDevices() {
             if (data.devices && Array.isArray(data.devices)) {
                 // Filter devices by current tank ID
                 devices = data.devices.filter(d => d.tankId === currentTankId);
+                renderDevices();
+            } else {
+                devices = [];
                 renderDevices();
             }
         })
@@ -122,10 +183,10 @@ function renderDevices() {
     const grid = document.getElementById('devicesGrid');
     const emptyState = document.getElementById('emptyState');
     
-    // Filter devices
+    // Filter devices (case-insensitive type matching)
     const filteredDevices = currentFilter === 'all' 
         ? devices 
-        : devices.filter(d => d.type === currentFilter);
+        : devices.filter(d => (d.type || '').toString().toLowerCase() === currentFilter);
     
     if (filteredDevices.length === 0) {
         grid.style.display = 'none';
@@ -137,12 +198,13 @@ function renderDevices() {
     emptyState.style.display = 'none';
     
     grid.innerHTML = filteredDevices.map(device => {
-        const icon = getDeviceIcon(device.type);
+        const normType = (device.type || '').toString().toLowerCase();
+        const icon = getDeviceIcon(normType);
         const statusClass = (device.status === 'ONLINE') ? 'badge-online' : 'badge-offline';
         const statusText = (device.status === 'ONLINE') ? 'Online' : 'Offline';
         
         return `
-            <div class="card" style="cursor: pointer;" onclick="viewDeviceDetails('${device.mac}', '${device.type}')">
+            <div class="card" style="cursor: pointer;" onclick="viewDeviceDetails('${device.mac}', '${normType}')">
                 <div class="card-header">
                     <h3>${icon} ${device.name}</h3>
                     <span class="badge ${statusClass}">${statusText}</span>
@@ -179,7 +241,8 @@ function getDeviceIcon(type) {
 }
 
 function getDeviceStatus(device) {
-    switch(device.type) {
+    const t = (device.type || '').toString().toLowerCase();
+    switch(t) {
         case 'light':
             return `
                 <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
@@ -208,6 +271,8 @@ function getDeviceStatus(device) {
 function viewDeviceDetails(mac, type) {
     localStorage.setItem('selectedDeviceMac', mac);
     
+    const t = (type || '').toString().toLowerCase();
+
     // Route to appropriate details page
     const detailsPages = {
         'light': 'details/light-details.html',
@@ -217,7 +282,7 @@ function viewDeviceDetails(mac, type) {
         'sensor': 'details/sensor-details.html'
     };
     
-    const page = detailsPages[type] || '#';
+    const page = detailsPages[t] || '#';
     if (page !== '#') {
         window.location.href = page + `?mac=${mac}&tankId=${currentTankId}`;
     }

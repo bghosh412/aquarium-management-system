@@ -42,45 +42,6 @@
                 <p class="page-description">Manage all devices across all aquariums</p>
             </div>
 
-            <!-- Filter Section -->
-            <div class="card" style="margin-bottom: 1.5rem;">
-                <div class="card-body">
-                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
-                        <!-- Tank Filter -->
-                        <div style="flex: 1; min-width: 200px;">
-                            <label for="tankFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Tank</label>
-                            <select id="tankFilter" class="form-input" onchange="filterDevices()">
-                                <option value="all">All Tanks</option>
-                            </select>
-                        </div>
-
-                        <!-- Device Type Filter -->
-                        <div style="flex: 1; min-width: 200px;">
-                            <label for="typeFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Type</label>
-                            <select id="typeFilter" class="form-input" onchange="filterDevices()">
-                                <option value="all">All Types</option>
-                                <option value="light">&#x1F4A1; Light</option>
-                                <option value="co2">CO₂</option>
-                                <option value="heater">&#x1F525; Heater</option>
-                                <option value="feeder">&#x1F41F; Feeder</option>
-                                <option value="sensor">&#x1F4CA; Sensor</option>
-                                <option value="repeater">Repeater</option>
-                            </select>
-                        </div>
-
-                        <!-- Status Filter -->
-                        <div style="flex: 1; min-width: 200px;">
-                            <label for="statusFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Status</label>
-                            <select id="statusFilter" class="form-input" onchange="filterDevices()">
-                                <option value="all">All Status</option>
-                                <option value="online">Online</option>
-                                <option value="offline">Offline</option>
-                                <option value="error">Error</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-            </div>
 
             <!-- Statistics Cards -->
             <div class="stats-grid" style="margin-bottom: 2rem;">
@@ -138,6 +99,46 @@
             </div>
 
             <!-- Devices Grid -->
+            <!-- Filter Section (moved here) -->
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="card-body">
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+                        <!-- Tank Filter -->
+                        <div style="flex: 1; min-width: 200px;">
+                            <label for="tankFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Tank</label>
+                            <select id="tankFilter" class="form-input" onchange="filterDevices()">
+                                <option value="all">All Tanks</option>
+                            </select>
+                        </div>
+
+                        <!-- Device Type Filter -->
+                        <div style="flex: 1; min-width: 200px;">
+                            <label for="typeFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Type</label>
+                            <select id="typeFilter" class="form-input" onchange="filterDevices()">
+                                <option value="all">All Types</option>
+                                <option value="light">💡 Light</option>
+                                <option value="co2">CO₂</option>
+                                <option value="heater">🔥 Heater</option>
+                                <option value="feeder">🐟 Feeder</option>
+                                <option value="sensor">📊 Sensor</option>
+                                <option value="repeater">Repeater</option>
+                            </select>
+                        </div>
+
+                        <!-- Status Filter -->
+                        <div style="flex: 1; min-width: 200px;">
+                            <label for="statusFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Status</label>
+                            <select id="statusFilter" class="form-input" onchange="filterDevices()">
+                                <option value="all">All Status</option>
+                                <option value="online">Online</option>
+                                <option value="offline">Offline</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="content-grid" id="devicesGrid">
                 <!-- Devices will be dynamically loaded here -->
             </div>

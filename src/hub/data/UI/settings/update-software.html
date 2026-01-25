@@ -38,20 +38,18 @@
                 <p class="page-description">OTA updates for firmware and LittleFS</p>
             </div>
 
-            <div class="settings-layout">
-                <div class="card">
-                    <div class="card-header">
-                        <h3>Settings Menu</h3>
-                    </div>
-                    <div class="card-body settings-nav">
-                        <a href="/settings/download-upload.html">Download/Upload files</a>
-                        <a href="/settings/update-software.html" class="active">Update software</a>
-                        <a href="/settings/backup-restore.html">Backup/Restore Settings</a>
-                        <a href="/settings/diagnostics.html">Diagnostics</a>
-                        <a href="/settings/wifi-settings.html">WIFI Settings</a>
-                    </div>
-                </div>
+            <!-- Horizontal settings nav -->
+            <div class="settings-inline" style="margin-bottom: 1rem;">
+                <nav class="settings-nav settings-nav--inline">
+                    <a href="/settings/download-upload.html">Download/Upload files</a>
+                    <a href="/settings/update-software.html" class="active">Update software</a>
+                    <a href="/settings/backup-restore.html">Backup/Restore Settings</a>
+                    <a href="/settings/diagnostics.html">Diagnostics</a>
+                    <a href="/settings/wifi-settings.html">WIFI Settings</a>
+                </nav>
+            </div>
 
+            <div class="settings-layout">
                 <div class="card">
                     <div class="card-header collapsible-header" onclick="toggleCollapsible(this)">
                         <div>
@@ -121,7 +119,6 @@
                         </div>
                     </div>
                 </div>
-                <div class="card">&nbsp;</div>
                 <!-- Node OTA Section -->
                 <div class="card">
                     <div class="card-header collapsible-header" onclick="toggleCollapsible(this)">

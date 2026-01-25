@@ -181,6 +181,54 @@ std::vector<Aquarium*> AquariumManager::getAllAquariums() const {
 // DEVICE DISCOVERY & REGISTRATION
 // ============================================================================
 
+static void updateDeviceFirmwareInJson(const char* macStr, uint8_t firmwareVersion) {
+    File devFile = LittleFS.open("/config/devices.json", "r");
+    if (!devFile) {
+        return;
+    }
+
+    DynamicJsonDocument devDoc(8192);
+    DeserializationError error = deserializeJson(devDoc, devFile);
+    devFile.close();
+
+    if (error) {
+        return;
+    }
+
+    JsonArray devicesArr = devDoc["devices"];
+    if (devicesArr.isNull()) {
+        return;
+    }
+
+    bool updated = false;
+    for (JsonObject d : devicesArr) {
+        const char* listedMac = d["mac"];
+        if (listedMac && strcasecmp(listedMac, macStr) == 0) {
+            uint8_t currentFw = d["firmwareVersion"] | 0;
+            if (currentFw != firmwareVersion) {
+                d["firmwareVersion"] = firmwareVersion;
+                updated = true;
+            }
+            d["status"] = "ONLINE";
+            d["lastHeartbeat"] = millis();
+            updated = true;
+            break;
+        }
+    }
+
+    if (!updated) {
+        return;
+    }
+
+    devFile = LittleFS.open("/config/devices.json", "w");
+    if (!devFile) {
+        return;
+    }
+
+    serializeJson(devDoc, devFile);
+    devFile.close();
+}
+
 void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& msg) {
     uint64_t macKey = _macToKey(mac);
     
@@ -207,6 +255,13 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
                 const char* listedMac = d["mac"];
                 if (listedMac && strcasecmp(listedMac, macStr) == 0) {
                     int listedTankId = d["tankId"] | 0;
+                    updateDeviceFirmwareInJson(macStr, msg.firmwareVersion);
+
+                    auto it = _globalDeviceRegistry.find(macKey);
+                    if (it != _globalDeviceRegistry.end()) {
+                        it->second->setFirmwareVersion(msg.firmwareVersion);
+                    }
+
                     Serial.printf("   - Device found in devices.json (tank %d); sending ACK and skipping unmapped\n", listedTankId);
                     _sendAck(mac, listedTankId, true);
                     _stats.totalMessagesReceived++;
@@ -218,6 +273,8 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
 
     // Check if device already registered
     if (_globalDeviceRegistry.find(macKey) != _globalDeviceRegistry.end()) {
+        updateDeviceFirmwareInJson(macStr, msg.firmwareVersion);
+        _globalDeviceRegistry[macKey]->setFirmwareVersion(msg.firmwareVersion);
         Serial.println("   - Device already registered, sending ACK");
         _sendAck(mac, msg.header.tankId, true);
         _stats.totalMessagesReceived++;
@@ -415,6 +472,11 @@ void AquariumManager::handleHeartbeat(const uint8_t* mac, const HeartbeatMessage
     
     Device* device = it->second;
     device->updateHeartbeat(msg.health, msg.uptimeMinutes);
+
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    updateDeviceFirmwareInJson(macStr, device->getFirmwareVersion());
     
     // Update status to online if it was offline
     if (device->getStatus() != Device::Status::ONLINE) {

@@ -2872,6 +2872,84 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "application/json", "{\"version\":null,\"error\":\"No online light device\"}");
     });
 
+    // GET Light node list (all light devices with online status and tank names)
+    server.on("/api/nodes/light/list", HTTP_GET, [](AsyncWebServerRequest *request){
+        DynamicJsonDocument responseDoc(8192);
+        JsonArray deviceArray = responseDoc.createNestedArray("devices");
+
+        // Load tank name map from aquariums.json
+        std::map<uint8_t, String> tankNames;
+        File tanksFile = LittleFS.open("/config/aquariums.json", "r");
+        if (tanksFile) {
+            DynamicJsonDocument tanksDoc(8192);
+            if (!deserializeJson(tanksDoc, tanksFile)) {
+                JsonArray tanks = tanksDoc["aquariums"];
+                for (JsonObject tank : tanks) {
+                    uint8_t tankId = tank["id"] | 0;
+                    const char* tankName = tank["name"] | "";
+                    if (tankId > 0 && tankName && strlen(tankName) > 0) {
+                        tankNames[tankId] = String(tankName);
+                    }
+                }
+            }
+            tanksFile.close();
+        }
+
+        // Load devices
+        File devFile = LittleFS.open("/config/devices.json", "r");
+        if (!devFile) {
+            responseDoc["error"] = "devices.json not found";
+            String response;
+            serializeJson(responseDoc, response);
+            request->send(200, "application/json", response);
+            return;
+        }
+
+        DynamicJsonDocument devDoc(8192);
+        DeserializationError err = deserializeJson(devDoc, devFile);
+        devFile.close();
+        if (err) {
+            responseDoc["error"] = "JSON parse error";
+            String response;
+            serializeJson(responseDoc, response);
+            request->send(200, "application/json", response);
+            return;
+        }
+
+        JsonArray devices = devDoc["devices"];
+        for (JsonObject device : devices) {
+            String type = device["type"].as<String>();
+            if (type.length() == 0) continue;
+            String typeUpper = type;
+            typeUpper.toUpperCase();
+            if (typeUpper != "LIGHT") continue;
+
+            String macStr = device["mac"].as<String>();
+            if (macStr.length() == 0) continue;
+
+            uint8_t mac[6];
+            if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                      &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+                continue;
+            }
+
+            uint8_t tankId = device["tankId"] | 0;
+            String tankName = tankNames.count(tankId) ? tankNames[tankId] : String("--");
+
+            JsonObject out = deviceArray.createNestedObject();
+            out["mac"] = macToString(mac);
+            out["name"] = device["name"] | "Unknown";
+            out["tankId"] = tankId;
+            out["tankName"] = tankName;
+            out["firmwareVersion"] = device["firmwareVersion"] | 0;
+            out["online"] = ESPNowManager::getInstance().isPeerOnline(mac);
+        }
+
+        String response;
+        serializeJson(responseDoc, response);
+        request->send(200, "application/json", response);
+    });
+
     // POST Check for light node update
     server.on("/api/nodes/light/check-update", HTTP_POST, [](AsyncWebServerRequest *request){
         if (config.lightNodeOtaUrl.length() == 0) {
@@ -2894,6 +2972,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
 
         HTTPClient http;
         String versionUrl = baseUrl + "version.txt";
+        versionUrl += "?ts=" + String(millis());
         if (!http.begin(*client, versionUrl)) {
             request->send(200, "application/json", "{\"error\":\"Failed to connect to version URL\"}");
             return;
@@ -2910,9 +2989,13 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         String versionStr = http.getString();
         http.end();
         versionStr.trim();
+        if (versionStr.length() > 0 && (versionStr[0] == 'v' || versionStr[0] == 'V')) {
+            versionStr = versionStr.substring(1);
+            versionStr.trim();
+        }
         int availableVersion = versionStr.toInt();
 
-        // Get current version from online light device
+        // Get current version from the first *actually online* light device (use live peer status)
         int currentVersion = 0;
         File devFile = LittleFS.open("/config/devices.json", "r");
         if (devFile) {
@@ -2921,8 +3004,24 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                 JsonArray devices = devDoc["devices"];
                 for (JsonObject device : devices) {
                     String type = device["type"].as<String>();
-                    String status = device["status"].as<String>();
-                    if (type == "LIGHT" && status == "ONLINE") {
+                    if (type.length() == 0) continue;
+
+                    // Case-insensitive type check
+                    String typeUpper = type;
+                    typeUpper.toUpperCase();
+                    if (typeUpper != "LIGHT") continue;
+
+                    String macStr = device["mac"].as<String>();
+                    if (macStr.length() == 0) continue;
+
+                    uint8_t mac[6];
+                    if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                              &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+                        continue;
+                    }
+
+                    // Use live peer status (heartbeat/announce) to determine online
+                    if (ESPNowManager::getInstance().isPeerOnline(mac)) {
                         currentVersion = device["firmwareVersion"] | 0;
                         break;
                     }
@@ -2968,8 +3067,17 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "application/json", response);
     });
 
-    // POST Apply light node update (async) - updates ALL online LIGHT devices
-    server.on("/api/nodes/light/apply-update", HTTP_POST, [](AsyncWebServerRequest *request){
+    // POST Apply light node update (async) - updates selected LIGHT devices
+    server.on("/api/nodes/light/apply-update", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index == 0) {
+            Serial.println("[NodeOTA] Received apply-update request");
+        }
+
+        if (index + len != total) {
+            return;
+        }
+
         // Check if OTA already in progress
         if (nodeOtaState.active) {
             request->send(200, "application/json", "{\"success\":false,\"error\":\"OTA transfer already in progress\"}");
@@ -2981,37 +3089,46 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             return;
         }
 
+        DynamicJsonDocument bodyDoc(1024);
+        DeserializationError bodyError = deserializeJson(bodyDoc, data, len);
+        if (bodyError) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        JsonArray macs = bodyDoc["macs"].as<JsonArray>();
+        if (macs.isNull() || macs.size() == 0) {
+            request->send(200, "application/json", "{\"success\":false,\"error\":\"No devices selected\"}");
+            return;
+        }
+
         String baseUrl = config.lightNodeOtaUrl;
         if (!baseUrl.endsWith("/")) baseUrl += "/";
 
-        // Find ALL online light devices
         uint8_t targetCount = 0;
-        uint8_t targetMacs[10][6] = {0};  // Up to 10 devices
+        uint8_t targetMacs[10][6] = {0};
 
-        File devFile = LittleFS.open("/config/devices.json", "r");
-        if (devFile) {
-            DynamicJsonDocument devDoc(8192);
-            if (!deserializeJson(devDoc, devFile)) {
-                JsonArray devices = devDoc["devices"];
-                for (JsonObject device : devices) {
-                    String type = device["type"].as<String>();
-                    bool isOnline = device["online"].as<bool>();
-                    if (type == "LIGHT" && isOnline && targetCount < 10) {
-                        String macStr = device["mac"].as<String>();
-                        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                                  &targetMacs[targetCount][0], &targetMacs[targetCount][1], 
-                                  &targetMacs[targetCount][2], &targetMacs[targetCount][3], 
-                                  &targetMacs[targetCount][4], &targetMacs[targetCount][5]) == 6) {
-                            targetCount++;
-                        }
-                    }
-                }
+        for (JsonVariant macValue : macs) {
+            if (targetCount >= 10) break;
+            String macStr = macValue.as<String>();
+            if (macStr.length() == 0) continue;
+
+            uint8_t mac[6];
+            if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                      &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+                continue;
             }
-            devFile.close();
+
+            if (!ESPNowManager::getInstance().isPeerOnline(mac)) {
+                continue;
+            }
+
+            memcpy(targetMacs[targetCount], mac, 6);
+            targetCount++;
         }
 
         if (targetCount == 0) {
-            request->send(200, "application/json", "{\"success\":false,\"error\":\"No online light devices found\"}");
+            request->send(200, "application/json", "{\"success\":false,\"error\":\"No selected online light devices found\"}");
             return;
         }
 
@@ -3042,8 +3159,8 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         }
 
         char response[128];
-        snprintf(response, sizeof(response), 
-                 "{\"success\":true,\"status\":\"started\",\"message\":\"OTA transfer started for %d device(s)\",\"deviceCount\":%d}", 
+        snprintf(response, sizeof(response),
+                 "{\"success\":true,\"status\":\"started\",\"message\":\"OTA transfer started for %d device(s)\",\"deviceCount\":%d}",
                  targetCount, targetCount);
         request->send(200, "application/json", response);
     });
@@ -3067,6 +3184,33 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         doc["currentDevice"] = nodeOtaState.currentTarget + 1;
         doc["devicesUpdated"] = nodeOtaState.devicesUpdated;
         doc["devicesFailed"] = nodeOtaState.devicesFailed;
+
+        if (nodeOtaState.targetCount > 0 && nodeOtaState.currentTarget < nodeOtaState.targetCount) {
+            String currentMac = macToString(nodeOtaState.targetMacs[nodeOtaState.currentTarget]);
+            doc["currentDeviceMac"] = currentMac;
+
+            // Attempt to resolve device name from devices.json
+            String currentName = "";
+            File devFile = LittleFS.open("/config/devices.json", "r");
+            if (devFile) {
+                DynamicJsonDocument devDoc(8192);
+                if (!deserializeJson(devDoc, devFile)) {
+                    JsonArray devices = devDoc["devices"];
+                    for (JsonObject device : devices) {
+                        String macStr = device["mac"].as<String>();
+                        if (macStr.length() == 0) continue;
+                        if (macStr.equalsIgnoreCase(currentMac)) {
+                            currentName = device["name"] | "";
+                            break;
+                        }
+                    }
+                }
+                devFile.close();
+            }
+            if (currentName.length() > 0) {
+                doc["currentDeviceName"] = currentName;
+            }
+        }
         
         if (nodeOtaState.totalFirmwareChunks > 0) {
             doc["progress"] = (nodeOtaState.firmwareChunksSent * 100) / nodeOtaState.totalFirmwareChunks;

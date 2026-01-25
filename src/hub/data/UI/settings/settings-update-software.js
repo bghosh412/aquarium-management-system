@@ -1,7 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     loadOtaUrls();
     setupButtons();
-    loadLightNodeVersion();
+    loadLightNodes();
 });
 
 function loadOtaUrls() {
@@ -22,21 +22,99 @@ function loadOtaUrls() {
         });
 }
 
-function loadLightNodeVersion() {
-    // Get current version from first online light node
-    fetch('/api/nodes/light/version')
+// ===== Light Nodes State =====
+let lightNodesData = [];
+let selectedLightNodes = new Set();
+
+function loadLightNodes() {
+    const tbody = document.getElementById('lightNodesTableBody');
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">Loading devices...</td></tr>';
+    
+    fetch('/api/nodes/light/list')
         .then(response => response.json())
         .then(data => {
-            if (data.version) {
-                document.getElementById('lightNodeCurrentVersion').textContent = `v${data.version}`;
-            } else {
-                document.getElementById('lightNodeCurrentVersion').textContent = 'No device online';
-            }
+            lightNodesData = data.devices || [];
+            renderLightNodesTable();
         })
         .catch(error => {
-            console.error('Error loading light node version:', error);
-            document.getElementById('lightNodeCurrentVersion').textContent = 'Error';
+            console.error('Error loading light nodes:', error);
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--danger-color);">Error loading devices</td></tr>';
         });
+}
+
+function renderLightNodesTable() {
+    const tbody = document.getElementById('lightNodesTableBody');
+    const selectAllCheckbox = document.getElementById('selectAllLightNodes');
+    
+    if (lightNodesData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">No light nodes found</td></tr>';
+        selectAllCheckbox.disabled = true;
+        return;
+    }
+    
+    const onlineDevices = lightNodesData.filter(d => d.online);
+    selectAllCheckbox.disabled = onlineDevices.length === 0;
+    
+    tbody.innerHTML = lightNodesData.map(device => {
+        const isOnline = device.online;
+        const isChecked = selectedLightNodes.has(device.mac);
+        const statusClass = isOnline ? 'online' : 'offline';
+        const statusText = isOnline ? 'Online' : 'Offline';
+        const fwVersion = device.firmwareVersion ? `v${device.firmwareVersion}` : '--';
+        
+        return `
+            <tr data-mac="${device.mac}">
+                <td>
+                    <input type="checkbox" 
+                           class="light-node-checkbox" 
+                           data-mac="${device.mac}"
+                           ${isChecked ? 'checked' : ''} 
+                           ${!isOnline ? 'disabled' : ''}>
+                </td>
+                <td>${device.name || 'Unknown'}</td>
+                <td>${device.tankName || '--'}</td>
+                <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                <td>${fwVersion}</td>
+                <td class="update-status-cell"></td>
+            </tr>
+        `;
+    }).join('');
+    
+    // Setup checkbox event listeners
+    document.querySelectorAll('.light-node-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', (e) => {
+            const mac = e.target.dataset.mac;
+            if (e.target.checked) {
+                selectedLightNodes.add(mac);
+            } else {
+                selectedLightNodes.delete(mac);
+            }
+            updateSelectedCount();
+            updateSelectAllCheckbox();
+        });
+    });
+    
+    updateSelectedCount();
+    updateSelectAllCheckbox();
+}
+
+function updateSelectedCount() {
+    document.getElementById('lightNodeSelectedCount').textContent = selectedLightNodes.size;
+    
+    // Enable/disable apply button based on selection and update availability
+    const applyBtn = document.getElementById('applyLightNodeUpdateBtn');
+    applyBtn.disabled = selectedLightNodes.size === 0 || !lightNodeOtaInfo.hasUpdate;
+}
+
+function updateSelectAllCheckbox() {
+    const selectAllCheckbox = document.getElementById('selectAllLightNodes');
+    const onlineDevices = lightNodesData.filter(d => d.online);
+    const allOnlineSelected = onlineDevices.length > 0 && 
+                              onlineDevices.every(d => selectedLightNodes.has(d.mac));
+    const someSelected = onlineDevices.some(d => selectedLightNodes.has(d.mac));
+    
+    selectAllCheckbox.checked = allOnlineSelected;
+    selectAllCheckbox.indeterminate = someSelected && !allOnlineSelected;
 }
 
 // Hub OTA state
@@ -45,6 +123,21 @@ let hubLittlefsHasUpdate = false;
 
 function setupButtons() {
     const hubUpdateStatus = document.getElementById('hubUpdateStatus');
+
+    // Select All checkbox handler
+    document.getElementById('selectAllLightNodes').addEventListener('change', (e) => {
+        const checkAll = e.target.checked;
+        lightNodesData.forEach(device => {
+            if (device.online) {
+                if (checkAll) {
+                    selectedLightNodes.add(device.mac);
+                } else {
+                    selectedLightNodes.delete(device.mac);
+                }
+            }
+        });
+        renderLightNodesTable();
+    });
 
     // Hub Firmware Check button
     document.getElementById('checkHubFirmwareBtn').addEventListener('click', () => {
@@ -206,7 +299,9 @@ function checkLightNodeUpdate() {
     updateStatusBadge('checking', 'Checking for updates...');
     fileListDiv.style.display = 'none';
     progressSection.style.display = 'none';
-    applyBtn.disabled = true;
+
+    // Also refresh the light nodes list
+    loadLightNodes();
 
     fetch('/api/nodes/light/check-update', { method: 'POST' })
         .then(response => response.json())
@@ -214,6 +309,8 @@ function checkLightNodeUpdate() {
             if (data.error) {
                 updateStatusBadge('error', data.error);
                 availableVersionSpan.textContent = '--';
+                lightNodeOtaInfo.hasUpdate = false;
+                updateSelectedCount();
                 return;
             }
 
@@ -227,7 +324,8 @@ function checkLightNodeUpdate() {
             availableVersionSpan.textContent = data.availableVersion ? `v${data.availableVersion}` : '--';
 
             if (!data.hasUpdate) {
-                updateStatusBadge('uptodate', 'Node firmware is up to date');
+                updateStatusBadge('uptodate', 'All nodes are up to date');
+                updateSelectedCount();
                 return;
             }
 
@@ -241,12 +339,14 @@ function checkLightNodeUpdate() {
             }
             fileListDiv.style.display = 'block';
 
-            updateStatusBadge('available', 'Update available! Click "Apply Update" to install.');
-            applyBtn.disabled = false;
+            updateStatusBadge('available', 'Update available! Select devices and click "Apply Updates".');
+            updateSelectedCount();
         })
         .catch(error => {
             console.error('Check update failed:', error);
             updateStatusBadge('error', 'Failed to check for updates');
+            lightNodeOtaInfo.hasUpdate = false;
+            updateSelectedCount();
         });
 }
 
@@ -264,43 +364,73 @@ function applyLightNodeUpdate() {
         return;
     }
 
+    if (selectedLightNodes.size === 0) {
+        updateStatusBadge('error', 'Please select at least one device to update.');
+        return;
+    }
+
+    const selectedMacs = Array.from(selectedLightNodes);
+    const confirmMsg = `Update ${selectedMacs.length} device(s)? Nodes will reboot after firmware update.`;
+    if (!confirm(confirmMsg)) return;
+
     // Disable buttons during update
     applyBtn.disabled = true;
     checkBtn.disabled = true;
     
+    // Disable all checkboxes during update
+    document.querySelectorAll('.light-node-checkbox').forEach(cb => cb.disabled = true);
+    document.getElementById('selectAllLightNodes').disabled = true;
+    
     // Show and reset progress section
     progressSection.style.display = 'block';
     progressBar.style.width = '0%';
+    progressBar.style.background = 'var(--color-primary)';
     progressText.textContent = 'Starting OTA update...';
     progressPercent.textContent = '0%';
-    deviceInfo.textContent = '';
+    deviceInfo.textContent = `Updating ${selectedMacs.length} device(s)...`;
     
     updateStatusBadge('checking', 'Downloading and sending OTA update...');
 
-    // Start OTA process
-    fetch('/api/nodes/light/apply-update', { method: 'POST' })
+    // Clear any previous update status indicators
+    document.querySelectorAll('.update-status-cell').forEach(cell => {
+        cell.innerHTML = '';
+    });
+
+    // Start OTA process with selected MACs
+    fetch('/api/nodes/light/apply-update', { 
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ macs: selectedMacs })
+    })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                if (data.deviceCount > 1) {
-                    deviceInfo.textContent = `Updating ${data.deviceCount} device(s)...`;
-                }
                 // Start polling for status
                 pollOtaStatus();
             } else {
                 updateStatusBadge('error', data.error || 'Update failed');
                 progressSection.style.display = 'none';
-                applyBtn.disabled = false;
-                checkBtn.disabled = false;
+                resetButtonsAfterUpdate();
             }
         })
         .catch(error => {
             console.error('Apply update failed:', error);
             updateStatusBadge('error', 'Failed to apply update');
             progressSection.style.display = 'none';
-            applyBtn.disabled = false;
-            checkBtn.disabled = false;
+            resetButtonsAfterUpdate();
         });
+}
+
+function resetButtonsAfterUpdate() {
+    document.getElementById('applyLightNodeUpdateBtn').disabled = true;
+    document.getElementById('checkLightNodeUpdateBtn').disabled = false;
+    lightNodeOtaInfo.hasUpdate = false;
+    selectedLightNodes.clear();
+    
+    // Re-render table to re-enable checkboxes
+    renderLightNodesTable();
 }
 
 let otaPollInterval = null;
@@ -325,8 +455,21 @@ function pollOtaStatus() {
                     progressBar.style.width = `${progress}%`;
                     progressPercent.textContent = `${progress}%`;
                     
-                    if (data.deviceCount > 1) {
-                        deviceInfo.textContent = `Device ${data.currentDevice}/${data.deviceCount} • ${data.devicesUpdated} updated • ${data.devicesFailed} failed`;
+                    // Show which device is being updated
+                    if (data.deviceCount > 0) {
+                        const currentDeviceName = data.currentDeviceName || `Device ${data.currentDevice}`;
+                        deviceInfo.textContent = `Updating: ${currentDeviceName} (${data.currentDevice}/${data.deviceCount}) • ${data.devicesUpdated || 0} updated • ${data.devicesFailed || 0} failed`;
+                        
+                        // Update the table to show which device is being updated
+                        updateTableDeviceStatus(data.currentDeviceMac, 'updating');
+                        
+                        // Mark completed devices
+                        if (data.completedMacs) {
+                            data.completedMacs.forEach(mac => updateTableDeviceStatus(mac, 'done'));
+                        }
+                        if (data.failedMacs) {
+                            data.failedMacs.forEach(mac => updateTableDeviceStatus(mac, 'failed'));
+                        }
                     }
 
                     if (data.active) {
@@ -346,17 +489,15 @@ function pollOtaStatus() {
                         clearInterval(otaPollInterval);
                         otaPollInterval = null;
 
-                        const applyBtn = document.getElementById('applyLightNodeUpdateBtn');
-                        const checkBtn = document.getElementById('checkLightNodeUpdateBtn');
                         const progressSection = document.getElementById('lightNodeProgressSection');
                         
-                        if (data.success) {
+                        if (data.success || data.devicesUpdated > 0) {
                             progressBar.style.width = '100%';
                             progressBar.style.background = 'var(--color-accent)';
                             progressPercent.textContent = '100%';
                             progressText.textContent = 'Update complete!';
                             
-                            let msg = 'OTA update completed successfully!';
+                            let msg = 'OTA update completed!';
                             if (data.deviceCount > 1) {
                                 msg += ` (${data.devicesUpdated}/${data.deviceCount} devices updated)`;
                             }
@@ -366,8 +507,7 @@ function pollOtaStatus() {
                             } else {
                                 updateStatusBadge('success', msg);
                             }
-                            // Refresh version after a delay
-                            setTimeout(loadLightNodeVersion, 5000);
+                            
                             // Hide progress bar after delay
                             setTimeout(() => { progressSection.style.display = 'none'; }, 3000);
                         } else {
@@ -376,10 +516,10 @@ function pollOtaStatus() {
                             updateStatusBadge('error', data.error || 'Update failed');
                         }
                         
-                        // Re-enable buttons but keep Apply disabled (need to check again)
-                        checkBtn.disabled = false;
-                        applyBtn.disabled = true;
-                        lightNodeOtaInfo.hasUpdate = false;
+                        // Refresh device list after a delay to show new firmware versions
+                        setTimeout(loadLightNodes, 5000);
+                        
+                        resetButtonsAfterUpdate();
                     }
                 }
             })
@@ -387,4 +527,32 @@ function pollOtaStatus() {
                 console.error('Poll status failed:', error);
             });
     }, 1000);  // Poll every second
+}
+
+function updateTableDeviceStatus(mac, status) {
+    if (!mac) return;
+    
+    const row = document.querySelector(`tr[data-mac="${mac}"]`);
+    if (!row) return;
+    
+    const statusCell = row.querySelector('.update-status-cell');
+    if (!statusCell) return;
+    
+    switch(status) {
+        case 'updating':
+            statusCell.innerHTML = '<span class="updating-indicator">⏳ Updating...</span>';
+            row.style.background = 'rgba(59, 130, 246, 0.1)';
+            break;
+        case 'done':
+            statusCell.innerHTML = '<span style="color: var(--success-color);">✅ Done</span>';
+            row.style.background = 'rgba(16, 185, 129, 0.1)';
+            break;
+        case 'failed':
+            statusCell.innerHTML = '<span style="color: var(--danger-color);">❌ Failed</span>';
+            row.style.background = 'rgba(239, 68, 68, 0.1)';
+            break;
+        default:
+            statusCell.innerHTML = '';
+            row.style.background = '';
+    }
 }

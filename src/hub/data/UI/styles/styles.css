@@ -1429,3 +1429,113 @@ input[type="range"]::-moz-range-thumb:hover {
         opacity: 0.5;
     }
 }
+
+/* ===== Collapsible Sections ===== */
+.collapsible-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.collapsible-header:hover {
+    background: var(--bg-secondary);
+    border-radius: var(--border-radius-sm);
+}
+
+.collapsible-toggle {
+    font-size: 1.25rem;
+    transition: transform 0.3s ease;
+    color: var(--text-secondary);
+}
+
+.collapsible-toggle.collapsed {
+    transform: rotate(-90deg);
+}
+
+.collapsible-content {
+    overflow: hidden;
+    transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+    max-height: 2000px;
+    opacity: 1;
+}
+
+.collapsible-content.collapsed {
+    max-height: 0;
+    opacity: 0;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+/* ===== Node Selection Table ===== */
+.node-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.node-table th,
+.node-table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.node-table th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.node-table tr:hover {
+    background: var(--bg-secondary);
+}
+
+.node-table .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.node-table .status-badge.online {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success-color);
+}
+
+.node-table .status-badge.offline {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger-color);
+}
+
+.node-table input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    cursor: pointer;
+}
+
+.node-table input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.node-table .updating-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--primary-color);
+    font-size: 0.75rem;
+}
+
+.node-table .updating-indicator::before {
+    content: '';
+    width: 0.5rem;
+    height: 0.5rem;
+    background: var(--primary-color);
+    border-radius: 50%;
+    animation: pulse 1s ease-in-out infinite;
+}

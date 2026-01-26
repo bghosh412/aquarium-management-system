@@ -46,7 +46,7 @@ void setupHardware() {
     digitalWrite(PIN_LED_CHANNEL3, LOW);
     
     if (nodeConfig.debugSerial) {
-        Serial.println("[OK] Lighting hardware initialized (D6/D7/D8)");
+        Serial.println("[OK] Lighting hardware initialized (D1/D2/D5)");
     }
 }
 
@@ -241,15 +241,20 @@ void setup() {
     Serial.printf("Tank ID: %d | Node: %s | FW: v%d\n\n", 
                   nodeConfig.tankId, nodeConfig.nodeName.c_str(), nodeConfig.firmwareVersion);
     
+    // Initialize status LED (starts blinking - waiting for ACK)
+    Serial.println("[2] Initializing status LED...");
+    setupStatusLED();
+    Serial.println("[2] Status LED initialized OK");
+    
     // Initialize hardware
-    Serial.println("[2] Initializing hardware...");
+    Serial.println("[3] Initializing hardware...");
     setupHardware();
-    Serial.println("[2] Hardware initialized OK");
+    Serial.println("[3] Hardware initialized OK");
     
     // Initialize ESPNowManager
-    Serial.println("[3] Starting ESP-NOW initialization...");
+    Serial.println("[4] Starting ESP-NOW initialization...");
     bool success = ESPNowManager::getInstance().begin(nodeConfig.espnowChannel, false);
-    Serial.printf("[3] ESP-NOW init returned: %s\n", success ? "SUCCESS" : "FAILED");
+    Serial.printf("[4] ESP-NOW init returned: %s\n", success ? "SUCCESS" : "FAILED");
     
     if (!success) {
         Serial.println("[ERROR] ESPNowManager initialization failed!");
@@ -276,7 +281,7 @@ void setup() {
     Serial.printf("   - Debug ESP-NOW: %s\n", nodeConfig.debugESPNOW ? "ON" : "OFF");
     
     // Send initial ANNOUNCE using NodeBase
-    Serial.println("[4] Sending initial ANNOUNCE...");
+    Serial.println("[5] Sending initial ANNOUNCE...");
     sendAnnounce();
     
     Serial.println("\n[OK] Lighting node ready\n");

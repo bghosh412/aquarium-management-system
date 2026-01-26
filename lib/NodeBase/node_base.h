@@ -19,6 +19,30 @@
 // Each node implements: setupHardware(), enterFailSafeMode(), handleCommand(), updateHardware()
 // ============================================================================
 
+// ============================================================================
+// STATUS LED CONFIGURATION
+// ============================================================================
+// All nodes use D7 (GPIO13) for status LED
+// States: WAITING_ACK (blink), FAILSAFE (blink), COMMAND_ACTIVE (blink 30s), NORMAL (solid ON)
+// ============================================================================
+
+#ifdef ESP8266
+    #define PIN_STATUS_LED D7  // GPIO13 on ESP8266
+#else
+    #define PIN_STATUS_LED 13  // GPIO13 on ESP32
+#endif
+
+#define STATUS_LED_BLINK_INTERVAL_MS 300  // Medium blink rate (300ms on/off)
+#define STATUS_LED_COMMAND_DURATION_MS 30000  // Blink for 30 seconds after command
+
+// Status LED modes
+enum class StatusLEDMode : uint8_t {
+    WAITING_ACK,      // Blinking - waiting for hub ACK after boot
+    FAILSAFE,         // Blinking - node is in fail-safe mode
+    COMMAND_ACTIVE,   // Blinking - executing/just executed hub command
+    NORMAL            // Solid ON - connected and idle
+};
+
 // Configuration structure used by all nodes
 struct NodeConfig {
     uint8_t tankId;              // 0 = unmapped, >0 = assigned tank
@@ -89,6 +113,26 @@ void sendAnnounce();
 
 // Sends STATUS acknowledgment after command processing
 void sendStatusAck(const uint8_t* mac, uint8_t commandId, uint8_t statusCode, const uint8_t* data = nullptr, size_t dataLen = 0);
+
+// ============================================================================
+// STATUS LED MANAGEMENT
+// ============================================================================
+
+// Initialize status LED pin (call in setup() before other hardware init)
+void setupStatusLED();
+
+// Update status LED state (call in loop() - handles blinking automatically)
+void updateStatusLED();
+
+// Set status LED mode (called automatically by NodeBase, but nodes can override)
+void setStatusLEDMode(StatusLEDMode mode);
+
+// Trigger command activity indicator (blinks LED for 30 seconds)
+// Call this when a hub command is received/processed
+void triggerCommandActivity();
+
+// Get current status LED mode
+StatusLEDMode getStatusLEDMode();
 
 // ============================================================================
 // OTA COMMAND HANDLING (Common to all nodes)

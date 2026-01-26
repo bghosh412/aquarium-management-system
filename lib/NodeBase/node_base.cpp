@@ -33,6 +33,15 @@ uint32_t lastHubHeartbeatReceived = 0;
 bool hubHeartbeatLost = false;
 
 // ============================================================================
+// STATUS LED STATE
+// ============================================================================
+static StatusLEDMode currentLEDMode = StatusLEDMode::WAITING_ACK;  // Start in waiting mode
+static uint32_t lastLEDToggle = 0;        // Last time LED was toggled
+static bool ledState = false;              // Current LED state (for blinking)
+static uint32_t commandActivityStart = 0;  // When command activity started
+static bool statusLEDInitialized = false;  // Has setupStatusLED() been called?
+
+// ============================================================================
 // OTA STATE (Common to all nodes)
 // ============================================================================
 
@@ -80,6 +89,100 @@ static void resetOtaState();
 
 // Forward declaration for internal handler
 static void onHubHeartbeatReceivedInternal(const uint8_t* mac, const HeartbeatMessage& msg);
+
+// ============================================================================
+// STATUS LED IMPLEMENTATION
+// ============================================================================
+
+void setupStatusLED() {
+    pinMode(PIN_STATUS_LED, OUTPUT);
+    digitalWrite(PIN_STATUS_LED, LOW);  // Start OFF
+    ledState = false;
+    lastLEDToggle = millis();
+    currentLEDMode = StatusLEDMode::WAITING_ACK;  // Start in waiting for ACK mode
+    statusLEDInitialized = true;
+    
+    if (nodeConfig.debugSerial) {
+        Serial.printf("[LED] Status LED initialized on pin D7 (GPIO%d)\n", PIN_STATUS_LED);
+    }
+}
+
+void setStatusLEDMode(StatusLEDMode mode) {
+    if (currentLEDMode != mode) {
+        currentLEDMode = mode;
+        lastLEDToggle = millis();  // Reset toggle timing on mode change
+        
+        if (nodeConfig.debugSerial) {
+            const char* modeStr = "UNKNOWN";
+            switch (mode) {
+                case StatusLEDMode::WAITING_ACK:    modeStr = "WAITING_ACK (blink)"; break;
+                case StatusLEDMode::FAILSAFE:       modeStr = "FAILSAFE (blink)"; break;
+                case StatusLEDMode::COMMAND_ACTIVE: modeStr = "COMMAND_ACTIVE (blink)"; break;
+                case StatusLEDMode::NORMAL:         modeStr = "NORMAL (solid ON)"; break;
+            }
+            Serial.printf("[LED] Mode changed to: %s\n", modeStr);
+        }
+    }
+}
+
+StatusLEDMode getStatusLEDMode() {
+    return currentLEDMode;
+}
+
+void triggerCommandActivity() {
+    // FAILSAFE mode has priority - don't let commands interrupt failsafe blinking
+    // Failsafe will only clear when hub heartbeat is received
+    if (currentLEDMode == StatusLEDMode::FAILSAFE) {
+        return;  // Stay in failsafe, don't switch to command activity
+    }
+    
+    commandActivityStart = millis();
+    setStatusLEDMode(StatusLEDMode::COMMAND_ACTIVE);
+}
+
+void updateStatusLED() {
+    if (!statusLEDInitialized) return;
+    
+    uint32_t now = millis();
+    
+    // Check if command activity period has expired (30 seconds)
+    if (currentLEDMode == StatusLEDMode::COMMAND_ACTIVE) {
+        if (now - commandActivityStart >= STATUS_LED_COMMAND_DURATION_MS) {
+            // Command activity period over, return to normal mode
+            // (unless we're in failsafe or waiting for ACK)
+            if (hubHeartbeatLost) {
+                setStatusLEDMode(StatusLEDMode::FAILSAFE);
+            } else if (!isConnectedToHub) {
+                setStatusLEDMode(StatusLEDMode::WAITING_ACK);
+            } else {
+                setStatusLEDMode(StatusLEDMode::NORMAL);
+            }
+        }
+    }
+    
+    // Handle LED based on current mode
+    switch (currentLEDMode) {
+        case StatusLEDMode::WAITING_ACK:
+        case StatusLEDMode::FAILSAFE:
+        case StatusLEDMode::COMMAND_ACTIVE:
+            // Blinking mode - toggle LED at interval
+            if (now - lastLEDToggle >= STATUS_LED_BLINK_INTERVAL_MS) {
+                lastLEDToggle = now;
+                ledState = !ledState;
+                digitalWrite(PIN_STATUS_LED, ledState ? HIGH : LOW);
+            }
+            break;
+            
+        case StatusLEDMode::NORMAL:
+            // Solid ON
+            if (!ledState) {
+                ledState = true;
+                digitalWrite(PIN_STATUS_LED, HIGH);
+            }
+            break;
+    }
+}
+
 // ============================================================================
 // CONFIGURATION MANAGEMENT
 // ============================================================================
@@ -249,6 +352,7 @@ void onAckReceived(const uint8_t* mac, const AckMessage& msg) {
     // Mark as connected to hub
     if (msg.accepted && peerAdded) {
         isConnectedToHub = true;
+        setStatusLEDMode(StatusLEDMode::NORMAL);  // Connected - solid LED
         if (nodeConfig.debugSerial) {
             Serial.println("[OK] Connected to hub - ready for commands\\n");
         }
@@ -361,8 +465,9 @@ static void onHubHeartbeatReceivedInternal(const uint8_t* mac, const HeartbeatMe
     if (msg.header.nodeType == NodeType::HUB) {
         lastHubHeartbeatReceived = millis();
         if (hubHeartbeatLost) {
-            // Recovered
+            // Recovered from failsafe
             hubHeartbeatLost = false;
+            setStatusLEDMode(StatusLEDMode::NORMAL);  // Restored - solid LED
             if (nodeConfig.debugSerial) {
                 Serial.println("[HB] Hub heartbeat restored - leaving fail-safe");
             }
@@ -382,6 +487,9 @@ void nodeLoop() {
     // Process ESP-NOW messages
     ESPNowManager::getInstance().processQueue();
 
+    // Update status LED (handles blinking, mode transitions)
+    updateStatusLED();
+
     // Send our heartbeat periodically
     if (millis() - lastHeartbeatSent >= nodeConfig.heartbeatIntervalMs) {
         sendHeartbeat();
@@ -392,6 +500,7 @@ void nodeLoop() {
         uint32_t elapsed = millis() - lastHubHeartbeatReceived;
         if (!hubHeartbeatLost && elapsed > nodeConfig.hubHeartbeatTimeoutMs) {
             hubHeartbeatLost = true;
+            setStatusLEDMode(StatusLEDMode::FAILSAFE);  // Set LED to failsafe blink
             if (nodeConfig.debugSerial) {
                 Serial.printf("[HB] Hub heartbeat missed for %u ms - entering fail-safe\n", elapsed);
             }
@@ -423,6 +532,9 @@ void sendAnnounce() {
 }
 
 void sendStatusAck(const uint8_t* mac, uint8_t commandId, uint8_t statusCode, const uint8_t* data, size_t dataLen) {
+    // Trigger command activity LED (blink for 30 seconds)
+    triggerCommandActivity();
+    
     StatusMessage msg = {};
     msg.header.type = MessageType::STATUS;
     msg.header.tankId = nodeConfig.tankId;

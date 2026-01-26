@@ -21,8 +21,8 @@
                 </div>
             </div>
             <div class="navbar-actions">
-                <a href="../device/add-device.html" class="btn btn-primary">
-                    <span>➕</span> Add Device
+                <a href="aquarium-selection.html" class="btn btn-secondary">
+                    <span>←</span> Back
                 </a>
             </div>
         </div>
@@ -37,49 +37,72 @@
 
         <!-- Main Content -->
         <main class="main-content">
-            <!-- Aquarium Info Header -->
-            <div class="card" style="margin-bottom: 2rem;">
-                <div class="card-body" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-                    <div>
-                        <h2 id="aquariumName" style="margin: 0 0 0.5rem 0;">Loading...</h2>
-                        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-                            <span style="color: var(--color-text-secondary);">
-                                <strong>ID:</strong> <span id="tankId">-</span>
-                            </span>
-                            <span style="color: var(--color-text-secondary);">
-                                <strong>Volume:</strong> <span id="volume">-</span>L
-                            </span>
-                            <span style="color: var(--color-text-secondary);">
-                                <strong>Location:</strong> <span id="location">-</span>
-                            </span>
+            <div class="page-header">
+                <h1 id="aquariumTitle">Aquarium Devices</h1>
+                <p class="page-description">View and manage devices for this aquarium</p>
+            </div>
+
+            <!-- Aquarium Details Card -->
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="card-header">
+                    <h3 id="aquariumName">Aquarium</h3>
+                    <span class="badge" id="aquariumStatusBadge">Active</span>
+                </div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
+                        <div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.75rem;">Tank ID</div>
+                            <div style="font-weight: 600; font-size: 1.25rem;" id="aquariumTankId">-</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.75rem;">Volume</div>
+                            <div style="font-weight: 600; font-size: 1.25rem;" id="aquariumVolume">-</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.75rem;">Devices</div>
+                            <div style="font-weight: 600; font-size: 1.25rem;" id="aquariumDeviceCount">-</div>
                         </div>
                     </div>
-                    <div style="display: flex; gap: 0.5rem;">
-                        <a href="manage-aquarium.html" class="btn btn-secondary">
-                            <span>⚙️</span> Settings
-                        </a>
-                        <a href="aquarium-selection.html" class="btn btn-secondary">
-                            <span>←</span> Back
-                        </a>
+
+                    <div id="aquariumLocation" style="color: var(--color-text-secondary); font-size: 0.875rem; margin-top: 1rem; display: none;">
+                        📍 <span id="aquariumLocationText"></span>
                     </div>
+                </div>
+                <div class="card-footer" style="display: flex; gap: 0.5rem;">
+                    <button class="btn btn-secondary" onclick="editAquarium()" style="flex: 1;">
+                        ⚙️ Edit Aquarium
+                    </button>
                 </div>
             </div>
 
-            <div class="page-header">
-                <h1>Devices in This Aquarium</h1>
-                <p class="page-description">Monitor and control all connected devices</p>
+            <!-- Offline Devices Warning -->
+            <div id="offlineWarning" class="card" style="margin-bottom: 1.5rem; display: none; border: 2px solid var(--color-accent-danger);">
+                <div class="card-body" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <div style="font-size: 1.5rem;">⚠️</div>
+                        <div>
+                            <div style="font-weight: 600;">Offline Devices</div>
+                            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">Click to filter offline devices</div>
+                        </div>
+                    </div>
+                    <button class="btn btn-danger" onclick="showOfflineDevices()" id="offlineCountBtn">
+                        <span id="offlineDeviceCount">0</span> Offline
+                    </button>
+                </div>
             </div>
 
-            <!-- Device Type Filters -->
+            <!-- Filter Section -->
             <div class="card" style="margin-bottom: 1.5rem;">
                 <div class="card-body">
-                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                        <button class="btn btn-secondary device-filter active" data-filter="all">All Devices</button>
-                        <button class="btn btn-secondary device-filter" data-filter="light">💡 Lights</button>
-                        <button class="btn btn-secondary device-filter" data-filter="co2">🫧 CO₂</button>
-                        <button class="btn btn-secondary device-filter" data-filter="heater">🔥 Heater</button>
-                        <button class="btn btn-secondary device-filter" data-filter="feeder">🐟 Feeder</button>
-                        <button class="btn btn-secondary device-filter" data-filter="sensor">📊 Sensors</button>
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+                        <div style="flex: 1; min-width: 200px;">
+                            <label for="statusFilter" class="form-label" style="margin-bottom: 0.5rem;">Filter by Status</label>
+                            <select id="statusFilter" class="form-input" onchange="filterDevices()">
+                                <option value="all">All Status</option>
+                                <option value="online">Online</option>
+                                <option value="offline">Offline</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -93,57 +116,12 @@
             <div id="emptyState" class="card" style="display: none; text-align: center; padding: 3rem;">
                 <div style="font-size: 4rem; margin-bottom: 1rem;">🔌</div>
                 <h2>No Devices Found</h2>
-                <p style="color: var(--color-text-secondary); margin: 1rem 0 2rem;">Add devices to this aquarium to get started</p>
-                <a href="../device/add-device.html" class="btn btn-primary">
-                    <span>➕</span> Add Your First Device
+                <p style="color: var(--color-text-secondary); margin: 1rem 0 2rem;">
+                    No devices match your current filter for this aquarium.
+                </p>
+                <a href="../device/manage-devices.html" class="btn btn-primary">
+                    <span>🔌</span> Manage All Devices
                 </a>
-            </div>
-
-            <!-- Current Water Parameters -->
-            <div class="card" style="margin-top: 2rem;">
-                <div class="card-header">
-                    <h3>Current Water Parameters</h3>
-                    <span class="badge badge-online" id="sensorStatus">Live</span>
-                </div>
-                <div class="card-body">
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
-                        <!-- Temperature -->
-                        <div>
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                                <span style="font-size: 1.5rem;">🌡️</span>
-                                <span style="font-weight: 600;">Temperature</span>
-                            </div>
-                            <div style="font-size: 2rem; font-weight: 700; color: var(--color-primary);" id="currentTemp">--°C</div>
-                            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
-                                Range: <span id="tempRange">24-26°C</span>
-                            </div>
-                        </div>
-
-                        <!-- pH -->
-                        <div>
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                                <span style="font-size: 1.5rem;">💧</span>
-                                <span style="font-weight: 600;">pH Level</span>
-                            </div>
-                            <div style="font-size: 2rem; font-weight: 700; color: var(--color-accent);" id="currentPh">--</div>
-                            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
-                                Range: <span id="phRange">6.5-7.5</span>
-                            </div>
-                        </div>
-
-                        <!-- TDS -->
-                        <div>
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                                <span style="font-size: 1.5rem;">📊</span>
-                                <span style="font-weight: 600;">TDS</span>
-                            </div>
-                            <div style="font-size: 2rem; font-weight: 700; color: var(--color-primary-dark);" id="currentTds">-- ppm</div>
-                            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
-                                Range: <span id="tdsRange">150-300 ppm</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
         </main>
     </div>

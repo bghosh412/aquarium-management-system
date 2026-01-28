@@ -15,7 +15,7 @@
 // LIGHTING NODE - Controls aquarium lighting (3 channels ON/OFF)
 // ============================================================================
 // Hardware: 3 digital outputs for LED control (White, Blue, Red)
-// Fail-safe: Hold last state (safe for lights)
+// Fail-safe: TURN THE 3 PINS TO LOW
 // Pin Configuration: D1 (White), D2 (Blue), D5 (Red)
 // ============================================================================
 
@@ -36,17 +36,44 @@ struct LightingState {
 // ============================================================================
 
 void setupHardware() {
+    // Initialize pin state persistence
+    initPinStatePersistence();
+    
+    // Configure pins as outputs
     pinMode(PIN_LED_CHANNEL1, OUTPUT);
     pinMode(PIN_LED_CHANNEL2, OUTPUT);
     pinMode(PIN_LED_CHANNEL3, OUTPUT);
     
-    // Start with lights off
-    digitalWrite(PIN_LED_CHANNEL1, LOW);
-    digitalWrite(PIN_LED_CHANNEL2, LOW);
-    digitalWrite(PIN_LED_CHANNEL3, LOW);
+    // Register pins for persistence tracking
+    registerPersistentPin(PIN_LED_CHANNEL1, "CH1_White");
+    registerPersistentPin(PIN_LED_CHANNEL2, "CH2_Blue");
+    registerPersistentPin(PIN_LED_CHANNEL3, "CH3_Red");
     
-    if (nodeConfig.debugSerial) {
-        Serial.println("[OK] Lighting hardware initialized (D1/D2/D5)");
+    // Restore previous pin states from file (power failure recovery)
+    int restored = restorePinStates();
+    
+    if (restored > 0) {
+        // Sync lightState struct with restored physical pin states
+        lightState.channel1On = (digitalRead(PIN_LED_CHANNEL1) == HIGH);
+        lightState.channel2On = (digitalRead(PIN_LED_CHANNEL2) == HIGH);
+        lightState.channel3On = (digitalRead(PIN_LED_CHANNEL3) == HIGH);
+        
+        if (nodeConfig.debugSerial) {
+            Serial.printf("[OK] Restored %d pin states from previous session\n", restored);
+            Serial.printf("     CH1=%s CH2=%s CH3=%s\n",
+                          lightState.channel1On ? "ON" : "OFF",
+                          lightState.channel2On ? "ON" : "OFF",
+                          lightState.channel3On ? "ON" : "OFF");
+        }
+    } else {
+        // No saved states - start with lights off
+        persistentDigitalWrite(PIN_LED_CHANNEL1, LOW);
+        persistentDigitalWrite(PIN_LED_CHANNEL2, LOW);
+        persistentDigitalWrite(PIN_LED_CHANNEL3, LOW);
+        
+        if (nodeConfig.debugSerial) {
+            Serial.println("[OK] Lighting hardware initialized (D1/D2/D5) - all OFF");
+        }
     }
 }
 
@@ -189,10 +216,10 @@ void handleCommand(const uint8_t* mac, const uint8_t* data, size_t len) {
 }
 
 void updateHardware() {
-    // Apply lighting state to hardware pins
-    digitalWrite(PIN_LED_CHANNEL1, lightState.channel1On ? HIGH : LOW);
-    digitalWrite(PIN_LED_CHANNEL2, lightState.channel2On ? HIGH : LOW);
-    digitalWrite(PIN_LED_CHANNEL3, lightState.channel3On ? HIGH : LOW);
+    // Apply lighting state to hardware pins using persistent writes
+    persistentDigitalWrite(PIN_LED_CHANNEL1, lightState.channel1On ? HIGH : LOW);
+    persistentDigitalWrite(PIN_LED_CHANNEL2, lightState.channel2On ? HIGH : LOW);
+    persistentDigitalWrite(PIN_LED_CHANNEL3, lightState.channel3On ? HIGH : LOW);
 }
 
 // ============================================================================

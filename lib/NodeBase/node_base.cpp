@@ -945,3 +945,240 @@ bool handleOtaCommand(const uint8_t* mac, const CommandMessage& cmd) {
             return false;  // Not an OTA command
     }
 }
+
+// ============================================================================
+// PERSISTENT PIN STATE MANAGEMENT
+// ============================================================================
+// Persists digital pin states to JSON file for power failure recovery.
+// When the node restarts, it reads the file and restores pin states.
+// ============================================================================
+
+#include <ArduinoJson.h>
+
+// Structure to track pin states
+struct TrackedPin {
+    uint8_t pin;
+    uint8_t state;  // HIGH or LOW
+    char name[16];  // Optional human-readable name
+    bool active;    // Is this slot in use?
+};
+
+static TrackedPin trackedPins[MAX_TRACKED_PINS];
+static bool pinPersistenceInitialized = false;
+static uint32_t lastPinStateSave = 0;
+static bool pinStatesDirty = false;
+
+// Debounce saves - don't save more often than this (ms)
+#define PIN_SAVE_DEBOUNCE_MS 500
+
+void initPinStatePersistence() {
+    // Clear tracked pins array
+    memset(trackedPins, 0, sizeof(trackedPins));
+    for (int i = 0; i < MAX_TRACKED_PINS; i++) {
+        trackedPins[i].active = false;
+    }
+    pinPersistenceInitialized = true;
+    pinStatesDirty = false;
+    
+    if (nodeConfig.debugSerial) {
+        Serial.println("[PIN] Pin state persistence initialized");
+    }
+}
+
+bool registerPersistentPin(uint8_t pin, const char* name) {
+    if (!pinPersistenceInitialized) {
+        initPinStatePersistence();
+    }
+    
+    // Check if already registered
+    for (int i = 0; i < MAX_TRACKED_PINS; i++) {
+        if (trackedPins[i].active && trackedPins[i].pin == pin) {
+            if (nodeConfig.debugSerial) {
+                Serial.printf("[PIN] Pin %d already registered\n", pin);
+            }
+            return true;  // Already registered
+        }
+    }
+    
+    // Find empty slot
+    for (int i = 0; i < MAX_TRACKED_PINS; i++) {
+        if (!trackedPins[i].active) {
+            trackedPins[i].pin = pin;
+            trackedPins[i].state = LOW;  // Default to LOW
+            trackedPins[i].active = true;
+            if (name) {
+                strncpy(trackedPins[i].name, name, sizeof(trackedPins[i].name) - 1);
+                trackedPins[i].name[sizeof(trackedPins[i].name) - 1] = '\0';
+            } else {
+                snprintf(trackedPins[i].name, sizeof(trackedPins[i].name), "pin%d", pin);
+            }
+            
+            if (nodeConfig.debugSerial) {
+                Serial.printf("[PIN] Registered pin %d as '%s'\n", pin, trackedPins[i].name);
+            }
+            return true;
+        }
+    }
+    
+    Serial.printf("[PIN] ERROR: Cannot register pin %d - max pins reached\n", pin);
+    return false;
+}
+
+void savePinStates() {
+    if (!pinPersistenceInitialized) return;
+    
+    // Create JSON document (ArduinoJson v7 API)
+    JsonDocument doc;
+    JsonArray pins = doc["pins"].to<JsonArray>();
+    
+    for (int i = 0; i < MAX_TRACKED_PINS; i++) {
+        if (trackedPins[i].active) {
+            JsonObject pinObj = pins.add<JsonObject>();
+            pinObj["pin"] = trackedPins[i].pin;
+            pinObj["state"] = trackedPins[i].state;
+            pinObj["name"] = trackedPins[i].name;
+        }
+    }
+    
+    doc["savedAt"] = millis();
+    
+    // Write to file
+    File file = LittleFS.open(PIN_STATE_FILE, "w");
+    if (!file) {
+        Serial.println("[PIN] ERROR: Failed to open pin state file for writing");
+        return;
+    }
+    
+    serializeJson(doc, file);
+    file.close();
+    
+    pinStatesDirty = false;
+    lastPinStateSave = millis();
+    
+    if (nodeConfig.debugSerial) {
+        Serial.print("[PIN] Saved pin states: ");
+        serializeJson(doc, Serial);
+        Serial.println();
+    }
+}
+
+int restorePinStates() {
+    if (!pinPersistenceInitialized) {
+        initPinStatePersistence();
+    }
+    
+    // Check if file exists
+    if (!LittleFS.exists(PIN_STATE_FILE)) {
+        if (nodeConfig.debugSerial) {
+            Serial.println("[PIN] No saved pin states found");
+        }
+        return 0;
+    }
+    
+    File file = LittleFS.open(PIN_STATE_FILE, "r");
+    if (!file) {
+        Serial.println("[PIN] ERROR: Failed to open pin state file");
+        return 0;
+    }
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        Serial.printf("[PIN] ERROR: Failed to parse pin state file: %s\n", error.c_str());
+        return 0;
+    }
+    
+    int restored = 0;
+    JsonArray pins = doc["pins"];
+    
+    for (JsonObject pinObj : pins) {
+        uint8_t pin = pinObj["pin"];
+        uint8_t state = pinObj["state"];
+        const char* name = pinObj["name"];
+        
+        // Register the pin if not already registered
+        registerPersistentPin(pin, name);
+        
+        // Find the pin in our tracking array and restore its state
+        for (int i = 0; i < MAX_TRACKED_PINS; i++) {
+            if (trackedPins[i].active && trackedPins[i].pin == pin) {
+                trackedPins[i].state = state;
+                // Apply the state to the physical pin
+                digitalWrite(pin, state);
+                restored++;
+                
+                if (nodeConfig.debugSerial) {
+                    Serial.printf("[PIN] Restored pin %d (%s) to %s\n", 
+                                  pin, trackedPins[i].name, state == HIGH ? "HIGH" : "LOW");
+                }
+                break;
+            }
+        }
+    }
+    
+    if (nodeConfig.debugSerial) {
+        Serial.printf("[PIN] Restored %d pin states from file\n", restored);
+    }
+    
+    return restored;
+}
+
+void persistentDigitalWrite(uint8_t pin, uint8_t value) {
+    // Always perform the actual digitalWrite first
+    digitalWrite(pin, value);
+    
+    if (!pinPersistenceInitialized) {
+        // Persistence not initialized - just do regular digitalWrite
+        return;
+    }
+    
+    // Find the pin in our tracking array
+    bool found = false;
+    for (int i = 0; i < MAX_TRACKED_PINS; i++) {
+        if (trackedPins[i].active && trackedPins[i].pin == pin) {
+            // Only save if state actually changed
+            if (trackedPins[i].state != value) {
+                trackedPins[i].state = value;
+                pinStatesDirty = true;
+                
+                if (nodeConfig.debugSerial) {
+                    Serial.printf("[PIN] Pin %d (%s) changed to %s\n", 
+                                  pin, trackedPins[i].name, value == HIGH ? "HIGH" : "LOW");
+                }
+                
+                // Debounced save - save immediately if enough time has passed
+                uint32_t now = millis();
+                if (now - lastPinStateSave >= PIN_SAVE_DEBOUNCE_MS) {
+                    savePinStates();
+                }
+            }
+            found = true;
+            break;
+        }
+    }
+    
+    if (!found && nodeConfig.debugSerial) {
+        // Pin not registered - this is fine, just won't be persisted
+        // Don't spam the log for every untracked pin
+    }
+}
+
+int getPersistedPinState(uint8_t pin) {
+    if (!pinPersistenceInitialized) return -1;
+    
+    for (int i = 0; i < MAX_TRACKED_PINS; i++) {
+        if (trackedPins[i].active && trackedPins[i].pin == pin) {
+            return trackedPins[i].state;
+        }
+    }
+    return -1;  // Pin not tracked
+}
+
+// Call this periodically to flush any pending saves
+void flushPinStateIfDirty() {
+    if (pinStatesDirty && (millis() - lastPinStateSave >= PIN_SAVE_DEBOUNCE_MS)) {
+        savePinStates();
+    }
+}

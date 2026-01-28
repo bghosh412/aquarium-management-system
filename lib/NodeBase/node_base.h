@@ -144,6 +144,38 @@ StatusLEDMode getStatusLEDMode();
 bool handleOtaCommand(const uint8_t* mac, const CommandMessage& cmd);
 
 // ============================================================================
+// PERSISTENT PIN STATE MANAGEMENT
+// ============================================================================
+// Provides power failure recovery by persisting pin states to JSON file.
+// Use persistentDigitalWrite() instead of digitalWrite() for actuator pins.
+// On startup, call restorePinStates() after pinMode() calls to restore.
+// ============================================================================
+
+#define PIN_STATE_FILE "/pin_state.json"
+#define MAX_TRACKED_PINS 8  // Maximum number of pins to track
+
+// Initialize pin state persistence (call early in setup, after LittleFS.begin())
+void initPinStatePersistence();
+
+// Restore previously saved pin states (call after pinMode() for tracked pins)
+// Returns number of pins restored
+int restorePinStates();
+
+// Wrapper for digitalWrite that persists state to JSON file
+// Use this for actuator pins that need power failure recovery
+void persistentDigitalWrite(uint8_t pin, uint8_t value);
+
+// Register a pin for tracking (call before using persistentDigitalWrite)
+// Returns true if registration successful
+bool registerPersistentPin(uint8_t pin, const char* name = nullptr);
+
+// Get current persisted state of a pin (returns -1 if not tracked)
+int getPersistedPinState(uint8_t pin);
+
+// Force save all pin states to file (normally called automatically)
+void savePinStates();
+
+// ============================================================================
 // FUNCTIONS THAT MUST BE IMPLEMENTED BY EACH NODE TYPE
 // ============================================================================
 

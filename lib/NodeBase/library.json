@@ -10,6 +10,9 @@
   ],
   "frameworks": "arduino",
   "platforms": ["espressif8266", "espressif32"],
+  "dependencies": {
+    "bblanchon/ArduinoJson": "^7.2.0"
+  },
   "build": {
     "flags": "-I../../include"
   }

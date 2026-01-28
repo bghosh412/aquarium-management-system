@@ -140,6 +140,9 @@ void registerAllDevicesAsPeers();
 // Web server setup
 void setupWebServer();
 
+// Scheduler function declarations
+void rebuildNextTasks();
+
 // Web server
 AsyncWebServer server(80);
 
@@ -647,7 +650,7 @@ void aggressiveMemoryCleanup() {
 }
 
 // ============================================================================
-// LIGHT SCHEDULER TASK - Time-based light control
+// LIGHT SCHEDULER TASK - Time-based light control with task persistence
 // ============================================================================
 
 // Helper: Parse MAC string to bytes
@@ -686,6 +689,280 @@ struct ChannelState {
 };
 static std::map<String, ChannelState> g_channelStates;
 
+// Structure for next-task.json persistence
+struct NextTask {
+    String mac;
+    int channel;     // 1, 2, or 3
+    bool actionOn;   // true = turn ON, false = turn OFF
+    time_t scheduledTime;  // Unix timestamp
+    String period;   // "morning" or "evening"
+};
+
+static const char* NEXT_TASK_FILE = "/config/schedule/next-task.json";
+
+// Helper: Get current Unix timestamp
+static time_t getCurrentUnixTime() {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return 0;
+    }
+    return mktime(&timeinfo);
+}
+
+// Helper: Convert minutes-of-day to today's Unix timestamp (or tomorrow if past)
+static time_t minutesToUnixTime(int minutes, bool forceToday = false) {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return 0;
+    }
+    
+    int currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+    
+    // Reset to midnight
+    timeinfo.tm_hour = minutes / 60;
+    timeinfo.tm_min = minutes % 60;
+    timeinfo.tm_sec = 0;
+    
+    time_t result = mktime(&timeinfo);
+    
+    // If the time has passed today, schedule for tomorrow (unless forceToday)
+    if (!forceToday && minutes <= currentMinutes) {
+        result += 24 * 60 * 60;  // Add 24 hours
+    }
+    
+    return result;
+}
+
+// Helper: Calculate all upcoming tasks from a device schedule
+static void calculateNextTasks(const char* macStr, JsonObject schedule, std::vector<NextTask>& tasks) {
+    const char* periods[] = {"morning", "evening"};
+    
+    for (const char* periodName : periods) {
+        if (!schedule.containsKey(periodName)) continue;
+        
+        JsonObject period = schedule[periodName].as<JsonObject>();
+        
+        for (int ch = 1; ch <= 3; ch++) {
+            char channelKey[10];
+            snprintf(channelKey, sizeof(channelKey), "channel%d", ch);
+            
+            if (!period.containsKey(channelKey)) continue;
+            
+            JsonObject channel = period[channelKey].as<JsonObject>();
+            int startMinutes = channel["start"]["hour"].as<int>() * 60 + channel["start"]["minute"].as<int>();
+            int offMinutes = channel["offTime"]["hour"].as<int>() * 60 + channel["offTime"]["minute"].as<int>();
+            
+            // Create ON task
+            NextTask onTask;
+            onTask.mac = macStr;
+            onTask.channel = ch;
+            onTask.actionOn = true;
+            onTask.scheduledTime = minutesToUnixTime(startMinutes);
+            onTask.period = periodName;
+            tasks.push_back(onTask);
+            
+            // Create OFF task
+            NextTask offTask;
+            offTask.mac = macStr;
+            offTask.channel = ch;
+            offTask.actionOn = false;
+            offTask.scheduledTime = minutesToUnixTime(offMinutes);
+            offTask.period = periodName;
+            tasks.push_back(offTask);
+        }
+    }
+}
+
+// Helper: Find the single next task (soonest) from all tasks
+static bool findNextTask(const std::vector<NextTask>& tasks, NextTask& next) {
+    if (tasks.empty()) return false;
+    
+    time_t now = getCurrentUnixTime();
+    time_t soonest = LONG_MAX;
+    int soonestIdx = -1;
+    
+    for (size_t i = 0; i < tasks.size(); i++) {
+        if (tasks[i].scheduledTime > now && tasks[i].scheduledTime < soonest) {
+            soonest = tasks[i].scheduledTime;
+            soonestIdx = i;
+        }
+    }
+    
+    if (soonestIdx >= 0) {
+        next = tasks[soonestIdx];
+        return true;
+    }
+    
+    return false;
+}
+
+// Save next-task.json with all upcoming tasks
+static void saveNextTasks(const std::vector<NextTask>& tasks) {
+    DynamicJsonDocument doc(4096);
+    JsonArray arr = doc.createNestedArray("tasks");
+    
+    for (const NextTask& t : tasks) {
+        JsonObject obj = arr.createNestedObject();
+        obj["mac"] = t.mac;
+        obj["channel"] = t.channel;
+        obj["actionOn"] = t.actionOn;
+        obj["scheduledTime"] = (long)t.scheduledTime;
+        obj["period"] = t.period;
+    }
+    
+    doc["updatedAt"] = (long)getCurrentUnixTime();
+    
+    File file = LittleFS.open(NEXT_TASK_FILE, "w");
+    if (file) {
+        serializeJson(doc, file);
+        file.close();
+        Serial.printf("[SCHEDULER] Saved %d tasks to next-task.json\n", tasks.size());
+    } else {
+        Serial.println("[SCHEDULER] Failed to write next-task.json");
+    }
+}
+
+// Load next-task.json
+static bool loadNextTasks(std::vector<NextTask>& tasks) {
+    tasks.clear();
+    
+    File file = LittleFS.open(NEXT_TASK_FILE, "r");
+    if (!file) {
+        Serial.println("[SCHEDULER] next-task.json not found");
+        return false;
+    }
+    
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        Serial.printf("[SCHEDULER] Failed to parse next-task.json: %s\n", error.c_str());
+        return false;
+    }
+    
+    JsonArray arr = doc["tasks"].as<JsonArray>();
+    for (JsonObject obj : arr) {
+        NextTask t;
+        t.mac = obj["mac"].as<String>();
+        t.channel = obj["channel"] | 1;
+        t.actionOn = obj["actionOn"] | true;
+        t.scheduledTime = obj["scheduledTime"] | 0;
+        t.period = obj["period"].as<String>();
+        tasks.push_back(t);
+    }
+    
+    Serial.printf("[SCHEDULER] Loaded %d tasks from next-task.json\n", tasks.size());
+    return true;
+}
+
+// Rebuild next-task.json from light-schedule.json (called when schedule changes or on startup)
+void rebuildNextTasks() {
+    Serial.println("[SCHEDULER] Rebuilding next-task.json from schedules...");
+    
+    std::vector<NextTask> allTasks;
+    
+    File file = LittleFS.open("/config/schedule/light-schedule.json", "r");
+    if (!file) {
+        Serial.println("[SCHEDULER] No light-schedule.json found");
+        saveNextTasks(allTasks);  // Save empty
+        return;
+    }
+    
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        Serial.printf("[SCHEDULER] Failed to parse light-schedule.json: %s\n", error.c_str());
+        saveNextTasks(allTasks);
+        return;
+    }
+    
+    JsonArray schedules = doc["schedules"].as<JsonArray>();
+    for (JsonObject sched : schedules) {
+        const char* macStr = sched["mac"];
+        if (!macStr) continue;
+        
+        JsonObject schedule = sched["schedule"];
+        calculateNextTasks(macStr, schedule, allTasks);
+    }
+    
+    saveNextTasks(allTasks);
+}
+
+// Execute a scheduled task
+static bool executeTask(const NextTask& task) {
+    uint8_t mac[6];
+    if (!parseMacAddress(task.mac.c_str(), mac)) {
+        Serial.printf("[SCHEDULER] Invalid MAC in task: %s\n", task.mac.c_str());
+        return false;
+    }
+    
+    // Check if node is online
+    bool isOnline = ESPNowManager::getInstance().isPeerOnline(mac);
+    if (!isOnline) {
+        Serial.printf("[SCHEDULER] Node %s is OFFLINE, task deferred\n", task.mac.c_str());
+        return false;  // Will retry later
+    }
+    
+    // Calculate command code: CH1=10/11, CH2=20/21, CH3=30/31
+    uint8_t command = (task.channel * 10) + (task.actionOn ? 1 : 0);
+    
+    sendLightCommand(mac, command);
+    
+    // Update channel state tracking
+    String macKey = task.mac;
+    macKey.toUpperCase();
+    if (g_channelStates.find(macKey) == g_channelStates.end()) {
+        g_channelStates[macKey] = {false, false, false, -1};
+    }
+    ChannelState& state = g_channelStates[macKey];
+    if (task.channel == 1) state.ch1_on = task.actionOn;
+    else if (task.channel == 2) state.ch2_on = task.actionOn;
+    else if (task.channel == 3) state.ch3_on = task.actionOn;
+    
+    return true;
+}
+
+// Find and execute any past-due tasks, with retry logic for offline nodes
+static void processPastDueTasks(std::vector<NextTask>& tasks, bool& needsRebuild) {
+    time_t now = getCurrentUnixTime();
+    if (now == 0) return;  // NTP not ready
+    
+    std::vector<NextTask> pendingRetry;
+    bool anyExecuted = false;
+    
+    for (auto it = tasks.begin(); it != tasks.end(); ) {
+        if (it->scheduledTime <= now) {
+            Serial.printf("[SCHEDULER] Past-due task: %s CH%d %s (scheduled %ld, now %ld)\n",
+                         it->mac.c_str(), it->channel, it->actionOn ? "ON" : "OFF",
+                         (long)it->scheduledTime, (long)now);
+            
+            if (executeTask(*it)) {
+                anyExecuted = true;
+                it = tasks.erase(it);  // Remove executed task
+            } else {
+                // Node offline - keep for retry but update scheduled time to future
+                it->scheduledTime = now + 60;  // Retry in 60 seconds
+                pendingRetry.push_back(*it);
+                it = tasks.erase(it);
+            }
+        } else {
+            ++it;
+        }
+    }
+    
+    // Add retry tasks back
+    for (const NextTask& t : pendingRetry) {
+        tasks.push_back(t);
+    }
+    
+    if (anyExecuted || !pendingRetry.empty()) {
+        needsRebuild = true;  // Tasks changed, need to save
+    }
+}
+
 void schedulerTask(void* parameter) {
     Serial.printf("[SCHEDULER] Task started on core %d\n", xPortGetCoreID());
     
@@ -700,116 +977,79 @@ void schedulerTask(void* parameter) {
         Serial.println("[SCHEDULER] Warning: NTP not synced, scheduler may not work correctly");
     }
     
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xCheckInterval = pdMS_TO_TICKS(30000);  // Check every 30 seconds
+    // Initial rebuild of next-task.json on startup
+    rebuildNextTasks();
+    
+    // Load tasks
+    std::vector<NextTask> tasks;
+    loadNextTasks(tasks);
+    
+    // Process any past-due tasks from before power loss
+    bool needsSave = false;
+    processPastDueTasks(tasks, needsSave);
+    if (needsSave) {
+        rebuildNextTasks();  // Recalculate all future tasks
+        loadNextTasks(tasks);
+    }
+    
+    // Track last rebuild time to refresh tasks daily
+    time_t lastRebuildTime = getCurrentUnixTime();
     
     while (true) {
-        // Get current time
-        struct tm timeinfo;
-        if (!getLocalTime(&timeinfo)) {
-            Serial.println("[SCHEDULER] Failed to get local time");
-            vTaskDelayUntil(&xLastWakeTime, xCheckInterval);
-            continue;
+        time_t now = getCurrentUnixTime();
+        
+        // Refresh task list once per day (handle day rollover)
+        if (now - lastRebuildTime > 12 * 60 * 60) {  // Every 12 hours
+            Serial.println("[SCHEDULER] Periodic task rebuild");
+            rebuildNextTasks();
+            loadNextTasks(tasks);
+            lastRebuildTime = now;
         }
         
-        int currentHour = timeinfo.tm_hour;
-        int currentMinute = timeinfo.tm_min;
-        int currentTimeMinutes = currentHour * 60 + currentMinute;
-        
-        Serial.printf("[SCHEDULER] Checking schedules at %02d:%02d\n", currentHour, currentMinute);
-        
-        // Load and parse light schedule
-        File file = LittleFS.open("/config/schedule/light-schedule.json", "r");
-        if (!file) {
-            Serial.println("[SCHEDULER] No schedule file found");
-            vTaskDelayUntil(&xLastWakeTime, xCheckInterval);
-            continue;
-        }
-        
-        JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, file);
-        file.close();
-        
-        if (error) {
-            Serial.printf("[SCHEDULER] JSON parse error: %s\n", error.c_str());
-            vTaskDelayUntil(&xLastWakeTime, xCheckInterval);
-            continue;
-        }
-        
-        JsonArray schedules = doc["schedules"].as<JsonArray>();
-        
-        for (JsonObject sched : schedules) {
-            const char* macStr = sched["mac"];
-            if (!macStr) continue;
+        // Find next task
+        NextTask nextTask;
+        if (findNextTask(tasks, nextTask)) {
+            time_t waitSeconds = nextTask.scheduledTime - now;
             
-            String macKey = String(macStr);
-            uint8_t mac[6];
-            if (!parseMacAddress(macStr, mac)) {
-                Serial.printf("[SCHEDULER] Invalid MAC: %s\n", macStr);
-                continue;
-            }
-            
-            // Initialize channel state if needed
-            if (g_channelStates.find(macKey) == g_channelStates.end()) {
-                g_channelStates[macKey] = {false, false, false, -1};
-            }
-            ChannelState& state = g_channelStates[macKey];
-            
-            // Skip if we already checked this minute
-            if (state.lastCheckMinute == currentTimeMinutes) {
-                continue;
-            }
-            state.lastCheckMinute = currentTimeMinutes;
-            
-            JsonObject schedule = sched["schedule"];
-            
-            // Check each time period (morning, evening, etc.)
-            for (JsonPair period : schedule) {
-                JsonObject periodData = period.value().as<JsonObject>();
+            if (waitSeconds <= 0) {
+                // Task is due now
+                Serial.printf("[SCHEDULER] Executing: %s CH%d %s\n",
+                             nextTask.mac.c_str(), nextTask.channel, 
+                             nextTask.actionOn ? "ON" : "OFF");
                 
-                // Check each channel in this period
-                // Channel 1
-                if (periodData.containsKey("channel1")) {
-                    JsonObject ch1 = periodData["channel1"];
-                    int startMinutes = ch1["start"]["hour"].as<int>() * 60 + ch1["start"]["minute"].as<int>();
-                    int offMinutes = ch1["offTime"]["hour"].as<int>() * 60 + ch1["offTime"]["minute"].as<int>();
-                    
-                    bool shouldBeOn = (currentTimeMinutes >= startMinutes && currentTimeMinutes < offMinutes);
-                    if (shouldBeOn != state.ch1_on) {
-                        sendLightCommand(mac, shouldBeOn ? 11 : 10);  // 11=CH1_ON, 10=CH1_OFF
-                        state.ch1_on = shouldBeOn;
-                    }
+                if (executeTask(nextTask)) {
+                    // Remove executed task and recalculate next occurrence
+                    rebuildNextTasks();
+                    loadNextTasks(tasks);
+                } else {
+                    // Node offline - wait 60 seconds and retry
+                    Serial.println("[SCHEDULER] Node offline, retrying in 60s");
+                    vTaskDelay(pdMS_TO_TICKS(60000));
                 }
-                
-                // Channel 2
-                if (periodData.containsKey("channel2")) {
-                    JsonObject ch2 = periodData["channel2"];
-                    int startMinutes = ch2["start"]["hour"].as<int>() * 60 + ch2["start"]["minute"].as<int>();
-                    int offMinutes = ch2["offTime"]["hour"].as<int>() * 60 + ch2["offTime"]["minute"].as<int>();
-                    
-                    bool shouldBeOn = (currentTimeMinutes >= startMinutes && currentTimeMinutes < offMinutes);
-                    if (shouldBeOn != state.ch2_on) {
-                        sendLightCommand(mac, shouldBeOn ? 21 : 20);  // 21=CH2_ON, 20=CH2_OFF
-                        state.ch2_on = shouldBeOn;
-                    }
-                }
-                
-                // Channel 3
-                if (periodData.containsKey("channel3")) {
-                    JsonObject ch3 = periodData["channel3"];
-                    int startMinutes = ch3["start"]["hour"].as<int>() * 60 + ch3["start"]["minute"].as<int>();
-                    int offMinutes = ch3["offTime"]["hour"].as<int>() * 60 + ch3["offTime"]["minute"].as<int>();
-                    
-                    bool shouldBeOn = (currentTimeMinutes >= startMinutes && currentTimeMinutes < offMinutes);
-                    if (shouldBeOn != state.ch3_on) {
-                        sendLightCommand(mac, shouldBeOn ? 31 : 30);  // 31=CH3_ON, 30=CH3_OFF
-                        state.ch3_on = shouldBeOn;
-                    }
-                }
+            } else {
+                // Wait until next task (max 30 seconds between checks)
+                uint32_t waitMs = (waitSeconds > 30) ? 30000 : (waitSeconds * 1000);
+                Serial.printf("[SCHEDULER] Next task in %ld sec, sleeping %lu ms\n", 
+                             (long)waitSeconds, waitMs);
+                vTaskDelay(pdMS_TO_TICKS(waitMs));
             }
+        } else {
+            // No upcoming tasks, check again in 30 seconds
+            Serial.println("[SCHEDULER] No upcoming tasks, sleeping 30s");
+            vTaskDelay(pdMS_TO_TICKS(30000));
+            
+            // Rebuild in case schedule was updated
+            rebuildNextTasks();
+            loadNextTasks(tasks);
         }
         
-        vTaskDelayUntil(&xLastWakeTime, xCheckInterval);
+        // Process any past-due tasks (handles multi-task scenarios)
+        needsSave = false;
+        processPastDueTasks(tasks, needsSave);
+        if (needsSave) {
+            rebuildNextTasks();
+            loadNextTasks(tasks);
+        }
     }
 }
 
@@ -2412,6 +2652,9 @@ void setupWebServer() {
         }
         serializeJson(doc, file);
         file.close();
+
+        // Rebuild next-task.json with updated schedule
+        rebuildNextTasks();
 
         request->send(200, "application/json", "{\"success\":true}");
     });

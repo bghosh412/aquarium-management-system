@@ -30,6 +30,7 @@
 #include <WiFiClientSecure.h>
 #include <map>
 #include <time.h>  // For NTP time
+#include <esp_task_wdt.h>  // For watchdog feeding during OTA
 #include "protocol/messages.h"
 #include "models/Aquarium.h"
 #include "managers/AquariumManager.h"
@@ -98,6 +99,13 @@ TaskHandle_t watchdogTaskHandle = NULL;
 TaskHandle_t webUiTaskHandle = NULL;
 TaskHandle_t schedulerTaskHandle = NULL;
 TaskHandle_t nodeOtaTaskHandle = NULL;
+
+// OTA Pending State (for deferred processing in loop)
+enum class OtaPendingType { NONE, FIRMWARE, LITTLEFS, BOTH };
+volatile OtaPendingType otaPending = OtaPendingType::NONE;
+volatile bool otaInProgress = false;
+String otaPendingFirmwareVersion = "";
+String otaPendingLittlefsVersion = "";
 
 // Node OTA state (for async transfer)
 struct NodeOtaState {
@@ -360,6 +368,13 @@ bool performOtaUpdate(const String& url, bool isLittleFs, String& errorOut) {
         return false;
     }
 
+    Serial.printf("[OTA] Starting %s update from: %s\n", isLittleFs ? "LittleFS" : "firmware", url.c_str());
+    
+    // Temporarily disable WDT for the duration of OTA
+    // This is safe because OTA has its own timeout handling
+    Serial.println("[OTA] Disabling task watchdog for OTA duration...");
+    esp_task_wdt_deinit();
+
     std::unique_ptr<WiFiClient> client;
     if (url.startsWith("https://")) {
         std::unique_ptr<WiFiClientSecure> secureClient(new WiFiClientSecure());
@@ -370,48 +385,110 @@ bool performOtaUpdate(const String& url, bool isLittleFs, String& errorOut) {
     }
 
     HTTPClient http;
+    http.setTimeout(120000);  // 120 second timeout for large files
+    
     if (!http.begin(*client, url)) {
         errorOut = "Failed to start HTTP";
+        esp_task_wdt_init(5, true);  // Re-enable WDT
         return false;
     }
 
+    Serial.println("[OTA] Sending HTTP GET request...");
     int httpCode = http.GET();
     if (httpCode != HTTP_CODE_OK) {
         errorOut = "HTTP error: " + String(httpCode);
         http.end();
+        esp_task_wdt_init(5, true);  // Re-enable WDT
         return false;
     }
 
     int contentLength = http.getSize();
+    Serial.printf("[OTA] Content length: %d bytes\n", contentLength);
+    
     int updateType = isLittleFs ? U_SPIFFS : U_FLASH;
 
     if (!Update.begin(contentLength > 0 ? contentLength : UPDATE_SIZE_UNKNOWN, updateType)) {
         errorOut = Update.errorString();
         http.end();
+        esp_task_wdt_init(5, true);  // Re-enable WDT
         return false;
     }
 
-    size_t written = Update.writeStream(http.getStream());
+    // Chunked download with progress reporting
+    WiFiClient* stream = http.getStreamPtr();
+    uint8_t buff[4096];  // Larger buffer for faster download
+    size_t written = 0;
+    unsigned long lastProgressTime = millis();
+    unsigned long startTime = millis();
+    
+    Serial.println("[OTA] Downloading and writing...");
+    
+    while (http.connected() && (contentLength <= 0 || written < (size_t)contentLength)) {
+        size_t available = stream->available();
+        if (available) {
+            size_t toRead = (available > sizeof(buff)) ? sizeof(buff) : available;
+            size_t bytesRead = stream->readBytes(buff, toRead);
+            
+            if (bytesRead > 0) {
+                size_t bytesWritten = Update.write(buff, bytesRead);
+                if (bytesWritten != bytesRead) {
+                    errorOut = "Write failed";
+                    Update.abort();
+                    http.end();
+                    esp_task_wdt_init(5, true);  // Re-enable WDT
+                    return false;
+                }
+                written += bytesWritten;
+                
+                // Show progress every second or 100KB
+                if (millis() - lastProgressTime > 1000 || written % 102400 < 4096) {
+                    int progress = contentLength > 0 ? (written * 100 / contentLength) : 0;
+                    Serial.printf("[OTA] Progress: %d%% (%d/%d bytes)\n", progress, written, contentLength);
+                    lastProgressTime = millis();
+                }
+            }
+        } else {
+            // No data available, small yield
+            delay(1);
+        }
+        
+        // Timeout check (5 minutes max for large LittleFS)
+        if (millis() - startTime > 300000) {
+            errorOut = "Download timeout (5 min)";
+            Update.abort();
+            http.end();
+            esp_task_wdt_init(5, true);  // Re-enable WDT
+            return false;
+        }
+    }
+    
+    Serial.printf("[OTA] Download complete: %d bytes written in %lu ms\n", written, millis() - startTime);
+
     if (contentLength > 0 && written != (size_t)contentLength) {
-        errorOut = "Incomplete OTA write";
+        errorOut = "Incomplete OTA write: " + String(written) + "/" + String(contentLength);
         Update.abort();
         http.end();
+        esp_task_wdt_init(5, true);  // Re-enable WDT
         return false;
     }
 
     if (!Update.end()) {
         errorOut = Update.errorString();
         http.end();
+        esp_task_wdt_init(5, true);  // Re-enable WDT
         return false;
     }
 
     if (!Update.isFinished()) {
         errorOut = "OTA not finished";
         http.end();
+        esp_task_wdt_init(5, true);  // Re-enable WDT
         return false;
     }
 
     http.end();
+    Serial.println("[OTA] Update successful!");
+    // Note: WDT not re-enabled here since we'll reboot immediately after
     return true;
 }
 
@@ -2984,8 +3061,14 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "application/json", response);
     });
 
-    // POST OTA firmware update with version check
+    // POST OTA firmware update with version check - DEFERRED APPROACH
     server.on("/api/ota/firmware", HTTP_POST, [](AsyncWebServerRequest *request){
+        // Check if OTA already in progress
+        if (otaInProgress || otaPending != OtaPendingType::NONE) {
+            request->send(409, "application/json", "{\"success\":false,\"error\":\"OTA already in progress\"}");
+            return;
+        }
+        
         // Check if URL is configured
         if (config.hubFirmwareOtaUrl.length() == 0) {
             request->send(400, "application/json", "{\"success\":false,\"error\":\"HUB_FIRMWARE_OTA_URL not configured\"}");
@@ -3006,33 +3089,25 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             return;
         }
         
-        // Build firmware URL
-        String firmwareUrl = config.hubFirmwareOtaUrl;
-        if (!firmwareUrl.endsWith("/")) firmwareUrl += "/";
-        firmwareUrl += "firmware.bin";
+        // Set pending OTA - will be processed in main loop
+        otaPendingFirmwareVersion = remoteVersion;
+        otaPending = OtaPendingType::FIRMWARE;
         
-        Serial.printf("[OTA] Updating firmware from %s to %s\n", 
+        Serial.printf("[OTA] Firmware update queued: %s -> %s\n", 
                       config.hubFirmwareVersion.c_str(), remoteVersion.c_str());
         
-        String error;
-        bool ok = performOtaUpdate(firmwareUrl, false, error);
-        if (!ok) {
-            String response = String("{\"success\":false,\"error\":\"") + error + "\"}";
-            request->send(500, "application/json", response);
+        // Respond immediately - OTA will happen in loop()
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Firmware update started, hub will reboot shortly...\"}");
+    });
+
+    // POST OTA LittleFS update with version check - DEFERRED APPROACH
+    server.on("/api/ota/littlefs", HTTP_POST, [](AsyncWebServerRequest *request){
+        // Check if OTA already in progress
+        if (otaInProgress || otaPending != OtaPendingType::NONE) {
+            request->send(409, "application/json", "{\"success\":false,\"error\":\"OTA already in progress\"}");
             return;
         }
         
-        // Update version in hub_config.txt before reboot
-        updateHubConfigValue("HUB_FIRMWARE_VERSION", remoteVersion);
-        config.hubFirmwareVersion = remoteVersion;
-
-        request->send(200, "application/json", "{\"success\":true,\"message\":\"Firmware updated, rebooting...\"}");
-        delay(1000);
-        ESP.restart();
-    });
-
-    // POST OTA LittleFS update with version check
-    server.on("/api/ota/littlefs", HTTP_POST, [](AsyncWebServerRequest *request){
         // Check if URL is configured
         if (config.hubLittlefsOtaUrl.length() == 0) {
             request->send(400, "application/json", "{\"success\":false,\"error\":\"HUB_LITTLEFS_OTA_URL not configured\"}");
@@ -3053,29 +3128,80 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             return;
         }
         
-        // Build LittleFS URL
-        String littlefsUrl = config.hubLittlefsOtaUrl;
-        if (!littlefsUrl.endsWith("/")) littlefsUrl += "/";
-        littlefsUrl += "littlefs.bin";
+        // Set pending OTA - will be processed in main loop  
+        otaPendingLittlefsVersion = remoteVersion;
+        otaPending = OtaPendingType::LITTLEFS;
         
-        Serial.printf("[OTA] Updating LittleFS from %s to %s\n", 
+        Serial.printf("[OTA] LittleFS update queued: %s -> %s\n", 
                       config.hubLittlefsVersion.c_str(), remoteVersion.c_str());
         
-        String error;
-        bool ok = performOtaUpdate(littlefsUrl, true, error);
-        if (!ok) {
-            String response = String("{\"success\":false,\"error\":\"") + error + "\"}";
-            request->send(500, "application/json", response);
+        // Respond immediately - OTA will happen in loop()
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"LittleFS update started, hub will reboot shortly...\"}");
+    });
+
+    // POST OTA all updates (firmware + littlefs) - applies all before single reboot
+    server.on("/api/ota/all", HTTP_POST, [](AsyncWebServerRequest *request){
+        // Check if OTA already in progress
+        if (otaInProgress || otaPending != OtaPendingType::NONE) {
+            request->send(409, "application/json", "{\"success\":false,\"error\":\"OTA already in progress\"}");
             return;
         }
         
-        // Update version in hub_config.txt before reboot
-        updateHubConfigValue("HUB_LITTLEFS_VERSION", remoteVersion);
-        config.hubLittlefsVersion = remoteVersion;
-
-        request->send(200, "application/json", "{\"success\":true,\"message\":\"LittleFS updated, rebooting...\"}");
-        delay(1000);
-        ESP.restart();
+        bool hasFirmwareUpdate = false;
+        bool hasLittlefsUpdate = false;
+        String firmwareVersion, littlefsVersion;
+        
+        // Check firmware update availability
+        if (config.hubFirmwareOtaUrl.length() > 0) {
+            if (fetchRemoteVersion(config.hubFirmwareOtaUrl, firmwareVersion)) {
+                if (compareSemanticVersions(firmwareVersion, config.hubFirmwareVersion) > 0) {
+                    hasFirmwareUpdate = true;
+                }
+            }
+        }
+        
+        // Check LittleFS update availability
+        if (config.hubLittlefsOtaUrl.length() > 0) {
+            if (fetchRemoteVersion(config.hubLittlefsOtaUrl, littlefsVersion)) {
+                if (compareSemanticVersions(littlefsVersion, config.hubLittlefsVersion) > 0) {
+                    hasLittlefsUpdate = true;
+                }
+            }
+        }
+        
+        if (!hasFirmwareUpdate && !hasLittlefsUpdate) {
+            request->send(200, "application/json", "{\"success\":false,\"error\":\"No updates available\"}");
+            return;
+        }
+        
+        // Set pending updates
+        if (hasFirmwareUpdate && hasLittlefsUpdate) {
+            otaPendingFirmwareVersion = firmwareVersion;
+            otaPendingLittlefsVersion = littlefsVersion;
+            otaPending = OtaPendingType::BOTH;
+            Serial.printf("[OTA] Both updates queued: Firmware %s -> %s, LittleFS %s -> %s\n",
+                          config.hubFirmwareVersion.c_str(), firmwareVersion.c_str(),
+                          config.hubLittlefsVersion.c_str(), littlefsVersion.c_str());
+        } else if (hasFirmwareUpdate) {
+            otaPendingFirmwareVersion = firmwareVersion;
+            otaPending = OtaPendingType::FIRMWARE;
+            Serial.printf("[OTA] Firmware update queued: %s -> %s\n",
+                          config.hubFirmwareVersion.c_str(), firmwareVersion.c_str());
+        } else {
+            otaPendingLittlefsVersion = littlefsVersion;
+            otaPending = OtaPendingType::LITTLEFS;
+            Serial.printf("[OTA] LittleFS update queued: %s -> %s\n",
+                          config.hubLittlefsVersion.c_str(), littlefsVersion.c_str());
+        }
+        
+        // Build response with what will be updated
+        String updates = "";
+        if (hasFirmwareUpdate) updates += "Firmware";
+        if (hasFirmwareUpdate && hasLittlefsUpdate) updates += " + ";
+        if (hasLittlefsUpdate) updates += "LittleFS";
+        
+        String response = "{\"success\":true,\"message\":\"" + updates + " update started, hub will reboot after all updates complete...\"}";
+        request->send(200, "application/json", response);
     });
 
     // ========================================================================
@@ -4578,6 +4704,83 @@ void loop() {
     // Processes ESP-NOW messages from queue and scheduler
     // Web UI runs on Core 1
     // Watchdog task runs independently on Core 0
+    
+    // ========================================================================
+    // DEFERRED OTA PROCESSING
+    // OTA must happen in main loop to avoid blocking async_tcp task
+    // When BOTH updates are needed, apply firmware first, then LittleFS, then reboot once
+    // ========================================================================
+    if (otaPending != OtaPendingType::NONE && !otaInProgress) {
+        otaInProgress = true;
+        
+        // Small delay to allow response to be sent
+        delay(500);
+        
+        bool allSuccess = true;
+        String lastError;
+        
+        // Handle FIRMWARE update (for FIRMWARE or BOTH)
+        if (otaPending == OtaPendingType::FIRMWARE || otaPending == OtaPendingType::BOTH) {
+            String firmwareUrl = config.hubFirmwareOtaUrl;
+            if (!firmwareUrl.endsWith("/")) firmwareUrl += "/";
+            firmwareUrl += "firmware.bin";
+            
+            Serial.printf("[OTA] Processing FIRMWARE update to version %s\n", otaPendingFirmwareVersion.c_str());
+            
+            String error;
+            bool ok = performOtaUpdate(firmwareUrl, false, error);
+            
+            if (ok) {
+                // Update version in hub_config.txt
+                updateHubConfigValue("HUB_FIRMWARE_VERSION", otaPendingFirmwareVersion);
+                config.hubFirmwareVersion = otaPendingFirmwareVersion;
+                Serial.println("[OTA] Firmware update successful!");
+            } else {
+                Serial.printf("[OTA] Firmware update FAILED: %s\n", error.c_str());
+                allSuccess = false;
+                lastError = "Firmware: " + error;
+            }
+        }
+        
+        // Handle LITTLEFS update (for LITTLEFS or BOTH, only if firmware succeeded or wasn't needed)
+        if (allSuccess && (otaPending == OtaPendingType::LITTLEFS || otaPending == OtaPendingType::BOTH)) {
+            String littlefsUrl = config.hubLittlefsOtaUrl;
+            if (!littlefsUrl.endsWith("/")) littlefsUrl += "/";
+            littlefsUrl += "littlefs.bin";
+            
+            Serial.printf("[OTA] Processing LITTLEFS update to version %s\n", otaPendingLittlefsVersion.c_str());
+            
+            String error;
+            bool ok = performOtaUpdate(littlefsUrl, true, error);
+            
+            if (ok) {
+                // Update version in hub_config.txt
+                updateHubConfigValue("HUB_LITTLEFS_VERSION", otaPendingLittlefsVersion);
+                config.hubLittlefsVersion = otaPendingLittlefsVersion;
+                Serial.println("[OTA] LittleFS update successful!");
+            } else {
+                Serial.printf("[OTA] LittleFS update FAILED: %s\n", error.c_str());
+                allSuccess = false;
+                lastError = "LittleFS: " + error;
+            }
+        }
+        
+        // Reboot only after ALL updates are done (or if any succeeded)
+        if (allSuccess || 
+            (otaPending == OtaPendingType::BOTH && config.hubFirmwareVersion == otaPendingFirmwareVersion)) {
+            // At least firmware was updated, or all succeeded - reboot
+            Serial.println("[OTA] All updates complete! Rebooting in 2 seconds...");
+            delay(2000);
+            ESP.restart();
+        } else {
+            // All updates failed
+            Serial.printf("[OTA] Update FAILED: %s\n", lastError.c_str());
+            otaPending = OtaPendingType::NONE;
+            otaInProgress = false;
+            otaPendingFirmwareVersion = "";
+            otaPendingLittlefsVersion = "";
+        }
+    }
     
     // Process ESP-NOW messages via ESPNowManager (non-blocking)
     ESPNowManager::getInstance().processQueue();

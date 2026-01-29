@@ -1,0 +1,41 @@
+Category,Component,Issue,Current State,Impact,Recommended Solution,Priority,Effort,Framework Opportunity
+Code Organization,Hub main.cpp,Monolithic file,4631 lines in single file,Hard to maintain/test/navigate,Split into modules: WebServer HubScheduler DeviceManager ConfigManager OtaManager,Critical,High,Create HubBase library with modular components
+Code Organization,Hub main.cpp,Mixed concerns,API handlers scheduler config OTA all in one file,Tight coupling hard to test,Separate into dedicated manager classes,Critical,High,Yes - create separate manager libraries
+Code Organization,Hub main.cpp,36 API endpoints inline,All handlers defined inline in setupWebServer(),Hard to test and maintain,Extract to ApiController class with route registration,High,Medium,Yes - create WebApiFramework library
+ArduinoJson,Hub main.cpp,Deprecated API usage,Uses DynamicJsonDocument (deprecated in v7),Compiler warnings future compatibility,Migrate to JsonDocument (v7 API),Medium,Low,Document in framework guidelines
+ArduinoJson,Hub main.cpp,Inconsistent allocation,Mix of static sizes: 256 2048 4096 8192,Memory inefficiency,Standardize on JsonDocument or define size constants,Medium,Low,Create JSON helper utilities in framework
+State Management,Hub main.cpp,Global static variables,~15 static maps/structs scattered throughout,Hard to track state flow,Consolidate into StateManager singleton,High,Medium,Yes - create StateManager base class
+State Management,Hub main.cpp,g_lightStatus g_lightStatusPending g_channelStates,Multiple maps tracking same devices,Redundant state potential sync issues,Unify into single DeviceStateManager,High,Medium,Yes - device state framework
+Configuration,Hub main.cpp,Large HubConfig struct,20+ fields in single struct,Not modular hard to extend,Split into WiFiConfig EspNowConfig OtaConfig etc,Medium,Low,Yes - create ConfigManager framework
+Configuration,Hub main.cpp,Hardcoded paths,/config/*.json paths scattered throughout,Hard to change file locations,Define path constants or config object,Low,Low,Yes - PathManager utility
+Error Handling,Hub main.cpp,Inconsistent error responses,Some return JSON some return text plain,Inconsistent API contract,Standardize on JSON error responses with error codes,Medium,Low,Yes - ApiResponse helper class
+Error Handling,Hub main.cpp,No centralized error logging,Serial.println scattered everywhere,Hard to diagnose production issues,Create Logger class with levels,Medium,Medium,Yes - Logger framework
+Node Architecture,Nodes,Inconsistent implementations,co2/heater/feeder use old NodeBase API lighting uses new,Maintenance burden confusion,Migrate all nodes to new NodeBase pattern,High,Medium,NodeBase library update
+Node Architecture,Nodes,Duplicate global variables,Each node redeclares currentState hubMacAddress etc,Copy-paste code debt,Move all to NodeBase globals,High,Low,NodeBase enhancement
+Node Architecture,co2/heater/feeder,Wrong handleCommand signature,Takes CommandMessage* not (mac data len),Won't compile with current ESPNowManager,Update signature to match ESPNowManager callbacks,Critical,Low,NodeBase template update
+Node Architecture,Nodes,Missing persistentDigitalWrite,Only lighting node uses pin persistence,Inconsistent power recovery,Add to all nodes that control actuators,Medium,Low,Already in NodeBase - just need adoption
+ESP-NOW,ESPNowManager,948 lines,Large single file,Hard to extend/maintain,Consider splitting: Transport Fragmentation PeerManagement,Medium,Medium,Already a library - refactor internally
+ESP-NOW,ESPNowManager,Tight coupling to messages.h,Hardcoded message type handling,Hard to add new message types,Use message registry pattern,Medium,High,Major refactor
+Scheduler,Hub main.cpp,Inline scheduler code,~400 lines of scheduler logic in main.cpp,Hard to test independently,Extract to LightScheduler class,High,Medium,Yes - SchedulerFramework library
+Scheduler,Hub main.cpp,Only supports lights,Scheduler tied to light commands,Can't schedule other device types,Generic ScheduledCommand interface,Medium,Medium,Yes - generic scheduler
+OTA,Hub main.cpp,~500 lines OTA code,Complex OTA logic inline,Hard to understand/maintain,Extract to OtaManager class,High,Medium,Yes - OtaFramework library
+OTA,Hub main.cpp,Hardcoded OTA commands,OTA_CMD_* constants scattered,Hard to change protocol,Define in protocol/ota.h,Low,Low,Protocol library enhancement
+Web UI,Hub data folder,No build system,Raw HTML/CSS/JS files,No minification/bundling,Add simple build step (optional),Low,Medium,Separate concern
+Device Model,Device.h,Not implemented,Device subclasses have .h but no .cpp,Can't instantiate devices,Implement Device subclass .cpp files,Medium,Medium,Not framework - app specific
+Device Model,createDevice(),Returns nullptr,Function stub only,Device polymorphism unusable,Implement factory function,Medium,Medium,Not framework - app specific
+Memory,Hub main.cpp,printMemoryStatus inline,Memory monitoring code in main,Not reusable,Extract to MemoryManager,Low,Low,Yes - MemoryManager utility
+Testing,All,No unit tests,Zero test coverage,Regression risk,Add PlatformIO unit test framework,High,High,Test framework setup
+Testing,API,No API tests,Manual curl testing only,Regression risk,Add integration test scripts,Medium,Medium,Test harness enhancement
+Documentation,Code,Sparse inline docs,Many functions undocumented,Hard to understand intent,Add JSDoc-style comments,Low,Medium,Documentation standard
+Protocol,messages.h,Growing complexity,Many message types in one file,Hard to manage,Split by category: commands status ota,Low,Low,Protocol library structure
+Naming,Various,Inconsistent naming,Mix of camelCase snake_case,Readability issues,Establish coding standard,Low,Low,Coding guidelines
+Constants,Hub main.cpp,Magic numbers,Timeouts sizes scattered in code,Hard to tune,Extract to Constants.h,Medium,Low,Yes - add to Constant.h
+Callback Pattern,Nodes,Wrapper functions,Each node needs wrapper callbacks,Boilerplate code,Eliminate with template/macro in NodeBase,Medium,Medium,NodeBase enhancement
+Build System,platformio.ini,No lib version pinning,lib_deps without exact versions,Build reproducibility risk,Pin all library versions,Low,Low,Build guidelines
+Code Reuse,parseMacAddress,Duplicated,Similar MAC parsing in multiple places,DRY violation,Add to utility library,Low,Low,Yes - MacUtils class
+Code Reuse,JSON file operations,Duplicated patterns,Load/save JSON repeated many times,DRY violation,Create FileManager with typed helpers,Medium,Medium,Yes - FileManager utility
+Fail-Safe,Nodes,Inconsistent behavior,Some nodes dont implement fail-safe properly,Safety risk,Audit and standardize in NodeBase,High,Low,NodeBase enforcement
+Heartbeat,Hub/Node,Hardcoded intervals,30s 60s 120s scattered,Hard to tune,Centralize in config,Low,Low,Config standardization
+Thread Safety,Hub main.cpp,Minimal mutex usage,Shared state between tasks,Potential race conditions,Audit shared state add mutex where needed,Medium,Medium,Framework threading utilities
+Logging,All,No log levels,All Serial.println equal,Can't filter noise,Implement LOG_DEBUG LOG_INFO LOG_ERROR,Medium,Medium,Yes - Logger framework
+Startup,Nodes,Long delay(2000),2 second blocking delay at boot,Slow boot time,Reduce or make non-blocking,Low,Low,NodeBase optimization

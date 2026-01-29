@@ -1,0 +1,40 @@
+Category,Library Name,Purpose,Current Lines to Move,Reusable In Other Projects,Dependencies
+Core Framework,AmsCore,Common utilities: Logger MacUtils TimeUtils Constants,~200,Yes,Arduino
+Core Framework,ConfigManager,Typed config loading/saving JSON/TXT format agnostic,~300,Yes,ArduinoJson LittleFS
+Core Framework,FileManager,File operations with error handling atomic writes,~150,Yes,LittleFS
+Core Framework,StateManager,Centralized state tracking with observers,~200,Yes,Arduino
+ESP-NOW Framework,ESPNowManager,Already exists - refactor into submodules,948,Yes,esp_now WiFi
+ESP-NOW Framework,ESPNowTransport,Low-level send/receive peer management,~400,Yes,esp_now
+ESP-NOW Framework,ESPNowFragmentation,Message fragmentation/reassembly,~300,Yes,Arduino
+ESP-NOW Framework,ESPNowProtocol,Message type registry command routing,~250,Yes,protocol/messages.h
+Hub Framework,HubBase,Hub initialization lifecycle management,~300,Yes - for any ESP32 hub,AmsCore ESPNowManager
+Hub Framework,WebApiFramework,Route registration JSON response helpers CORS,~400,Yes,ESPAsyncWebServer ArduinoJson
+Hub Framework,SchedulerFramework,Generic task scheduling persistence recovery,~350,Yes,AmsCore FileManager
+Hub Framework,OtaManager,OTA orchestration for hub and nodes,~500,Yes,Update HTTPClient
+Hub Framework,DeviceRegistry,Device tracking online/offline state,~300,Partial,ESPNowManager
+Node Framework,NodeBase,Already exists - enhance with more features,1185,Yes,ESPNowManager
+Node Framework,PinStateManager,Already added - pin persistence for power recovery,~200,Yes,ArduinoJson LittleFS
+Node Framework,NodeConfig,Node configuration loading/saving,~150,Yes,LittleFS
+Application Layer,AquariumManager,Aquarium-specific logic,~400,No - app specific,HubBase
+Application Layer,LightController,Light-specific command handling scheduling,~300,No - app specific,DeviceRegistry
+Application Layer,Device Subclasses,LightDevice CO2Device etc implementations,~600,No - app specific,Device base class
+
+SUMMARY
+=======
+Total Current Lines: ~8500 (Hub 4631 + NodeBase 1185 + ESPNowManager 948 + Nodes ~1700)
+Proposed Framework Lines: ~4500 (reusable across projects)
+Application-Specific Lines: ~2000 (this project only)
+Estimated Reduction in main.cpp: 4631 -> ~800 lines (83% reduction)
+
+MIGRATION ORDER
+===============
+1. Extract Logger (enables better debugging during migration)
+2. Extract ConfigManager (used everywhere)
+3. Extract FileManager (used everywhere)
+4. Refactor ESPNowManager into submodules
+5. Extract WebApiFramework
+6. Extract SchedulerFramework
+7. Extract OtaManager
+8. Update NodeBase with consistent callback pattern
+9. Migrate all nodes to new NodeBase API
+10. Implement Device subclasses

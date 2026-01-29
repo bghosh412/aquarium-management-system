@@ -44,8 +44,8 @@ DEBUG_WEBSOCKET=false
 # Base URLs for Hub firmware and LittleFS OTA updates
 # These URLs should point to directories containing version.txt and the binary files
 # version.txt should contain semantic version like: 1.0.0
-HUB_FIRMWARE_OTA_URL=
-HUB_LITTLEFS_OTA_URL=
+HUB_FIRMWARE_OTA_URL=https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Hub/firmware/
+HUB_LITTLEFS_OTA_URL=https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Hub/littleFS/
 
 # Current installed versions (updated automatically after successful OTA)
 # Format: major.minor.patch (e.g., 1.0.0)

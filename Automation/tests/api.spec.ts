@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { config } from '../config/hub.config';
+import { delayForESP32Recovery } from '../helpers/test-helpers';
 
 /**
  * API Endpoint Tests
@@ -7,6 +8,11 @@ import { config } from '../config/hub.config';
  * @tags api
  */
 test.describe('API Endpoint Tests', () => {
+
+  // Add delay after each test to let ESP32 recover
+  test.afterEach(async () => {
+    await delayForESP32Recovery(400);  // Shorter delay for API-only tests
+  });
 
   test.describe('Core APIs', () => {
     

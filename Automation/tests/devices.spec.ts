@@ -6,7 +6,8 @@ import {
   getDevices,
   getUnmappedDevices,
   clickButton,
-  waitForElement
+  waitForElement,
+  delayForESP32Recovery
 } from '../helpers/test-helpers';
 
 /**
@@ -14,6 +15,11 @@ import {
  * @tags devices
  */
 test.describe('Device Management Tests', () => {
+
+  // Add delay after each test to let ESP32 recover
+  test.afterEach(async () => {
+    await delayForESP32Recovery();
+  });
 
   test('should load manage devices page @smoke', async ({ page }) => {
     await navigateTo(page, config.pages.manageDevices);

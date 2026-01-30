@@ -15,6 +15,11 @@
  * - ESP-NOW message queue for thread-safe processing
  * - Memory monitoring with aggressive management
  * - Configuration-driven heartbeat
+ * 
+ * MicroCore Framework Integration:
+ * - Logger: Leveled logging with timestamps
+ * - ConfigManager: KEY=VALUE config file parsing
+ * - FileManager: Safe file operations
  */
 
 #include <Arduino.h>
@@ -39,6 +44,11 @@
 #include "Constant.h"
 #include "ESPNowManager.h"
 #include "ws_server.h"
+
+// MicroCore Framework
+#include <MicroCore.h>
+#include <ConfigManager.h>
+#include <FileManager.h>
 
 // ============================================================================
 // CONFIGURATION & CONSTANTS
@@ -93,6 +103,9 @@ static String macToString(const uint8_t* mac) {
 }
 
 HubConfig config;
+
+// MicroCore ConfigManager for hub_config.txt
+ConfigManager hubConfigManager;
 
 // Task handles
 TaskHandle_t watchdogTaskHandle = NULL;
@@ -555,16 +568,14 @@ int countDevicesForAquarium(uint8_t tankId) {
 }
 
 // ============================================================================
-// CONFIGURATION LOADER
+// CONFIGURATION LOADER (Using MicroCore ConfigManager)
 // ============================================================================
 
 void loadConfiguration() {
-    // Set defaults
+    // Set defaults first
     config.heartbeatEnabled = true;
     config.heartbeatIntervalSec = 30;
-    // Hub will broadcast its own heartbeat periodically (seconds)
-    config.hubHeartbeatIntervalSec = 120;  // Default 120s
-
+    config.hubHeartbeatIntervalSec = 120;
     config.aggressiveMemoryManagement = true;
     config.heapWarningThresholdKB = 50;
     config.psramWarningThresholdKB = 100;
@@ -577,109 +588,49 @@ void loadConfiguration() {
     config.debugSerial = true;
     config.debugESPNOW = false;
     config.debugWebSocket = false;
-    
-    // Hub OTA defaults
     config.hubFirmwareOtaUrl = "";
     config.hubLittlefsOtaUrl = "";
     config.hubFirmwareVersion = "1.0.0";
     config.hubLittlefsVersion = "1.0.0";
-    
-    // Node OTA defaults
     config.lightNodeOtaUrl = "";
-
-    // Test mode disabled by default (only enable in test environments)
     config.hubTestMode = false;
     
-    // Load from file
-    if (!LittleFS.exists("/config/hub_config.txt")) {
-        Serial.println("  Config file not found, using defaults");
+    // Use MicroCore ConfigManager to load KEY=VALUE config
+    if (!hubConfigManager.loadKeyValue("/config/hub_config.txt")) {
+        LOG_WARN("Config file not found, using defaults");
         return;
     }
     
-    File file = LittleFS.open("/config/hub_config.txt", "r");
-    if (!file) {
-        Serial.println(" Failed to open config file");
-        return;
-    }
+    LOG_INFO("Loading configuration via MicroCore ConfigManager...");
     
-    Serial.println(" Loading configuration...");
+    // Load values with defaults using ConfigManager getters
+    config.heartbeatEnabled = hubConfigManager.getBool("HEARTBEAT_ENABLED", config.heartbeatEnabled);
+    config.heartbeatIntervalSec = hubConfigManager.getUInt("HEARTBEAT_INTERVAL_SEC", config.heartbeatIntervalSec);
+    config.hubHeartbeatIntervalSec = hubConfigManager.getUInt("HUB_HEARTBEAT_INTERVAL_SEC", config.hubHeartbeatIntervalSec);
+    config.aggressiveMemoryManagement = hubConfigManager.getBool("AGGRESSIVE_MEMORY_MANAGEMENT", config.aggressiveMemoryManagement);
+    config.heapWarningThresholdKB = hubConfigManager.getUInt("HEAP_WARNING_THRESHOLD_KB", config.heapWarningThresholdKB);
+    config.psramWarningThresholdKB = hubConfigManager.getUInt("PSRAM_WARNING_THRESHOLD_KB", config.psramWarningThresholdKB);
+    config.wifiAPName = hubConfigManager.getString("WIFI_AP_NAME", config.wifiAPName);
+    config.wifiAPPassword = hubConfigManager.getString("WIFI_AP_PASSWORD", config.wifiAPPassword);
+    config.wifiTimeoutSec = hubConfigManager.getUInt("WIFI_TIMEOUT_SEC", config.wifiTimeoutSec);
+    config.mdnsHostname = hubConfigManager.getString("MDNS_HOSTNAME", config.mdnsHostname);
+    config.espnowChannel = hubConfigManager.getUInt("ESPNOW_CHANNEL", config.espnowChannel);
+    config.espnowMaxPeers = hubConfigManager.getUInt("ESPNOW_MAX_PEERS", config.espnowMaxPeers);
+    config.debugSerial = hubConfigManager.getBool("DEBUG_SERIAL", config.debugSerial);
+    config.debugESPNOW = hubConfigManager.getBool("DEBUG_ESPNOW", config.debugESPNOW);
+    config.debugWebSocket = hubConfigManager.getBool("DEBUG_WEBSOCKET", config.debugWebSocket);
+    config.hubFirmwareOtaUrl = hubConfigManager.getString("HUB_FIRMWARE_OTA_URL", config.hubFirmwareOtaUrl);
+    config.hubLittlefsOtaUrl = hubConfigManager.getString("HUB_LITTLEFS_OTA_URL", config.hubLittlefsOtaUrl);
+    config.hubFirmwareVersion = hubConfigManager.getString("HUB_FIRMWARE_VERSION", config.hubFirmwareVersion);
+    config.hubLittlefsVersion = hubConfigManager.getString("HUB_LITTLEFS_VERSION", config.hubLittlefsVersion);
+    config.lightNodeOtaUrl = hubConfigManager.getString("LIGHT_NODE_OTA_URL", config.lightNodeOtaUrl);
+    config.hubTestMode = hubConfigManager.getBool("HUB_TEST_MODE", config.hubTestMode);
     
-    while (file.available()) {
-        String line = file.readStringUntil('\n');
-        line.trim();
-        
-        // Skip comments and empty lines
-        if (line.startsWith("#") || line.length() == 0) {
-            continue;
-        }
-        
-        // Parse KEY=VALUE
-        int separatorIndex = line.indexOf('=');
-        if (separatorIndex == -1) {
-            continue;
-        }
-        
-        String key = line.substring(0, separatorIndex);
-        String value = line.substring(separatorIndex + 1);
-        key.trim();
-        value.trim();
-        
-        // Apply configuration
-        if (key == "HEARTBEAT_ENABLED") {
-            config.heartbeatEnabled = (value == "true");
-        } else if (key == "HEARTBEAT_INTERVAL_SEC") {
-            config.heartbeatIntervalSec = value.toInt();
-        } else if (key == "HUB_HEARTBEAT_INTERVAL_SEC") {
-            config.hubHeartbeatIntervalSec = value.toInt();
-        } else if (key == "AGGRESSIVE_MEMORY_MANAGEMENT") {
-            config.aggressiveMemoryManagement = (value == "true");
-        } else if (key == "HEAP_WARNING_THRESHOLD_KB") {
-            config.heapWarningThresholdKB = value.toInt();
-        } else if (key == "PSRAM_WARNING_THRESHOLD_KB") {
-            config.psramWarningThresholdKB = value.toInt();
-        } else if (key == "WIFI_AP_NAME") {
-            config.wifiAPName = value;
-        } else if (key == "WIFI_AP_PASSWORD") {
-            config.wifiAPPassword = value;
-        } else if (key == "WIFI_TIMEOUT_SEC") {
-            config.wifiTimeoutSec = value.toInt();
-        } else if (key == "MDNS_HOSTNAME") {
-            config.mdnsHostname = value;
-        } else if (key == "ESPNOW_CHANNEL") {
-            config.espnowChannel = value.toInt();
-        } else if (key == "ESPNOW_MAX_PEERS") {
-            config.espnowMaxPeers = value.toInt();
-        } else if (key == "DEBUG_SERIAL") {
-            config.debugSerial = (value == "true");
-        } else if (key == "DEBUG_ESPNOW") {
-            config.debugESPNOW = (value == "true");
-        } else if (key == "DEBUG_WEBSOCKET") {
-            config.debugWebSocket = (value == "true");
-        } else if (key == "HUB_FIRMWARE_OTA_URL") {
-            config.hubFirmwareOtaUrl = value;
-        } else if (key == "HUB_LITTLEFS_OTA_URL") {
-            config.hubLittlefsOtaUrl = value;
-        } else if (key == "HUB_FIRMWARE_VERSION") {
-            config.hubFirmwareVersion = value;
-        } else if (key == "HUB_LITTLEFS_VERSION") {
-            config.hubLittlefsVersion = value;
-        } else if (key == "LIGHT_NODE_OTA_URL") {
-            config.lightNodeOtaUrl = value;
-        } else if (key == "HUB_TEST_MODE") {
-            config.hubTestMode = (value == "true");
-        }
-    }
-    
-    file.close();
-    
-    Serial.println(" Configuration loaded");
-    Serial.printf("   - Heartbeat: %s (%ds)\n", 
-                  config.heartbeatEnabled ? "ON" : "OFF", 
-                  config.heartbeatIntervalSec);
-    Serial.printf("   - Hub Heartbeat Interval: %ds\n", config.hubHeartbeatIntervalSec);
-    Serial.printf("   - Memory Management: %s\n", 
-                  config.aggressiveMemoryManagement ? "AGGRESSIVE" : "NORMAL");
-    Serial.printf("   - mDNS: %s.local\n", config.mdnsHostname.c_str());
+    LOG_INFO("Configuration loaded:");
+    LOG_INFO("  - Heartbeat: %s (%ds)", config.heartbeatEnabled ? "ON" : "OFF", config.heartbeatIntervalSec);
+    LOG_INFO("  - Hub Heartbeat Interval: %ds", config.hubHeartbeatIntervalSec);
+    LOG_INFO("  - Memory Management: %s", config.aggressiveMemoryManagement ? "AGGRESSIVE" : "NORMAL");
+    LOG_INFO("  - mDNS: %s.local", config.mdnsHostname.c_str());
 }
 
 // ============================================================================
@@ -692,23 +643,21 @@ void printMemoryStatus() {
     uint32_t freePSRAM = ESP.getFreePsram() / 1024;  // KB
     uint32_t totalPSRAM = ESP.getPsramSize() / 1024;  // KB
     
-    Serial.println("");
-    Serial.printf(" HEAP:  %u KB free / %u KB total (%.1f%%)\n", 
+    LOG_INFO("HEAP:  %u KB free / %u KB total (%.1f%%)", 
                   freeHeap, totalHeap, 
                   (freeHeap * 100.0) / totalHeap);
-    Serial.printf(" PSRAM: %u KB free / %u KB total (%.1f%%)\n", 
+    LOG_INFO("PSRAM: %u KB free / %u KB total (%.1f%%)", 
                   freePSRAM, totalPSRAM, 
                   (freePSRAM * 100.0) / totalPSRAM);
-    Serial.printf("  Uptime: %lu seconds\n", millis() / 1000);
-    Serial.println("");
+    LOG_INFO("Uptime: %lu seconds", millis() / 1000);
     
     // Warnings
     if (freeHeap < config.heapWarningThresholdKB) {
-        Serial.printf("  HEAP WARNING: Only %u KB free!\n", freeHeap);
+        LOG_WARN("HEAP WARNING: Only %u KB free!", freeHeap);
     }
     
     if (freePSRAM < config.psramWarningThresholdKB) {
-        Serial.printf("  PSRAM WARNING: Only %u KB free!\n", freePSRAM);
+        LOG_WARN("PSRAM WARNING: Only %u KB free!", freePSRAM);
     }
 }
 
@@ -722,7 +671,7 @@ void aggressiveMemoryCleanup() {
     
     // Log cleanup
     if (config.debugSerial) {
-        Serial.println(" Aggressive memory cleanup triggered");
+        LOG_DEBUG("Aggressive memory cleanup triggered");
     }
 }
 
@@ -4592,27 +4541,27 @@ void setupESPNow() {
 // ============================================================================
 
 void setup() {
-    // Initialize serial - HWCDC needs time to enumerate after boot
-    delay(2000);  // Wait for USB CDC to enumerate
-    Serial.begin(115200);
+    // Initialize MicroCore Logger first (handles Serial.begin internally)
+    delay(2000);  // Wait for USB CDC to enumerate on ESP32-S3
+    Logger::begin(115200, LOG_DEBUG);
     while (!Serial && millis() < 5000);  // Wait up to 5s for serial connection
     delay(500);
     
-    Serial.println("=== SERIAL INITIALIZED ===");
-    Serial.println("\n\n");
-    Serial.println("");
-    Serial.println("   AQUARIUM MANAGEMENT SYSTEM - HUB");
-    Serial.println("   ESP32-S3-N16R8 Central Controller");
-    Serial.println("");
-    Serial.println();
+    LOG_INFO("=== SERIAL INITIALIZED ===");
+    LOG_INFO("");
+    LOG_INFO("   AQUARIUM MANAGEMENT SYSTEM - HUB");
+    LOG_INFO("   ESP32-S3-N16R8 Central Controller");
+    LOG_INFO("   MicroCore Framework v1.0.0");
+    LOG_INFO("");
     
-    // Initialize filesystem
-    if (!setupFilesystem()) {
-        Serial.println(" CRITICAL: Filesystem failed, halting");
+    // Initialize filesystem using MicroCore FileManager
+    if (!FileManager::begin(true)) {
+        LOG_ERROR("CRITICAL: Filesystem failed, halting");
         while (1) delay(1000);
     }
+    LOG_INFO("FileManager initialized (LittleFS)");
     
-    // Load configuration
+    // Load configuration using MicroCore ConfigManager
     loadConfiguration();
     
     // Setup WiFi
@@ -4649,7 +4598,7 @@ void setup() {
         &watchdogTaskHandle,     // Task handle
         0                        // Core 0 (ESP-NOW + scheduler)
     );
-    Serial.printf(" Watchdog task created on Core 0 (priority 2)\n");
+    LOG_INFO("Watchdog task created on Core 0 (priority 2)");
 
     // Start hub heartbeat broadcaster task (if enabled in config)
     if (config.hubHeartbeatIntervalSec > 0) {
@@ -4662,7 +4611,7 @@ void setup() {
             NULL,                  // Task handle
             1                      // Core 1
         );
-        Serial.println(" Hub Heartbeat task created on Core 1");
+        LOG_INFO("Hub Heartbeat task created on Core 1");
     }
 
     // Start Web UI task on Core 1 (Web UI core)
@@ -4675,7 +4624,7 @@ void setup() {
         &webUiTaskHandle,        // Task handle
         1                        // Core 1 (Web UI)
     );
-    Serial.printf(" Web UI task created on Core 1 (priority 1)\n");
+    LOG_INFO("Web UI task created on Core 1 (priority 1)");
     
     // Start Light Scheduler task on Core 1
     xTaskCreatePinnedToCore(
@@ -4687,13 +4636,13 @@ void setup() {
         &schedulerTaskHandle,    // Task handle
         1                        // Core 1
     );
-    Serial.printf(" Light Scheduler task created on Core 1 (priority 1)\n");
+    LOG_INFO("Light Scheduler task created on Core 1 (priority 1)");
     
-    Serial.println();
-    Serial.println("");
-    Serial.println(" HUB READY");
-    Serial.println("");
-    Serial.println();
+    LOG_INFO("");
+    LOG_INFO("========================================");
+    LOG_INFO("           HUB READY");
+    LOG_INFO("========================================");
+    LOG_INFO("");
     
     // Print initial memory status
     printMemoryStatus();

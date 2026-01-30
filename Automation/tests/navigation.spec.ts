@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { config } from '../config/hub.config';
-import { navigateTo, waitForPageLoad, isHubOnline } from '../helpers/test-helpers';
+import { navigateTo, waitForPageLoad, isHubOnline, delayForESP32Recovery } from '../helpers/test-helpers';
 
 /**
  * Navigation Tests
@@ -8,6 +8,11 @@ import { navigateTo, waitForPageLoad, isHubOnline } from '../helpers/test-helper
  * @tags navigation, smoke
  */
 test.describe('Navigation Tests', () => {
+
+  // Add delay after each test to let ESP32 recover
+  test.afterEach(async () => {
+    await delayForESP32Recovery();
+  });
 
   test.beforeEach(async ({ request }) => {
     const online = await isHubOnline(request);

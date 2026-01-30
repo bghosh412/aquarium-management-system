@@ -1,12 +1,17 @@
 import { test, expect } from '@playwright/test';
 import { config } from '../config/hub.config';
-import { navigateTo, waitForPageLoad } from '../helpers/test-helpers';
+import { navigateTo, waitForPageLoad, delayForESP32Recovery } from '../helpers/test-helpers';
 
 /**
  * Settings Page Tests
  * @tags settings
  */
 test.describe('Settings Tests', () => {
+
+  // Add delay after each test to let ESP32 recover
+  test.afterEach(async () => {
+    await delayForESP32Recovery();
+  });
 
   test('should load WiFi settings page @smoke', async ({ page }) => {
     await navigateTo(page, config.pages.settingsWifi);

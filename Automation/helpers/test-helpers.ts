@@ -6,7 +6,22 @@ import { config } from '../config/hub.config';
  */
 
 /**
+ * Delay constant for ESP32 to recover between operations (ms)
+ * ESP32 can't handle rapid consecutive HTTP requests without recovery time
+ */
+export const ESP32_RECOVERY_DELAY_MS = 1200;
+
+/**
+ * Delay between tests for ESP32 recovery
+ * Use this in afterEach hooks to prevent Hub memory issues
+ */
+export async function delayForESP32Recovery(ms: number = ESP32_RECOVERY_DELAY_MS): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
  * Wait for page to fully load (including AJAX calls)
+ * Includes ESP32 recovery delay
  */
 export async function waitForPageLoad(page: Page, timeout = config.timeouts.medium): Promise<void> {
   await page.waitForLoadState('networkidle', { timeout });

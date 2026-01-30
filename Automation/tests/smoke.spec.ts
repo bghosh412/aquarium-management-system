@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { config } from '../config/hub.config';
-import { waitForPageLoad, isHubOnline } from '../helpers/test-helpers';
+import { waitForPageLoad, isHubOnline, delayForESP32Recovery } from '../helpers/test-helpers';
 
 /**
  * Smoke Tests
@@ -10,6 +10,11 @@ import { waitForPageLoad, isHubOnline } from '../helpers/test-helpers';
  */
 test.describe('Smoke Tests @smoke', () => {
   
+  // Add delay after each test to let ESP32 recover
+  test.afterEach(async () => {
+    await delayForESP32Recovery(400);  // Shorter delay for smoke tests
+  });
+
   test('Hub is online and responding', async ({ request }) => {
     const online = await isHubOnline(request);
     expect(online, 'Hub should be online at ' + config.hubUrl).toBeTruthy();

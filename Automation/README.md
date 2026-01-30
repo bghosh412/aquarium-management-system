@@ -2,6 +2,33 @@
 
 Playwright-based UI automation testing suite for the Aquarium Management System Hub.
 
+## ⚠️ ESP32 Hardware Limitations
+
+The ESP32 Hub has limited memory and cannot handle 90+ continuous HTTP requests without eventually crashing. **Tests should be run in batches**, not all at once.
+
+### Recommended Test Execution Order
+
+Run tests in these batches, allowing Hub to recover between batches:
+
+```bash
+# Batch 1: Quick validation
+npm run test:smoke
+
+# Batch 2: API tests  
+npm run test:api
+
+# Batch 3: UI tests (part 1)
+npx playwright test aquarium.spec.ts dashboard.spec.ts
+
+# Batch 4: UI tests (part 2)
+npx playwright test devices.spec.ts navigation.spec.ts
+
+# Batch 5: Settings (separate due to higher load)
+npm run test:settings
+```
+
+**Do NOT run `npm test` (all 91 tests) unless you accept Hub may crash mid-run.**
+
 ## Prerequisites
 
 - Node.js 18+ installed
@@ -34,7 +61,7 @@ set HUB_URL=http://your-hub-ip
 
 ## Running Tests
 
-### All Tests
+### All Tests (Warning: May crash Hub)
 ```bash
 npm test
 ```

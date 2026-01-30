@@ -9,7 +9,8 @@ import {
   clickButton,
   fillFormField,
   verifyPageHeading,
-  waitForApiResponse
+  waitForApiResponse,
+  delayForESP32Recovery
 } from '../helpers/test-helpers';
 
 /**
@@ -17,6 +18,11 @@ import {
  * @tags aquarium
  */
 test.describe('Aquarium Management Tests', () => {
+
+  // Add delay after each test to let ESP32 recover
+  test.afterEach(async () => {
+    await delayForESP32Recovery();
+  });
 
   test('should load aquarium selection page @smoke', async ({ page }) => {
     await navigateTo(page, config.pages.aquariumSelection);

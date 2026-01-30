@@ -1,0 +1,25 @@
+{
+  "name": "ams-hub-ui-tests",
+  "version": "1.0.0",
+  "description": "Playwright UI automation tests for Aquarium Management System Hub",
+  "scripts": {
+    "test": "npx playwright test --grep-invert @ota",
+    "test:headed": "npx playwright test --headed --grep-invert @ota",
+    "test:ui": "npx playwright test --ui",
+    "test:debug": "npx playwright test --debug",
+    "test:smoke": "npx playwright test --grep @smoke",
+    "test:api": "npx playwright test --grep @api",
+    "test:ota": "npx playwright test tests/ota.spec.ts",
+    "test:dashboard": "npx playwright test tests/dashboard.spec.ts",
+    "test:aquarium": "npx playwright test tests/aquarium.spec.ts",
+    "test:devices": "npx playwright test tests/devices.spec.ts",
+    "test:settings": "npx playwright test tests/settings.spec.ts",
+    "report": "npx playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.10.0"
+  },
+  "author": "AMS Team",
+  "license": "MIT"
+}

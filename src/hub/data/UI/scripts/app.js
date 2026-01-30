@@ -324,10 +324,10 @@ function updateSystemStats() {
                 }
             }
             
-            // Update WiFi status
+            // Update WiFi status (use wifi_rssi directly from API)
             const wifiElem = document.getElementById('wifi-status');
-            if (wifiElem && data.wifi) {
-                const rssi = data.wifi.rssi || -50;
+            if (wifiElem && data.wifi_rssi !== undefined) {
+                const rssi = data.wifi_rssi;
                 if (rssi > -50) {
                     wifiElem.textContent = 'Excellent';
                     wifiElem.className = 'badge badge-success';

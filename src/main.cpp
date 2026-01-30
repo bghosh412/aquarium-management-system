@@ -71,6 +71,10 @@ struct HubConfig {
     bool debugSerial;
     bool debugESPNOW;
     bool debugWebSocket;
+
+    // Scheduler sleep settings
+    uint32_t schedulerMinSleepSec;
+    uint32_t schedulerMaxSleepSec;
     
     // Hub OTA Configuration
     String hubFirmwareOtaUrl;     // Base URL for hub firmware OTA
@@ -148,6 +152,174 @@ struct NodeOtaState {
 
 // NTP time tracking
 static bool ntpSynced = false;
+
+// ============================================================================
+// HUB STATUS LED CONFIGURATION
+// ============================================================================
+// Four status LEDs indicate different system conditions:
+// LED_WIFI: WiFi connectivity status
+// LED_DEVICE: Device online/offline status  
+// LED_TASK: Scheduled task execution indicator
+// LED_UNMAPPED: Unmapped device availability
+//
+// Safe GPIO pins for ESP32-S3 (avoid strapping pins: GPIO0, 3, 45, 46)
+// ============================================================================
+
+#define HUB_LED_WIFI       4   // GPIO4 - WiFi status
+#define HUB_LED_DEVICE     5   // GPIO5 - Device offline status
+#define HUB_LED_TASK       6   // GPIO6 - Scheduled task indicator
+#define HUB_LED_UNMAPPED   7   // GPIO7 - Unmapped device indicator
+
+#define HUB_LED_BLINK_INTERVAL_MS  300    // Blink rate (300ms on/off)
+#define HUB_LED_TASK_DURATION_MS   30000  // Task indicator blinks for 30 seconds
+
+// Hub LED state tracking
+static bool hubLedWiFiState = false;
+static bool hubLedDeviceState = false;
+static bool hubLedTaskState = false;
+static bool hubLedUnmappedState = false;
+static uint32_t hubLedLastToggle[4] = {0, 0, 0, 0};  // Per-LED toggle timers
+static uint32_t hubLedTaskTriggerTime = 0;  // When task LED was triggered
+static bool hubLedTaskActive = false;  // Task LED blinking active
+
+// Initialize hub status LEDs
+void setupHubStatusLEDs() {
+    pinMode(HUB_LED_WIFI, OUTPUT);
+    pinMode(HUB_LED_DEVICE, OUTPUT);
+    pinMode(HUB_LED_TASK, OUTPUT);
+    pinMode(HUB_LED_UNMAPPED, OUTPUT);
+    
+    // Start all OFF
+    digitalWrite(HUB_LED_WIFI, LOW);
+    digitalWrite(HUB_LED_DEVICE, LOW);
+    digitalWrite(HUB_LED_TASK, LOW);
+    digitalWrite(HUB_LED_UNMAPPED, LOW);
+    
+    LOG_INFO("Hub Status LEDs initialized (GPIO %d, %d, %d, %d)", 
+             HUB_LED_WIFI, HUB_LED_DEVICE, HUB_LED_TASK, HUB_LED_UNMAPPED);
+}
+
+// Trigger task completion indicator (blinks for 30 seconds)
+void triggerHubTaskLED() {
+    hubLedTaskTriggerTime = millis();
+    hubLedTaskActive = true;
+    LOG_DEBUG("Hub Task LED triggered - will blink for 30s");
+}
+
+// Update hub status LEDs (call from loop or task)
+void updateHubStatusLEDs() {
+    uint32_t now = millis();
+    
+    // === LED 1: WiFi Status ===
+    // Blink if not connected, solid HIGH if connected
+    bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+    if (wifiConnected) {
+        // Solid ON when connected
+        if (!hubLedWiFiState) {
+            hubLedWiFiState = true;
+            digitalWrite(HUB_LED_WIFI, HIGH);
+        }
+    } else {
+        // Blink when not connected
+        if (now - hubLedLastToggle[0] >= HUB_LED_BLINK_INTERVAL_MS) {
+            hubLedLastToggle[0] = now;
+            hubLedWiFiState = !hubLedWiFiState;
+            digitalWrite(HUB_LED_WIFI, hubLedWiFiState ? HIGH : LOW);
+        }
+    }
+    
+    // === LED 2: Device Offline Status ===
+    // Blink if any device offline, solid HIGH if all devices online
+    auto& espnow = ESPNowManager::getInstance();
+    std::vector<PeerStatus> peers = espnow.getPeers();
+    size_t peerCount = peers.size();
+    
+    // Check if any peer is offline
+    bool anyDeviceOffline = false;
+    for (const PeerStatus& p : peers) {
+        if (!p.online) {
+            anyDeviceOffline = true;
+            break;
+        }
+    }
+    
+    if (!anyDeviceOffline && peerCount > 0) {
+        // Solid ON when all devices online
+        if (!hubLedDeviceState) {
+            hubLedDeviceState = true;
+            digitalWrite(HUB_LED_DEVICE, HIGH);
+        }
+    } else if (peerCount == 0) {
+        // OFF when no devices registered at all
+        if (hubLedDeviceState) {
+            hubLedDeviceState = false;
+            digitalWrite(HUB_LED_DEVICE, LOW);
+        }
+    } else {
+        // Blink when some devices offline
+        if (now - hubLedLastToggle[1] >= HUB_LED_BLINK_INTERVAL_MS) {
+            hubLedLastToggle[1] = now;
+            hubLedDeviceState = !hubLedDeviceState;
+            digitalWrite(HUB_LED_DEVICE, hubLedDeviceState ? HIGH : LOW);
+        }
+    }
+    
+    // === LED 3: Scheduled Task Indicator ===
+    // Blink for 30 seconds after task completes, else OFF
+    if (hubLedTaskActive) {
+        if (now - hubLedTaskTriggerTime >= HUB_LED_TASK_DURATION_MS) {
+            // Task indication period over
+            hubLedTaskActive = false;
+            hubLedTaskState = false;
+            digitalWrite(HUB_LED_TASK, LOW);
+        } else {
+            // Blink during task indication period
+            if (now - hubLedLastToggle[2] >= HUB_LED_BLINK_INTERVAL_MS) {
+                hubLedLastToggle[2] = now;
+                hubLedTaskState = !hubLedTaskState;
+                digitalWrite(HUB_LED_TASK, hubLedTaskState ? HIGH : LOW);
+            }
+        }
+    } else {
+        // OFF when no recent task
+        if (hubLedTaskState) {
+            hubLedTaskState = false;
+            digitalWrite(HUB_LED_TASK, LOW);
+        }
+    }
+    
+    // === LED 4: Unmapped Device Indicator ===
+    // Blink if any unmapped devices exist, else OFF
+    bool hasUnmappedDevices = false;
+    // Check unmapped-devices.json for any entries
+    if (LittleFS.exists("/config/unmapped-devices.json")) {
+        File f = LittleFS.open("/config/unmapped-devices.json", "r");
+        if (f) {
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, f);
+            f.close();
+            if (!err && doc.is<JsonArray>()) {
+                JsonArray arr = doc.as<JsonArray>();
+                hasUnmappedDevices = (arr.size() > 0);
+            }
+        }
+    }
+    
+    if (hasUnmappedDevices) {
+        // Blink when unmapped devices exist
+        if (now - hubLedLastToggle[3] >= HUB_LED_BLINK_INTERVAL_MS) {
+            hubLedLastToggle[3] = now;
+            hubLedUnmappedState = !hubLedUnmappedState;
+            digitalWrite(HUB_LED_UNMAPPED, hubLedUnmappedState ? HIGH : LOW);
+        }
+    } else {
+        // OFF when no unmapped devices
+        if (hubLedUnmappedState) {
+            hubLedUnmappedState = false;
+            digitalWrite(HUB_LED_UNMAPPED, LOW);
+        }
+    }
+}
 
 // ESPNowManager callbacks declared here
 void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg);
@@ -528,7 +700,7 @@ uint8_t generateCommandId() {
  */
 Device* createDevice(const uint8_t* mac, NodeType type, const char* name) {
     // TODO: Implement when device .cpp files exist
-    Serial.printf(" ⚠️ Device creation not yet implemented (type: %d)\n", (int)type);
+    Serial.printf("[WARN] Device creation not yet implemented (type: %d)\n", (int)type);
     return nullptr;
 }
 
@@ -588,6 +760,8 @@ void loadConfiguration() {
     config.debugSerial = true;
     config.debugESPNOW = false;
     config.debugWebSocket = false;
+    config.schedulerMinSleepSec = 30;
+    config.schedulerMaxSleepSec = 300;
     config.hubFirmwareOtaUrl = "";
     config.hubLittlefsOtaUrl = "";
     config.hubFirmwareVersion = "1.0.0";
@@ -619,6 +793,8 @@ void loadConfiguration() {
     config.debugSerial = hubConfigManager.getBool("DEBUG_SERIAL", config.debugSerial);
     config.debugESPNOW = hubConfigManager.getBool("DEBUG_ESPNOW", config.debugESPNOW);
     config.debugWebSocket = hubConfigManager.getBool("DEBUG_WEBSOCKET", config.debugWebSocket);
+    config.schedulerMinSleepSec = hubConfigManager.getUInt("SCHEDULER_MIN_SLEEP_SEC", config.schedulerMinSleepSec);
+    config.schedulerMaxSleepSec = hubConfigManager.getUInt("SCHEDULER_MAX_SLEEP_SEC", config.schedulerMaxSleepSec);
     config.hubFirmwareOtaUrl = hubConfigManager.getString("HUB_FIRMWARE_OTA_URL", config.hubFirmwareOtaUrl);
     config.hubLittlefsOtaUrl = hubConfigManager.getString("HUB_LITTLEFS_OTA_URL", config.hubLittlefsOtaUrl);
     config.hubFirmwareVersion = hubConfigManager.getString("HUB_FIRMWARE_VERSION", config.hubFirmwareVersion);
@@ -631,6 +807,7 @@ void loadConfiguration() {
     LOG_INFO("  - Hub Heartbeat Interval: %ds", config.hubHeartbeatIntervalSec);
     LOG_INFO("  - Memory Management: %s", config.aggressiveMemoryManagement ? "AGGRESSIVE" : "NORMAL");
     LOG_INFO("  - mDNS: %s.local", config.mdnsHostname.c_str());
+    LOG_INFO("  - Scheduler Sleep: min %us, max %us", config.schedulerMinSleepSec, config.schedulerMaxSleepSec);
 }
 
 // ============================================================================
@@ -645,10 +822,16 @@ void printMemoryStatus() {
     
     LOG_INFO("HEAP:  %u KB free / %u KB total (%.1f%%)", 
                   freeHeap, totalHeap, 
-                  (freeHeap * 100.0) / totalHeap);
-    LOG_INFO("PSRAM: %u KB free / %u KB total (%.1f%%)", 
-                  freePSRAM, totalPSRAM, 
-                  (freePSRAM * 100.0) / totalPSRAM);
+                  totalHeap > 0 ? (freeHeap * 100.0) / totalHeap : 0.0);
+    
+    if (totalPSRAM > 0) {
+        LOG_INFO("PSRAM: %u KB free / %u KB total (%.1f%%)", 
+                      freePSRAM, totalPSRAM, 
+                      (freePSRAM * 100.0) / totalPSRAM);
+    } else {
+        LOG_WARN("PSRAM: Not available or not enabled");
+    }
+    
     LOG_INFO("Uptime: %lu seconds", millis() / 1000);
     
     // Warnings
@@ -656,7 +839,7 @@ void printMemoryStatus() {
         LOG_WARN("HEAP WARNING: Only %u KB free!", freeHeap);
     }
     
-    if (freePSRAM < config.psramWarningThresholdKB) {
+    if (totalPSRAM > 0 && freePSRAM < config.psramWarningThresholdKB) {
         LOG_WARN("PSRAM WARNING: Only %u KB free!", freePSRAM);
     }
 }
@@ -937,6 +1120,9 @@ static bool executeTask(const NextTask& task) {
     
     sendLightCommand(mac, command);
     
+    // Trigger Hub Task LED to blink for 30 seconds
+    triggerHubTaskLED();
+    
     // Update channel state tracking
     String macKey = task.mac;
     macKey.toUpperCase();
@@ -991,6 +1177,15 @@ static void processPastDueTasks(std::vector<NextTask>& tasks, bool& needsRebuild
 
 void schedulerTask(void* parameter) {
     Serial.printf("[SCHEDULER] Task started on core %d\n", xPortGetCoreID());
+
+    uint32_t minSleepMs = config.schedulerMinSleepSec * 1000;
+    uint32_t maxSleepMs = config.schedulerMaxSleepSec * 1000;
+    if (minSleepMs == 0) {
+        minSleepMs = 1000;
+    }
+    if (maxSleepMs < minSleepMs) {
+        maxSleepMs = minSleepMs;
+    }
     
     // Wait for NTP to sync (timeout after 30 seconds)
     int waitCount = 0;
@@ -1053,16 +1248,21 @@ void schedulerTask(void* parameter) {
                     vTaskDelay(pdMS_TO_TICKS(60000));
                 }
             } else {
-                // Wait until next task (max 30 seconds between checks)
-                uint32_t waitMs = (waitSeconds > 30) ? 30000 : (waitSeconds * 1000);
+                // Sleep until next task, capped to 5 minutes
+                uint32_t waitMs = (uint32_t)(waitSeconds * 1000);
+                if (waitMs < minSleepMs) {
+                    waitMs = minSleepMs;
+                } else if (waitMs > maxSleepMs) {
+                    waitMs = maxSleepMs;
+                }
                 Serial.printf("[SCHEDULER] Next task in %ld sec, sleeping %lu ms\n", 
                              (long)waitSeconds, waitMs);
                 vTaskDelay(pdMS_TO_TICKS(waitMs));
             }
         } else {
-            // No upcoming tasks, check again in 30 seconds
-            Serial.println("[SCHEDULER] No upcoming tasks, sleeping 30s");
-            vTaskDelay(pdMS_TO_TICKS(30000));
+            // No upcoming tasks, sleep for 5 minutes before rechecking
+            Serial.printf("[SCHEDULER] No upcoming tasks, sleeping %lu ms\n", maxSleepMs);
+            vTaskDelay(pdMS_TO_TICKS(maxSleepMs));
             
             // Rebuild in case schedule was updated
             rebuildNextTasks();
@@ -1634,18 +1834,33 @@ void setupWiFi() {
 }
 
 void setupMDNS() {
-    Serial.println(" Starting mDNS responder...");
+    Serial.println("[mDNS] Starting mDNS responder...");
+    Serial.printf("[mDNS] Hostname: %s\n", config.mdnsHostname.c_str());
+    Serial.printf("[mDNS] WiFi status: %s\n", WiFi.isConnected() ? "Connected" : "NOT Connected");
+    Serial.printf("[mDNS] WiFi mode: %d (1=STA, 2=AP, 3=AP_STA)\n", WiFi.getMode());
+    Serial.printf("[mDNS] IP Address: %s\n", WiFi.localIP().toString().c_str());
+    
+    // End any existing mDNS instance first
+    MDNS.end();
+    delay(100);
     
     if (!MDNS.begin(config.mdnsHostname.c_str())) {
-        Serial.println(" mDNS failed to start");
+        Serial.println("[mDNS] ERROR: MDNS.begin() failed!");
         return;
     }
     
-    // Add service
+    // Add HTTP service
     MDNS.addService("http", "tcp", 80);
     
-    Serial.printf(" mDNS responder started: http://%s.local\n", 
-                  config.mdnsHostname.c_str());
+    // Add WebSocket service for discovery
+    MDNS.addService("ws", "tcp", 80);
+    
+    // Add aquarium service for easy discovery
+    MDNS.addService("aquarium", "tcp", 80);
+    
+    Serial.printf("[mDNS] Responder started successfully!\n");
+    Serial.printf("[mDNS] Access via: http://%s.local\n", config.mdnsHostname.c_str());
+    Serial.println("[mDNS] Note: mDNS requires Bonjour (Windows) or Avahi (Linux) on client");
 }
 
 // ============================================================================
@@ -1859,7 +2074,7 @@ bool loadDevicesIntoAquariums() {
         // Get aquarium
         Aquarium* aquarium = AquariumManager::getInstance().getAquarium(tankId);
         if (!aquarium) {
-            Serial.printf("  ⚠️  Aquarium %d not found for device %s\\n", tankId, name.c_str());
+            Serial.printf("  [WARN] Aquarium %d not found for device %s\\n", tankId, name.c_str());
             errorCount++;
             continue;
         }
@@ -1888,7 +2103,7 @@ bool loadDevicesIntoAquariums() {
         }
     }
     
-    Serial.printf(" ✅ Loaded %d devices into aquariums (%d errors)\\n", loadedCount, errorCount);
+    Serial.printf(" [OK] Loaded %d devices into aquariums (%d errors)\\n", loadedCount, errorCount);
     
     // Print device counts per aquarium
     std::vector<Aquarium*> allAquariums = AquariumManager::getInstance().getAllAquariums();
@@ -2022,10 +2237,26 @@ void setupWebServer() {
         struct tm timeinfo;
         bool hasTime = getLocalTime(&timeinfo);
         
+        // Get memory info
+        uint32_t heapFree = ESP.getFreeHeap();
+        uint32_t heapTotal = ESP.getHeapSize();
+        uint32_t psramFree = ESP.getFreePsram();
+        uint32_t psramTotal = ESP.getPsramSize();
+        
         String json = "{";
         json += "\"uptime\":" + String(millis() / 1000) + ",";
-        json += "\"heap_free\":" + String(ESP.getFreeHeap()) + ",";
-        json += "\"psram_free\":" + String(ESP.getFreePsram()) + ",";
+        // Memory object for UI compatibility
+        json += "\"memory\":{";
+        json += "\"heapFree\":" + String(heapFree) + ",";
+        json += "\"heapTotal\":" + String(heapTotal) + ",";
+        json += "\"heapUsed\":" + String(heapTotal - heapFree) + ",";
+        json += "\"psramFree\":" + String(psramFree) + ",";
+        json += "\"psramTotal\":" + String(psramTotal) + ",";
+        json += "\"psramUsed\":" + String(psramTotal - psramFree);
+        json += "},";
+        // Legacy fields for backward compatibility
+        json += "\"heap_free\":" + String(heapFree) + ",";
+        json += "\"psram_free\":" + String(psramFree) + ",";
         json += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
         json += "\"ntp_synced\":" + String(ntpSynced ? "true" : "false") + ",";
         if (hasTime) {
@@ -3697,17 +3928,17 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     device->setFirmwareVersion(foundDevice["firmwareVersion"].as<uint8_t>());
                     
                     if (aquarium->addDevice(device)) {
-                        Serial.printf(" ✅ Device added to aquarium object (deviceCount now: %d)\n", 
+                        Serial.printf(" [OK] Device added to aquarium object (deviceCount now: %d)\n", 
                                      aquarium->getDeviceCount());
                     } else {
-                        Serial.println(" ⚠️ Failed to add device to aquarium object");
+                        Serial.println(" [WARN] Failed to add device to aquarium object");
                         delete device;
                     }
                 } else {
-                    Serial.println(" ⚠️ Failed to create device object (unknown type)");
+                    Serial.println(" [WARN] Failed to create device object (unknown type)");
                 }
             } else {
-                Serial.printf(" ⚠️ Aquarium %d not found in memory!\n", tankId);
+                Serial.printf(" [WARN] Aquarium %d not found in memory!\n", tankId);
             }
             */
             
@@ -3951,7 +4182,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         serializeJson(response, responseStr);
         request->send(200, "application/json", responseStr);
         
-        Serial.printf(" ✅ Command sent to device %s\\n", macStr.c_str());
+        Serial.printf(" [OK] Command sent to device %s\\n", macStr.c_str());
     });
     
     // POST unmap device
@@ -4061,13 +4292,13 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             Aquarium* aquarium = AquariumManager::getInstance().getAquarium(tankId);
             if (aquarium && aquarium->hasDevice(mac)) {
                 if (aquarium->removeDevice(mac)) {
-                    Serial.printf(" ✅ Device removed from aquarium object (deviceCount now: %d)\n", 
+                    Serial.printf(" [OK] Device removed from aquarium object (deviceCount now: %d)\n", 
                                  aquarium->getDeviceCount());
                 } else {
-                    Serial.println(" ⚠️ Failed to remove device from aquarium object");
+                    Serial.println(" [WARN] Failed to remove device from aquarium object");
                 }
             } else {
-                Serial.printf(" ⚠️ Aquarium %d not found or device not in aquarium!\n", tankId);
+                Serial.printf(" [WARN] Aquarium %d not found or device not in aquarium!\n", tankId);
             }
             */
             
@@ -4541,13 +4772,37 @@ void setupESPNow() {
 // ============================================================================
 
 void setup() {
-    // Initialize MicroCore Logger first (handles Serial.begin internally)
-    delay(2000);  // Wait for USB CDC to enumerate on ESP32-S3
-    Logger::begin(115200, LOG_DEBUG);
-    while (!Serial && millis() < 5000);  // Wait up to 5s for serial connection
+    // ESP32-S3 USB CDC Serial Configuration
+    // When ARDUINO_USB_CDC_ON_BOOT=1, Serial is automatically initialized as HWCDC
+    // We need to wait for USB CDC to enumerate and set up properly
+    
+    Serial.begin(115200);  // Initialize HWCDC (baud rate is virtual but required)
+    Serial.setTxTimeoutMs(0);  // Non-blocking serial output
+    
+    // Wait for USB CDC to be ready (with timeout)
+    unsigned long startMs = millis();
+    while (!Serial && (millis() - startMs < 5000)) {
+        delay(10);
+    }
+    
+    // Small delay after serial ready
     delay(500);
     
-    LOG_INFO("=== SERIAL INITIALIZED ===");
+    // Test basic serial output
+    Serial.println();
+    Serial.println("==============================================");
+    Serial.println("  Aquarium Management System - Hub Starting");
+    Serial.println("  ESP32-S3 USB CDC Serial (HWCDC)");
+    Serial.printf("  Free Heap: %u KB, PSRAM: %u KB\n", 
+                  ESP.getFreeHeap() / 1024, 
+                  ESP.getFreePsram() / 1024);
+    Serial.println("==============================================");
+    Serial.flush();
+    
+    // Initialize MicroCore Logger (Serial already initialized)
+    Logger::begin(115200, LOG_DEBUG);
+    
+    LOG_INFO("=== LOGGER INITIALIZED ===");
     LOG_INFO("");
     LOG_INFO("   AQUARIUM MANAGEMENT SYSTEM - HUB");
     LOG_INFO("   ESP32-S3-N16R8 Central Controller");
@@ -4587,6 +4842,9 @@ void setup() {
     
     // CRITICAL: Register all devices as ESP-NOW peers for bidirectional unicast
     registerAllDevicesAsPeers();
+    
+    // Initialize Hub Status LEDs
+    setupHubStatusLEDs();
     
     // Start watchdog task on Core 0 (ESP-NOW + scheduler core)
     xTaskCreatePinnedToCore(
@@ -4740,6 +4998,9 @@ void loop() {
     // Update AquariumManager (schedule execution only)
     // Note: Health checks and water monitoring run on Core 0 watchdog task
     AquariumManager::getInstance().updateSchedules();
+    
+    // Update Hub Status LEDs
+    updateHubStatusLEDs();
     
     // Print WiFi channel status periodically
     static unsigned long lastChannelCheckTime = 0;

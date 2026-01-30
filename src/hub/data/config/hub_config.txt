@@ -38,6 +38,12 @@ DEBUG_SERIAL=true
 DEBUG_ESPNOW=true
 DEBUG_WEBSOCKET=false
 
+# Scheduler sleep behavior
+# When next task is far away, scheduler sleeps up to SCHEDULER_MAX_SLEEP_SEC
+# When next task is near, scheduler sleeps at least SCHEDULER_MIN_SLEEP_SEC
+SCHEDULER_MIN_SLEEP_SEC=30
+SCHEDULER_MAX_SLEEP_SEC=300
+
 # ============================================================================
 # HUB OTA Update Configuration
 # ============================================================================

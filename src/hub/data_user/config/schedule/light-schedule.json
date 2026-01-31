@@ -1,0 +1,1 @@
+{"schedules":[{"mac":"DC:4F:22:65:9A:19","tankId":1,"deviceName":"Living Room Light","schedule":{"test":{"channel1":{"start":{"hour":20,"minute":37},"offTime":{"hour":20,"minute":47}},"channel2":{"start":{"hour":20,"minute":38},"offTime":{"hour":20,"minute":48}},"channel3":{"start":{"hour":20,"minute":39},"offTime":{"hour":20,"minute":49}}}},"updatedAt":139949}]}

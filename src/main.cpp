@@ -51,6 +51,30 @@
 #include <FileManager.h>
 
 // ============================================================================
+// DUAL LITTLEFS FILESYSTEM ABSTRACTION
+// ============================================================================
+// When DUAL_LITTLEFS is defined:
+//   - StaticFS: UI files, OTA temp, hub_config.txt (partition: static_fs)
+//   - UserFS:   JSON config files, schedules (partition: user_fs)
+// 
+// LittleFS OTA only updates static_fs - user data is PRESERVED!
+// ============================================================================
+
+#ifdef DUAL_LITTLEFS
+    #include "DualFilesystem.h"
+    // Macros for file access - route to appropriate filesystem
+    #define FS_STATIC StaticFS
+    #define FS_USER   UserFS
+#else
+    // Single filesystem mode (backward compatible)
+    #define FS_STATIC LittleFS
+    #define FS_USER   LittleFS
+    // Stub out dual filesystem functions
+    #define StaticFS LittleFS
+    #define UserFS LittleFS
+#endif
+
+// ============================================================================
 // CONFIGURATION & CONSTANTS
 // ============================================================================
 
@@ -292,8 +316,8 @@ void updateHubStatusLEDs() {
     // Blink if any unmapped devices exist, else OFF
     bool hasUnmappedDevices = false;
     // Check unmapped-devices.json for any entries
-    if (LittleFS.exists("/config/unmapped-devices.json")) {
-        File f = LittleFS.open("/config/unmapped-devices.json", "r");
+    if (FS_USER.exists("/config/unmapped-devices.json")) {
+        File f = FS_USER.open("/config/unmapped-devices.json", "r");
         if (f) {
             JsonDocument doc;
             DeserializationError err = deserializeJson(doc, f);
@@ -488,15 +512,22 @@ bool fetchRemoteVersion(const String& baseUrl, String& versionOut) {
  * @return true if update succeeded
  */
 bool updateHubConfigValue(const String& key, const String& newValue) {
+#ifdef DUAL_LITTLEFS
+    // hub_config.txt is on static filesystem at root
+    const char* configPath = "/hub_config.txt";
+    fs::LittleFSFS& fs = StaticFS;
+#else
     const char* configPath = "/config/hub_config.txt";
+    fs::LittleFSFS& fs = LittleFS;
+#endif
     
-    if (!LittleFS.exists(configPath)) {
+    if (!fs.exists(configPath)) {
         Serial.println("[Config] hub_config.txt not found");
         return false;
     }
     
     // Read existing content
-    File file = LittleFS.open(configPath, "r");
+    File file = fs.open(configPath, "r");
     if (!file) {
         Serial.println("[Config] Failed to open hub_config.txt for reading");
         return false;
@@ -530,7 +561,7 @@ bool updateHubConfigValue(const String& key, const String& newValue) {
     }
     
     // Write back
-    file = LittleFS.open(configPath, "w");
+    file = fs.open(configPath, "w");
     if (!file) {
         Serial.println("[Config] Failed to open hub_config.txt for writing");
         return false;
@@ -547,13 +578,28 @@ bool updateHubConfigValue(const String& key, const String& newValue) {
 // OTA UPDATE FUNCTIONS
 // ============================================================================
 
+/**
+ * @brief Perform OTA update for firmware or static LittleFS
+ * 
+ * DUAL LITTLEFS NOTE:
+ * When DUAL_LITTLEFS is enabled, LittleFS OTA only updates the static_fs partition.
+ * The user_fs partition (containing JSON config files) is PRESERVED during OTA.
+ * This is achieved by the partition table ordering - static_fs is the first spiffs partition.
+ */
 bool performOtaUpdate(const String& url, bool isLittleFs, String& errorOut) {
     if (url.length() == 0) {
         errorOut = "OTA URL not set";
         return false;
     }
 
-    Serial.printf("[OTA] Starting %s update from: %s\n", isLittleFs ? "LittleFS" : "firmware", url.c_str());
+#ifdef DUAL_LITTLEFS
+    if (isLittleFs) {
+        Serial.println("[OTA] DUAL_LITTLEFS mode: Only static_fs will be updated");
+        Serial.println("[OTA] User data in user_fs will be PRESERVED!");
+    }
+#endif
+
+    Serial.printf("[OTA] Starting %s update from: %s\n", isLittleFs ? "LittleFS (static_fs)" : "firmware", url.c_str());
     
     // Temporarily disable WDT for the duration of OTA
     // This is safe because OTA has its own timeout handling
@@ -710,11 +756,11 @@ Device* createDevice(const uint8_t* mac, NodeType type, const char* name) {
  * we count devices directly from the JSON file
  */
 int countDevicesForAquarium(uint8_t tankId) {
-    if (!LittleFS.exists("/config/devices.json")) {
+    if (!FS_USER.exists("/config/devices.json")) {
         return 0;
     }
     
-    File file = LittleFS.open("/config/devices.json", "r");
+    File file = FS_USER.open("/config/devices.json", "r");
     if (!file) {
         return 0;
     }
@@ -770,10 +816,37 @@ void loadConfiguration() {
     config.hubTestMode = false;
     
     // Use MicroCore ConfigManager to load KEY=VALUE config
+    // NOTE: In dual filesystem mode, hub_config.txt is in static_fs at /hub_config.txt
+    // ConfigManager uses LittleFS internally, so we need the file accessible via mounted path
+#ifdef DUAL_LITTLEFS
+    // StaticFS is mounted at /static, so hub_config.txt is at /static/hub_config.txt
+    // But ConfigManager uses default LittleFS, so we manually load for dual mode
+    File cfgFile = StaticFS.open("/hub_config.txt", "r");
+    if (!cfgFile) {
+        LOG_WARN("Config file /hub_config.txt not found on static_fs, using defaults");
+        return;
+    }
+    // Read and parse manually for dual filesystem mode
+    while (cfgFile.available()) {
+        String line = cfgFile.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0 || line.startsWith("#")) continue;
+        int sep = line.indexOf('=');
+        if (sep < 0) continue;
+        String key = line.substring(0, sep);
+        String value = line.substring(sep + 1);
+        key.trim();
+        value.trim();
+        // Store in ConfigManager's internal map via set()
+        hubConfigManager.set(key.c_str(), value);
+    }
+    cfgFile.close();
+#else
     if (!hubConfigManager.loadKeyValue("/config/hub_config.txt")) {
         LOG_WARN("Config file not found, using defaults");
         return;
     }
+#endif
     
     LOG_INFO("Loading configuration via MicroCore ConfigManager...");
     
@@ -1021,7 +1094,7 @@ static void saveNextTasks(const std::vector<NextTask>& tasks) {
     
     doc["updatedAt"] = (long)getCurrentUnixTime();
     
-    File file = LittleFS.open(NEXT_TASK_FILE, "w");
+    File file = FS_USER.open(NEXT_TASK_FILE, "w");
     if (file) {
         serializeJson(doc, file);
         file.close();
@@ -1035,7 +1108,7 @@ static void saveNextTasks(const std::vector<NextTask>& tasks) {
 static bool loadNextTasks(std::vector<NextTask>& tasks) {
     tasks.clear();
     
-    File file = LittleFS.open(NEXT_TASK_FILE, "r");
+    File file = FS_USER.open(NEXT_TASK_FILE, "r");
     if (!file) {
         Serial.println("[SCHEDULER] next-task.json not found");
         return false;
@@ -1071,7 +1144,7 @@ void rebuildNextTasks() {
     
     std::vector<NextTask> allTasks;
     
-    File file = LittleFS.open("/config/schedule/light-schedule.json", "r");
+    File file = FS_USER.open("/config/schedule/light-schedule.json", "r");
     if (!file) {
         Serial.println("[SCHEDULER] No light-schedule.json found");
         saveNextTasks(allTasks);  // Save empty
@@ -1305,8 +1378,8 @@ static bool sendOtaToDevice(uint8_t* targetMac, WiFiClient* client) {
     bool deviceSuccess = false;
 
     // Step 1: Send config if available (from previously saved file)
-    if (LittleFS.exists("/ota/light/node_config.txt")) {
-        File configFile = LittleFS.open("/ota/light/node_config.txt", "r");
+    if (FS_STATIC.exists("/ota/light/node_config.txt")) {
+        File configFile = FS_STATIC.open("/ota/light/node_config.txt", "r");
         if (configFile) {
             String configContent = configFile.readString();
             configFile.close();
@@ -1386,8 +1459,8 @@ static bool sendOtaToDevice(uint8_t* targetMac, WiFiClient* client) {
     }
 
     // Step 2: Send firmware if available
-    if (LittleFS.exists("/ota/light/firmware.bin")) {
-        File fwFile = LittleFS.open("/ota/light/firmware.bin", "r");
+    if (FS_STATIC.exists("/ota/light/firmware.bin")) {
+        File fwFile = FS_STATIC.open("/ota/light/firmware.bin", "r");
         if (fwFile) {
             size_t fwSize = fwFile.size();
             nodeOtaState.totalFirmwareChunks = (fwSize + 28) / 29;
@@ -1511,15 +1584,15 @@ void nodeOtaTask(void* parameter) {
     HTTPClient http;
     
     // Create OTA directory
-    if (!LittleFS.exists("/ota")) LittleFS.mkdir("/ota");
-    if (!LittleFS.exists("/ota/light")) LittleFS.mkdir("/ota/light");
+    if (!FS_STATIC.exists("/ota")) FS_STATIC.mkdir("/ota");
+    if (!FS_STATIC.exists("/ota/light")) FS_STATIC.mkdir("/ota/light");
 
     // Download node_config.txt (optional)
     if (http.begin(*client.get(), nodeOtaState.baseUrl + "node_config.txt")) {
         int httpCode = http.GET();
         if (httpCode == HTTP_CODE_OK) {
             String configContent = http.getString();
-            File localConfig = LittleFS.open("/ota/light/node_config.txt", "w");
+            File localConfig = FS_STATIC.open("/ota/light/node_config.txt", "w");
             if (localConfig) {
                 localConfig.print(configContent);
                 localConfig.close();
@@ -1537,7 +1610,7 @@ void nodeOtaTask(void* parameter) {
             int contentLength = http.getSize();
             Serial.printf("[NodeOTA] Downloading firmware.bin (%d bytes)\n", contentLength);
             
-            File localFirmware = LittleFS.open("/ota/light/firmware.bin", "w");
+            File localFirmware = FS_STATIC.open("/ota/light/firmware.bin", "w");
             if (localFirmware) {
                 WiFiClient* dlStream = http.getStreamPtr();
                 uint8_t dlBuffer[512];
@@ -1617,12 +1690,12 @@ void nodeOtaTask(void* parameter) {
 
 cleanup:
     // Delete downloaded OTA files
-    if (LittleFS.exists("/ota/light/firmware.bin")) {
-        LittleFS.remove("/ota/light/firmware.bin");
+    if (FS_STATIC.exists("/ota/light/firmware.bin")) {
+        FS_STATIC.remove("/ota/light/firmware.bin");
         Serial.println("[NodeOTA] Deleted /ota/light/firmware.bin");
     }
-    if (LittleFS.exists("/ota/light/node_config.txt")) {
-        LittleFS.remove("/ota/light/node_config.txt");
+    if (FS_STATIC.exists("/ota/light/node_config.txt")) {
+        FS_STATIC.remove("/ota/light/node_config.txt");
         Serial.println("[NodeOTA] Deleted /ota/light/node_config.txt");
     }
     
@@ -1695,7 +1768,37 @@ void webUiTask(void* parameter) {
 // ============================================================================
 
 bool setupFilesystem() {
-    Serial.println(" Initializing LittleFS...");
+#ifdef DUAL_LITTLEFS
+    // Dual filesystem mode: separate partitions for static and user data
+    Serial.println(" Initializing dual LittleFS partitions...");
+    
+    // Mount static filesystem (UI, OTA, hub_config)
+    Serial.println("   Mounting static_fs partition (UI + config)...");
+    if (!StaticFS.begin(true, "/static", 10, "static_fs")) {
+        Serial.println("   ERROR: Failed to mount static_fs!");
+        return false;
+    }
+    size_t staticTotal = StaticFS.totalBytes();
+    size_t staticUsed = StaticFS.usedBytes();
+    Serial.printf("   static_fs: %u / %u bytes (%.1f%% used)\n", 
+                  staticUsed, staticTotal, staticTotal > 0 ? (staticUsed * 100.0 / staticTotal) : 0);
+    
+    // Mount user filesystem (JSON config files - preserved during OTA)
+    Serial.println("   Mounting user_fs partition (JSON data)...");
+    if (!UserFS.begin(true, "/user", 10, "user_fs")) {
+        Serial.println("   ERROR: Failed to mount user_fs!");
+        return false;
+    }
+    size_t userTotal = UserFS.totalBytes();
+    size_t userUsed = UserFS.usedBytes();
+    Serial.printf("   user_fs:   %u / %u bytes (%.1f%% used)\n",
+                  userUsed, userTotal, userTotal > 0 ? (userUsed * 100.0 / userTotal) : 0);
+    
+    Serial.println(" Dual LittleFS initialized (user data preserved during OTA!)");
+    
+#else
+    // Single filesystem mode (backward compatible)
+    Serial.println(" Initializing LittleFS (single partition mode)...");
     
     if (!LittleFS.begin(true)) {
         Serial.println(" LittleFS mount failed");
@@ -1703,11 +1806,16 @@ bool setupFilesystem() {
     }
     
     Serial.println(" LittleFS mounted");
+#endif
     
     // Initialize unmapped-devices.json if it doesn't exist
-    if (!LittleFS.exists("/config/unmapped-devices.json")) {
+    if (!FS_USER.exists("/config/unmapped-devices.json")) {
         Serial.println(" Creating unmapped-devices.json...");
-        File file = LittleFS.open("/config/unmapped-devices.json", "w");
+        // Ensure config directory exists
+        if (!FS_USER.exists("/config")) {
+            FS_USER.mkdir("/config");
+        }
+        File file = FS_USER.open("/config/unmapped-devices.json", "w");
         if (file) {
             file.print("{\"metadata\":{\"lastCleanup\":0,\"totalDiscovered\":0,\"autoCleanupAfterDays\":7},\"unmappedDevices\":[]}");
             file.close();
@@ -1718,14 +1826,14 @@ bool setupFilesystem() {
     }
 
     // Ensure schedule directory exists
-    if (!LittleFS.exists("/config/schedule")) {
-        LittleFS.mkdir("/config/schedule");
+    if (!FS_USER.exists("/config/schedule")) {
+        FS_USER.mkdir("/config/schedule");
     }
 
     // Initialize light-schedule.json if it doesn't exist
-    if (!LittleFS.exists("/config/schedule/light-schedule.json")) {
+    if (!FS_USER.exists("/config/schedule/light-schedule.json")) {
         Serial.println(" Creating light-schedule.json...");
-        File file = LittleFS.open("/config/schedule/light-schedule.json", "w");
+        File file = FS_USER.open("/config/schedule/light-schedule.json", "w");
         if (file) {
             file.print("{\"schedules\":[]}");
             file.close();
@@ -1737,6 +1845,22 @@ bool setupFilesystem() {
     
     // List files (debug)
     if (config.debugSerial) {
+#ifdef DUAL_LITTLEFS
+        Serial.println(" Static filesystem contents:");
+        File staticRoot = FS_STATIC.open("/");
+        File f = staticRoot.openNextFile();
+        while (f) {
+            Serial.printf("   - %s (%d bytes)\n", f.name(), f.size());
+            f = staticRoot.openNextFile();
+        }
+        Serial.println(" User filesystem contents:");
+        File userRoot = FS_USER.open("/");
+        f = userRoot.openNextFile();
+        while (f) {
+            Serial.printf("   - %s (%d bytes)\n", f.name(), f.size());
+            f = userRoot.openNextFile();
+        }
+#else
         Serial.println(" Filesystem contents:");
         File root = LittleFS.open("/");
         File file = root.openNextFile();
@@ -1744,6 +1868,7 @@ bool setupFilesystem() {
             Serial.printf("   - %s (%d bytes)\n", file.name(), file.size());
             file = root.openNextFile();
         }
+#endif
     }
     
     return true;
@@ -1872,9 +1997,9 @@ void setupMDNS() {
  * @return true if loaded successfully
  */
 bool loadAquariumsFromFile() {
-    if (!LittleFS.exists("/config/aquariums.json")) {
+    if (!FS_USER.exists("/config/aquariums.json")) {
         Serial.println("  aquariums.json not found, creating empty file");
-        File file = LittleFS.open("/config/aquariums.json", "w");
+        File file = FS_USER.open("/config/aquariums.json", "w");
         if (file) {
             file.println("{\"aquariums\":[]}");
             file.close();
@@ -1882,7 +2007,7 @@ bool loadAquariumsFromFile() {
         return false;
     }
     
-    File file = LittleFS.open("/config/aquariums.json", "r");
+    File file = FS_USER.open("/config/aquariums.json", "r");
     if (!file) {
         Serial.println(" Failed to open aquariums.json");
         return false;
@@ -1955,12 +2080,12 @@ void registerAllDevicesAsPeers() {
     Serial.println(" Registering devices as ESP-NOW peers...");
     Serial.println(" ========================================");
     
-    if (!LittleFS.exists("/config/devices.json")) {
+    if (!FS_USER.exists("/config/devices.json")) {
         Serial.println("  devices.json not found - no peers to register");
         return;
     }
     
-    File file = LittleFS.open("/config/devices.json", "r");
+    File file = FS_USER.open("/config/devices.json", "r");
     if (!file) {
         Serial.println("  Failed to open devices.json");
         return;
@@ -2026,12 +2151,12 @@ void registerAllDevicesAsPeers() {
 bool loadDevicesIntoAquariums() {
     Serial.println(" Loading devices into aquarium objects...");
     
-    if (!LittleFS.exists("/config/devices.json")) {
+    if (!FS_USER.exists("/config/devices.json")) {
         Serial.println("  devices.json not found");
         return false;
     }
     
-    File file = LittleFS.open("/config/devices.json", "r");
+    File file = FS_USER.open("/config/devices.json", "r");
     if (!file) {
         Serial.println(" Failed to open devices.json");
         return false;
@@ -2165,7 +2290,7 @@ bool saveAquariumsToFile() {
     }
     
     // Write to file
-    File file = LittleFS.open("/config/aquariums.json", "w");
+    File file = FS_USER.open("/config/aquariums.json", "w");
     if (!file) {
         Serial.println(" Failed to open aquariums.json for writing");
         return false;
@@ -2571,7 +2696,7 @@ void setupWebServer() {
     
     // GET unmapped devices
     server.on("/api/unmapped-devices", HTTP_GET, [](AsyncWebServerRequest *request){
-        File file = LittleFS.open("/config/unmapped-devices.json", "r");
+        File file = FS_USER.open("/config/unmapped-devices.json", "r");
         if (!file) {
             // Return empty list if file doesn't exist
             request->send(200, "application/json", "{\"unmappedDevices\":[]}");
@@ -2586,7 +2711,7 @@ void setupWebServer() {
     
     // GET all devices
     server.on("/api/devices", HTTP_GET, [](AsyncWebServerRequest *request){
-        File file = LittleFS.open("/config/devices.json", "r");
+        File file = FS_USER.open("/config/devices.json", "r");
         if (!file) {
             // Return empty list if file doesn't exist
             request->send(200, "application/json", "{\"devices\":[]}");
@@ -2673,7 +2798,7 @@ void setupWebServer() {
         }
 
         String macStr = request->getParam("mac")->value();
-        File file = LittleFS.open("/config/schedule/light-schedule.json", "r");
+        File file = FS_USER.open("/config/schedule/light-schedule.json", "r");
         if (!file) {
             request->send(200, "application/json", "{\"success\":true,\"schedule\":null}");
             return;
@@ -2816,7 +2941,7 @@ void setupWebServer() {
             return;
         }
 
-        File file = LittleFS.open("/config/schedule/light-schedule.json", "r");
+        File file = FS_USER.open("/config/schedule/light-schedule.json", "r");
         DynamicJsonDocument doc(4096);
         if (file) {
             deserializeJson(doc, file);
@@ -2902,7 +3027,7 @@ void setupWebServer() {
 
         newEntry["updatedAt"] = millis();
 
-        file = LittleFS.open("/config/schedule/light-schedule.json", "w");
+        file = FS_USER.open("/config/schedule/light-schedule.json", "w");
         if (!file) {
             request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write light-schedule.json\"}");
             return;
@@ -3071,7 +3196,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
 
         for (const char* fileName : kConfigJsonFiles) {
             String path = String("/config/") + fileName;
-            if (LittleFS.exists(path)) {
+            if (FS_USER.exists(path)) {
                 files.add(String(fileName));
             }
         }
@@ -3096,12 +3221,12 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         }
 
         String path = String("/config/") + name;
-        if (!LittleFS.exists(path)) {
+        if (!FS_USER.exists(path)) {
             request->send(404, "application/json", "{\"success\":false,\"error\":\"File not found\"}");
             return;
         }
 
-        request->send(LittleFS, path, "application/json", true);
+        request->send(FS_USER, path, "application/json", true);
     });
 
     // POST settings file upload
@@ -3140,7 +3265,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                 }
 
                 String path = String("/config/") + target;
-                ctx->file = LittleFS.open(path, "w");
+                ctx->file = FS_USER.open(path, "w");
                 if (!ctx->file) {
                     ctx->error = "Failed to open file";
                     return;
@@ -3391,7 +3516,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     // GET Light node current version (from first online light device)
     server.on("/api/nodes/light/version", HTTP_GET, [](AsyncWebServerRequest *request){
         // Find first online light device from devices.json
-        File file = LittleFS.open("/config/devices.json", "r");
+        File file = FS_USER.open("/config/devices.json", "r");
         if (!file) {
             request->send(200, "application/json", "{\"version\":null,\"error\":\"devices.json not found\"}");
             return;
@@ -3428,7 +3553,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
 
         // Load tank name map from aquariums.json
         std::map<uint8_t, String> tankNames;
-        File tanksFile = LittleFS.open("/config/aquariums.json", "r");
+        File tanksFile = FS_USER.open("/config/aquariums.json", "r");
         if (tanksFile) {
             DynamicJsonDocument tanksDoc(8192);
             if (!deserializeJson(tanksDoc, tanksFile)) {
@@ -3445,7 +3570,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         }
 
         // Load devices
-        File devFile = LittleFS.open("/config/devices.json", "r");
+        File devFile = FS_USER.open("/config/devices.json", "r");
         if (!devFile) {
             responseDoc["error"] = "devices.json not found";
             String response;
@@ -3546,7 +3671,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
 
         // Get current version from the first *actually online* light device (use live peer status)
         int currentVersion = 0;
-        File devFile = LittleFS.open("/config/devices.json", "r");
+        File devFile = FS_USER.open("/config/devices.json", "r");
         if (devFile) {
             DynamicJsonDocument devDoc(8192);
             if (!deserializeJson(devDoc, devFile)) {
@@ -3740,7 +3865,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
 
             // Attempt to resolve device name from devices.json
             String currentName = "";
-            File devFile = LittleFS.open("/config/devices.json", "r");
+            File devFile = FS_USER.open("/config/devices.json", "r");
             if (devFile) {
                 DynamicJsonDocument devDoc(8192);
                 if (!deserializeJson(devDoc, devFile)) {
@@ -3807,7 +3932,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             }
             
             // Load unmapped devices
-            File unmappedFile = LittleFS.open("/config/unmapped-devices.json", "r");
+            File unmappedFile = FS_USER.open("/config/unmapped-devices.json", "r");
             if (!unmappedFile) {
                 request->send(404, "application/json", "{\"success\":false,\"error\":\"Unmapped devices file not found\"}");
                 return;
@@ -3873,12 +3998,12 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             }
 
             // Save updated unmapped devices
-            unmappedFile = LittleFS.open("/config/unmapped-devices.json", "w");
+            unmappedFile = FS_USER.open("/config/unmapped-devices.json", "w");
             serializeJson(unmappedDoc, unmappedFile);
             unmappedFile.close();
 
             // Add to devices.json (create devices array if missing)
-            File devicesFile = LittleFS.open("/config/devices.json", "r");
+            File devicesFile = FS_USER.open("/config/devices.json", "r");
             DynamicJsonDocument devicesDoc(8192);
             if (devicesFile) {
                 deserializeJson(devicesDoc, devicesFile);
@@ -3907,7 +4032,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             newDevice["enabled"] = true;
             newDevice["status"] = "PROVISIONING";
 
-            devicesFile = LittleFS.open("/config/devices.json", "w");
+            devicesFile = FS_USER.open("/config/devices.json", "w");
             serializeJson(devicesDoc, devicesFile);
             devicesFile.close();
             
@@ -3981,7 +4106,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         macStr.toUpperCase();
 
         // Remove from devices.json
-        File devicesFile = LittleFS.open("/config/devices.json", "r");
+        File devicesFile = FS_USER.open("/config/devices.json", "r");
         DynamicJsonDocument devicesDoc(8192);
         if (devicesFile) {
             deserializeJson(devicesDoc, devicesFile);
@@ -3994,13 +4119,13 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     devices.remove(i);
                 }
             }
-            devicesFile = LittleFS.open("/config/devices.json", "w");
+            devicesFile = FS_USER.open("/config/devices.json", "w");
             serializeJson(devicesDoc, devicesFile);
             devicesFile.close();
         }
 
         // Remove from unmapped-devices.json
-        File unmappedFile = LittleFS.open("/config/unmapped-devices.json", "r");
+        File unmappedFile = FS_USER.open("/config/unmapped-devices.json", "r");
         DynamicJsonDocument unmappedDoc(4096);
         if (unmappedFile) {
             deserializeJson(unmappedDoc, unmappedFile);
@@ -4013,13 +4138,13 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     unmapped.remove(i);
                 }
             }
-            unmappedFile = LittleFS.open("/config/unmapped-devices.json", "w");
+            unmappedFile = FS_USER.open("/config/unmapped-devices.json", "w");
             serializeJson(unmappedDoc, unmappedFile);
             unmappedFile.close();
         }
 
         // Remove from light-devices.json
-        File lightFile = LittleFS.open("/config/light-devices.json", "r");
+        File lightFile = FS_USER.open("/config/light-devices.json", "r");
         DynamicJsonDocument lightDoc(8192);
         if (lightFile) {
             deserializeJson(lightDoc, lightFile);
@@ -4032,13 +4157,13 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     lightDevices.remove(i);
                 }
             }
-            lightFile = LittleFS.open("/config/light-devices.json", "w");
+            lightFile = FS_USER.open("/config/light-devices.json", "w");
             serializeJson(lightDoc, lightFile);
             lightFile.close();
         }
 
         // Remove from light-schedule.json
-        File schedFile = LittleFS.open("/config/schedule/light-schedule.json", "r");
+        File schedFile = FS_USER.open("/config/schedule/light-schedule.json", "r");
         DynamicJsonDocument schedDoc(4096);
         if (schedFile) {
             deserializeJson(schedDoc, schedFile);
@@ -4051,7 +4176,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     schedules.remove(i);
                 }
             }
-            schedFile = LittleFS.open("/config/schedule/light-schedule.json", "w");
+            schedFile = FS_USER.open("/config/schedule/light-schedule.json", "w");
             serializeJson(schedDoc, schedFile);
             schedFile.close();
         }
@@ -4217,7 +4342,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             
             // Load devices.json (if missing, treat as empty and still proceed)
             DynamicJsonDocument devicesDoc(8192);
-            File devicesFile = LittleFS.open("/config/devices.json", "r");
+            File devicesFile = FS_USER.open("/config/devices.json", "r");
             if (devicesFile) {
                 deserializeJson(devicesDoc, devicesFile);
                 devicesFile.close();
@@ -4277,7 +4402,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
 
                 devices.remove(foundIndex);
 
-                devicesFile = LittleFS.open("/config/devices.json", "w");
+                devicesFile = FS_USER.open("/config/devices.json", "w");
                 serializeJson(devicesDoc, devicesFile);
                 devicesFile.close();
             }
@@ -4303,7 +4428,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             */
             
             // Add back to unmapped devices
-            File unmappedFile = LittleFS.open("/config/unmapped-devices.json", "r");
+            File unmappedFile = FS_USER.open("/config/unmapped-devices.json", "r");
             DynamicJsonDocument unmappedDoc(4096);
             if (unmappedFile) {
                 deserializeJson(unmappedDoc, unmappedFile);
@@ -4334,7 +4459,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             newUnmapped["discoveredAt"] = millis();
             newUnmapped["announceCount"] = 0;
 
-            unmappedFile = LittleFS.open("/config/unmapped-devices.json", "w");
+            unmappedFile = FS_USER.open("/config/unmapped-devices.json", "w");
             serializeJson(unmappedDoc, unmappedFile);
             unmappedFile.close();
             
@@ -4355,15 +4480,16 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     server.addHandler(&ws);
 
     // Explicit static handlers for resource directories to ensure correct mapping
-    server.serveStatic("/styles", LittleFS, "/UI/styles");
-    server.serveStatic("/images", LittleFS, "/UI/images");
-    server.serveStatic("/scripts", LittleFS, "/UI/scripts");
-    server.serveStatic("/fonts", LittleFS, "/UI/fonts");
+    // UI files are served from static filesystem
+    server.serveStatic("/styles", FS_STATIC, "/UI/styles");
+    server.serveStatic("/images", FS_STATIC, "/UI/images");
+    server.serveStatic("/scripts", FS_STATIC, "/UI/scripts");
+    server.serveStatic("/fonts", FS_STATIC, "/UI/fonts");
     // Fallback: map root to UI directory and serve index.html by default
-    server.serveStatic("/", LittleFS, "/UI/").setDefaultFile("index.html");
+    server.serveStatic("/", FS_STATIC, "/UI/").setDefaultFile("index.html");
 
-    // Serve config directory (read-only)
-    server.serveStatic("/config", LittleFS, "/config/");
+    // Serve config directory from user filesystem (read-only for browser)
+    server.serveStatic("/config", FS_USER, "/config/");
 
     // 404 handler: attempt to serve files directly from /UI if present
     server.onNotFound([](AsyncWebServerRequest *request){
@@ -4375,8 +4501,8 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             fsPath += "index.html";
         }
 
-        // Try to serve the file from LittleFS
-        if (LittleFS.exists(fsPath)) {
+        // Try to serve the file from static filesystem
+        if (FS_STATIC.exists(fsPath)) {
             // Simple mime type guessing
             String contentType = "text/plain";
             if (url.endsWith(".html") || url == "/") contentType = "text/html";
@@ -4389,7 +4515,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                 Serial.printf(" UI fallback: %s -> %s (type: %s)\n", url.c_str(), fsPath.c_str(), contentType.c_str());
             }
 
-            request->send(LittleFS, fsPath.c_str(), contentType.c_str());
+            request->send(FS_STATIC, fsPath.c_str(), contentType.c_str());
             return;
         }
         if (config.debugSerial) {
@@ -4412,7 +4538,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     // --- ntfy.sh notification ---
     // Load topic from config file
     String ntfyTopic = "";
-    File configFile = LittleFS.open("/config/hub_config.txt", "r");
+    File configFile = FS_USER.open("/config/hub_config.txt", "r");
     if (configFile) {
         while (configFile.available()) {
             String line = configFile.readStringUntil('\n');
@@ -4487,7 +4613,7 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
     snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    File devFile = LittleFS.open("/config/devices.json", "r");
+    File devFile = FS_USER.open("/config/devices.json", "r");
     if (devFile) {
         DynamicJsonDocument devDoc(8192);
         deserializeJson(devDoc, devFile);
@@ -4629,7 +4755,7 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
         // Calculate total size based on what we're sending
         uint32_t totalSize = 0;
         if (neededType == OTA_CMD_FIRMWARE_CHUNK && nodeOtaState.firmwareSaved) {
-            File fwFile = LittleFS.open("/ota/light/firmware.bin", "r");
+            File fwFile = FS_STATIC.open("/ota/light/firmware.bin", "r");
             if (fwFile) {
                 totalSize = fwFile.size();
                 fwFile.close();
@@ -4809,12 +4935,23 @@ void setup() {
     LOG_INFO("   MicroCore Framework v1.0.0");
     LOG_INFO("");
     
-    // Initialize filesystem using MicroCore FileManager
+    // Initialize filesystem
+#ifdef DUAL_LITTLEFS
+    // Dual filesystem mode: static_fs + user_fs partitions
+    if (!setupDualFilesystem(true)) {
+        LOG_ERROR("CRITICAL: Dual filesystem failed, halting");
+        while (1) delay(1000);
+    }
+    LOG_INFO("Dual LittleFS initialized (static_fs + user_fs)");
+    printFilesystemInfo();
+#else
+    // Single filesystem mode using MicroCore FileManager
     if (!FileManager::begin(true)) {
         LOG_ERROR("CRITICAL: Filesystem failed, halting");
         while (1) delay(1000);
     }
     LOG_INFO("FileManager initialized (LittleFS)");
+#endif
     
     // Load configuration using MicroCore ConfigManager
     loadConfiguration();

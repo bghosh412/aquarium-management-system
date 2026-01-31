@@ -1,6 +1,9 @@
 #include "managers/AquariumManager.h"
 #include <esp_now.h>
 #include <LittleFS.h>
+#ifdef DUAL_LITTLEFS
+#include "DualFilesystem.h"
+#endif
 #include <ArduinoJson.h>
 #include <strings.h>  // for strcasecmp
 
@@ -16,8 +19,14 @@ static const char* nodeTypeToString(NodeType type) {
     }
 }
 
+#ifdef DUAL_LITTLEFS
+#define FS_USER UserFS
+#else
+#define FS_USER LittleFS
+#endif
+
 static bool isProvisionedDeviceMac(const String& macStr) {
-    File file = LittleFS.open("/config/devices.json", "r");
+    File file = FS_USER.open("/config/devices.json", "r");
     if (!file) {
         return false;
     }
@@ -182,7 +191,7 @@ std::vector<Aquarium*> AquariumManager::getAllAquariums() const {
 // ============================================================================
 
 static void updateDeviceFirmwareInJson(const char* macStr, uint8_t firmwareVersion) {
-    File devFile = LittleFS.open("/config/devices.json", "r");
+    File devFile = FS_USER.open("/config/devices.json", "r");
     if (!devFile) {
         return;
     }
@@ -220,7 +229,7 @@ static void updateDeviceFirmwareInJson(const char* macStr, uint8_t firmwareVersi
         return;
     }
 
-    devFile = LittleFS.open("/config/devices.json", "w");
+    devFile = FS_USER.open("/config/devices.json", "w");
     if (!devFile) {
         return;
     }
@@ -243,7 +252,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     // Check if device exists in persistent devices.json (provisioned)
-    File devFile = LittleFS.open("/config/devices.json", "r");
+    File devFile = FS_USER.open("/config/devices.json", "r");
     if (devFile) {
         DynamicJsonDocument devDoc(8192);
         deserializeJson(devDoc, devFile);
@@ -286,7 +295,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
         Serial.println("   -   Unmapped device (tankId=0), storing for provisioning");
         
         // Load unmapped devices JSON
-        File file = LittleFS.open("/config/unmapped-devices.json", "r");
+        File file = FS_USER.open("/config/unmapped-devices.json", "r");
         DynamicJsonDocument doc(4096);
         
         if (file) {
@@ -351,7 +360,7 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
         }
         
         // Save back to file
-        file = LittleFS.open("/config/unmapped-devices.json", "w");
+        file = FS_USER.open("/config/unmapped-devices.json", "w");
         if (file) {
             serializeJson(doc, file);
             file.close();
@@ -422,7 +431,7 @@ void AquariumManager::handleHeartbeat(const uint8_t* mac, const HeartbeatMessage
 
         // If not provisioned, persist as unmapped so UI can show it after hub restarts
         if (!isProvisionedDeviceMac(String(macStr))) {
-            File file = LittleFS.open("/config/unmapped-devices.json", "r");
+            File file = FS_USER.open("/config/unmapped-devices.json", "r");
             DynamicJsonDocument doc(4096);
 
             if (file) {
@@ -460,7 +469,7 @@ void AquariumManager::handleHeartbeat(const uint8_t* mac, const HeartbeatMessage
                 doc["metadata"]["totalDiscovered"] = doc["metadata"]["totalDiscovered"].as<int>() + 1;
             }
 
-            file = LittleFS.open("/config/unmapped-devices.json", "w");
+            file = FS_USER.open("/config/unmapped-devices.json", "w");
             if (file) {
                 serializeJson(doc, file);
                 file.close();

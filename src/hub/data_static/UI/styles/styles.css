@@ -184,6 +184,30 @@
     filter: brightness(0.98);
 }
 
+/* Success (green) for Setup button */
+.btn-success {
+    background: var(--success-color);
+    color: #ffffff;
+    box-shadow: var(--shadow-sm);
+}
+
+.btn-success:hover {
+    filter: brightness(0.95);
+}
+
+/* Small device-action buttons (consistent sizing, no rounding) */
+.device-action-btn {
+    font-size: 0.85rem; /* keep slightly smaller */
+    padding: 0.32rem 0.75rem;
+    min-height: 36px;
+    border-radius: 0 !important;
+    font-weight: 600;
+}
+
+/* Ensure warning/success variants look correct when used as device-action-btn */
+.device-action-btn.btn-success { background: var(--success-color); color: #fff; }
+.device-action-btn.btn-warning { background: var(--warning-color); color: #111827; }
+
 .Secondarybtn,
 .btn-secondary {
     background: #e2e8f0;

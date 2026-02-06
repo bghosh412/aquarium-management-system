@@ -165,12 +165,12 @@ function renderDevices() {
                 </div>
                 <div class="card-footer" style="display: flex; gap: 0.5rem;">
                     ${deviceTypeLower === 'light' || deviceTypeLower === 'lighting' || deviceTypeLower === 'lights' ? 
-                        `<button class="btn btn-primary" style="flex: 1;" onclick="viewDevice('${device.mac}')">🗓️ Schedule</button>` : 
+                        `<button class="btn btn-primary device-action-btn" style="flex: 1;" onclick="viewDevice('${device.mac}')">🗓️ Schedule</button>` : 
                         `<div style="flex: 1;"></div>`}
-                    <button class="btn btn-secondary" style="flex: 1;" onclick="setupDevice('${device.mac}')">
+                    <button class="btn btn-success device-action-btn" style="flex: 1;" onclick="setupDevice('${device.mac}')">
                         ⚙️ Setup
                     </button>
-                    <button class="btn btn-primary" style="flex: 1;" onclick="controlDevice('${device.mac}')">
+                    <button class="btn btn-warning device-action-btn" style="flex: 1;" onclick="controlDevice('${device.mac}')">
                         🎛️ Control
                     </button>
                 </div>

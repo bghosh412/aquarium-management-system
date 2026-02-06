@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Light Control - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        /* Inline styles for light control buttons/icons */
+        .btn .btn-icon {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            margin-right: 0.5rem;
+            vertical-align: middle;
+        }
+        .btn .btn-icon svg { display: inline-block; vertical-align: middle; }
+        .btn.btn-success { background-color: #16a34a; border-color: #16a34a; }
+        .btn.btn-danger { background-color: #dc2626; border-color: #dc2626; }
+        /* Spinner */
+        .spinner svg { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Light Control</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="../../device/manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <!-- Sidebar will be injected here -->
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Light Control</h1>
+                <p class="page-description">Toggle individual lighting channels</p>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Device Information</h3>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">Aquarium</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;" id="deviceType">Lighting</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">Light</span></div>
+                        <div><span>MAC:</span> <span style="font-weight: bold;" id="deviceMac">--</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 1.5rem;">
+                <div class="card-header">
+                    <h3>Channels</h3>
+                </div>
+                <div class="card-content" id="channelsContainer" style="display: grid; gap: 1rem;">
+                    <div id="controlStatus" class="badge badge-secondary" style="width: fit-content;">Waiting for status...</div>
+                    <div class="card" style="margin: 0;">
+                        <div class="card-body" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                            <div>
+                                <div style="font-weight: 600;">Channel 1</div>
+                                <div id="channel1Status" class="badge badge-offline">OFF</div>
+                            </div>
+                            <button id="channel1Btn" class="btn btn-primary" onclick="toggleChannel(1)"><span class="btn-icon" aria-hidden></span> <span class="btn-label">Toggle</span></button>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin: 0;">
+                        <div class="card-body" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                            <div>
+                                <div style="font-weight: 600;">Channel 2</div>
+                                <div id="channel2Status" class="badge badge-offline">OFF</div>
+                            </div>
+                            <button id="channel2Btn" class="btn btn-primary" onclick="toggleChannel(2)"><span class="btn-icon" aria-hidden></span> <span class="btn-label">Toggle</span></button>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin: 0;">
+                        <div class="card-body" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                            <div>
+                                <div style="font-weight: 600;">Channel 3</div>
+                                <div id="channel3Status" class="badge badge-offline">OFF</div>
+                            </div>
+                            <button id="channel3Btn" class="btn btn-primary" onclick="toggleChannel(3)"><span class="btn-icon" aria-hidden></span> <span class="btn-label">Toggle</span></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../../scripts/sidebar-inject.js"></script>
+    <script>
+        let currentDevice = null;
+        let channelStates = { 1: false, 2: false, 3: false };
+
+        function getQueryParam(name) {
+            const params = new URLSearchParams(window.location.search);
+            return params.get(name);
+        }
+
+        async function loadDevice() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '../manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const device = (data.devices || []).find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    alert('Device not found.');
+                    window.location.href = '../manage-devices.html';
+                    return;
+                }
+
+                currentDevice = device;
+                document.getElementById('tankName').textContent = `Aquarium ${device.tankId}`;
+                document.getElementById('deviceType').textContent = 'Lighting';
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                document.getElementById('deviceMac').textContent = device.mac;
+
+                await refreshStatus();
+            } catch (err) {
+                console.error('Failed to load device:', err);
+                alert('Failed to load device.');
+            }
+        }
+
+        async function refreshStatus() {
+            if (!currentDevice) return;
+            try {
+                const resp = await fetch(`/api/light-status?mac=${encodeURIComponent(currentDevice.mac)}`);
+                const data = await resp.json();
+                if (data && data.success && data.status) {
+                    channelStates = data.status;
+                    renderStatus();
+                } else if (data && data.pending) {
+                    setControlStatus('Waiting for device status...', 'secondary');
+                }
+            } catch (err) {
+                console.warn('Status refresh failed:', err);
+            }
+        }
+
+        function renderStatus() {
+            updateBadge('channel1Status', channelStates[1]);
+            updateBadge('channel2Status', channelStates[2]);
+            updateBadge('channel3Status', channelStates[3]);
+
+            // Update button labels/icons to reflect current state (action to perform)
+            updateChannelButton(1, !!channelStates[1]);
+            updateChannelButton(2, !!channelStates[2]);
+            updateChannelButton(3, !!channelStates[3]);
+
+            setControlStatus('Status updated', 'secondary');
+        }
+
+        function updateBadge(id, isOn) {
+            const el = document.getElementById(id);
+            el.textContent = isOn ? 'ON' : 'OFF';
+            el.className = isOn ? 'badge badge-online' : 'badge badge-offline';
+        }
+
+        // Polling interval handle (used to pause/resume 60s polling)
+        let pollingIntervalId = null;
+
+        // Small inline SVG icons
+        const SVG_POWER_ON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2V12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M5.758 5.758A9 9 0 1 0 18.242 18.242" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const SVG_POWER_OFF = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 18.36A9 9 0 1 0 18 6.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 2v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+        // Spinner SVG (animated via CSS .spinner class)
+        const SVG_SPINNER = '<svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="60" stroke-dashoffset="0" fill="none"/></svg>';
+
+        function updateChannelButton(channel, isOn) {
+            const btn = document.getElementById(`channel${channel}Btn`);
+            if (!btn) return;
+            const iconEl = btn.querySelector('.btn-icon');
+            const labelEl = btn.querySelector('.btn-label');
+            if (iconEl) {
+                iconEl.innerHTML = isOn ? SVG_POWER_ON : SVG_POWER_OFF;
+                iconEl.style.display = 'inline-block';
+            }
+            // Label shows the ACTION the button will perform: 'ON' if currently OFF, 'OFF' if currently ON
+            if (labelEl) labelEl.textContent = isOn ? 'OFF' : 'ON';
+            // Update button color for clarity (green = action is to turn ON, red = action is to turn OFF)
+            if (isOn) {
+                btn.className = 'btn btn-danger';
+            } else {
+                btn.className = 'btn btn-success';
+            }
+        }
+
+        async function toggleChannel(channel) {
+            if (!currentDevice) return;
+            const isOn = !!channelStates[channel];
+            const command = getCommandForToggle(channel, !isOn);
+            setControlStatus('Sending command...', 'secondary');
+
+            try {
+                const resp = await fetch(`/api/devices/${encodeURIComponent(currentDevice.mac.toLowerCase())}/command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command })
+                });
+
+                if (!resp.ok) {
+                    const txt = await resp.text();
+                    throw new Error(txt || 'Command failed');
+                }
+
+                const body = await resp.json();
+                if (!body || !body.success) {
+                    throw new Error(body && body.error ? body.error : 'Command not acknowledged by hub');
+                }
+
+                // Command was sent by hub. Now wait for device STATUS ack.
+                setControlStatus('Waiting for device acknowledgment...', 'secondary');
+
+                // Disable button and show spinner while waiting
+                const btn = document.getElementById(`channel${channel}Btn`);
+                const iconEl = btn ? btn.querySelector('.btn-icon') : null;
+                const labelEl = btn ? btn.querySelector('.btn-label') : null;
+                if (btn) {
+                    btn.disabled = true;
+                    if (labelEl) labelEl.textContent = '...';
+                    if (iconEl) iconEl.innerHTML = SVG_SPINNER;
+                    btn.classList.add('loading');
+                }
+
+                // Pause regular polling
+                if (pollingIntervalId) {
+                    clearInterval(pollingIntervalId);
+                    pollingIntervalId = null;
+                }
+
+                // Wait for ack (poll /api/light-status until we receive a status or timeout)
+                const ackReceived = await waitForDeviceAck(currentDevice.mac, 30000, 1000);
+
+                if (ackReceived) {
+                    // Small delay to ensure STATUS propagation and avoid fractional UI updates
+                    await new Promise(r => setTimeout(r, 500));
+
+                    // Double-check: issue one explicit status command to make sure values are current
+                    await refreshStatus();
+                    setControlStatus('Command acknowledged', 'online');
+                } else {
+                    setControlStatus('Ack timeout - status unknown', 'offline');
+                }
+
+                // Re-enable button and restore icon/label based on current state
+                if (btn) {
+                    btn.disabled = false;
+                    btn.classList.remove('loading');
+                    updateChannelButton(channel, !!channelStates[channel]);
+                }
+
+            } catch (err) {
+                console.error('Toggle failed:', err);
+                setControlStatus('Command failed', 'offline');
+                alert('Failed to toggle channel. ' + (err && err.message ? err.message : ''));
+            } finally {
+                // Restore regular 60s polling
+                if (!pollingIntervalId) {
+                    pollingIntervalId = setInterval(refreshStatus, 60000);
+                }
+            }
+        }
+
+        // Poll for device ack by calling /api/light-status repeatedly until a status is returned
+        async function waitForDeviceAck(mac, timeoutMs = 30000, pollMs = 1000) {
+            const start = Date.now();
+
+            while (Date.now() - start < timeoutMs) {
+                try {
+                    const resp = await fetch(`/api/light-status?mac=${encodeURIComponent(mac)}`);
+                    const data = await resp.json();
+
+                    if (data && data.success && data.status) {
+                        // Ack/status received
+                        channelStates = data.status;
+                        renderStatus();
+                        return true;
+                    }
+
+                    // If pending, keep waiting
+                } catch (err) {
+                    console.warn('Ack poll failed:', err);
+                }
+
+                await new Promise(r => setTimeout(r, pollMs));
+            }
+
+            return false; // Timeout
+        }
+
+        function setControlStatus(text, variant) {
+            const el = document.getElementById('controlStatus');
+            el.textContent = text;
+            if (variant === 'online') {
+                el.className = 'badge badge-online';
+            } else if (variant === 'offline') {
+                el.className = 'badge badge-offline';
+            } else {
+                el.className = 'badge badge-secondary';
+            }
+        }
+
+        function getCommandForToggle(channel, turnOn) {
+            if (channel === 1) return turnOn ? 'LIGHT_CH1_ON' : 'LIGHT_CH1_OFF';
+            if (channel === 2) return turnOn ? 'LIGHT_CH2_ON' : 'LIGHT_CH2_OFF';
+            if (channel === 3) return turnOn ? 'LIGHT_CH3_ON' : 'LIGHT_CH3_OFF';
+            return turnOn ? 'LIGHT_ON' : 'LIGHT_OFF';
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadDevice();
+            // Ensure buttons reflect initial known state immediately (even if device reply is pending)
+            renderStatus();
+            pollingIntervalId = setInterval(refreshStatus, 60000);
+        });
+    </script>
+</body>
+</html>

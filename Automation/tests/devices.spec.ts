@@ -108,6 +108,14 @@ test.describe('Device Management Tests', () => {
     await expect(page.locator('body')).toBeVisible();
   });
 
+  test('should load feeder schedule page', async ({ page }) => {
+    await page.goto(config.pages.feederSchedule + '?mac=test');
+    await waitForPageLoad(page);
+
+    // Page should load and show feeder header
+    await expect(page.locator('h1')).toContainText(/Feeder Schedule/i);
+  });
+
   test('should load light details page', async ({ page }) => {
     await page.goto(config.pages.lightDetails + '?mac=test');
     await waitForPageLoad(page);

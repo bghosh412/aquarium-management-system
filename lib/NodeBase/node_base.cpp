@@ -706,7 +706,11 @@ static void handleOtaBegin(const uint8_t* mac, const CommandMessage& cmd) {
     } else if (otaState.type == OTA_CMD_FIRMWARE_CHUNK) {
         // Start firmware update
         if (!Update.begin(otaState.totalSize)) {
+#ifdef ESP8266
             Serial.printf("[OTA] ERROR: Update.begin failed: %s\n", Update.getErrorString());
+#else
+            Serial.printf("[OTA] ERROR: Update.begin failed: %s\n", Update.errorString());
+#endif
             sendStatusAck(mac, cmd.commandId, OTA_STATUS_BEGIN_ERR, nullptr, 0);
             resetOtaState();
             return;
@@ -892,7 +896,11 @@ static void handleOtaEnd(const uint8_t* mac, const CommandMessage& cmd) {
     } else if (otaType == OTA_CMD_FIRMWARE_CHUNK && otaState.type == OTA_CMD_FIRMWARE_CHUNK) {
         // Finish firmware update
         if (!Update.end(true)) {
+#ifdef ESP8266
             Serial.printf("[OTA] ERROR: Update.end failed: %s\n", Update.getErrorString());
+#else
+            Serial.printf("[OTA] ERROR: Update.end failed: %s\n", Update.errorString());
+#endif
             sendStatusAck(mac, cmd.commandId, OTA_STATUS_APPLY_ERR, nullptr, 0);
             resetOtaState();
             return;

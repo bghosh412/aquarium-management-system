@@ -1,0 +1,6 @@
+{
+  "system": { "name": "Aquarium Management System", "version": "1.0.0", "hubId": "HUB-001" },
+  "tanks": [ { "id": 1, "name": "Main Display Tank", "volume": 200 } ],
+  "espnow": { "channel": 6 },
+  "scheduling": { "enabled": true }
+}

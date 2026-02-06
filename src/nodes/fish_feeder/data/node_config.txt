@@ -1,13 +1,54 @@
 # Fish Feeder Node Configuration
+# Format: KEY=VALUE (no spaces around =)
+# Hub will update NODE_TANK_ID and NODE_NAME during provisioning
+
+# Node Identity (0 = unmapped, waiting for hub provisioning)
 NODE_TANK_ID=0
 NODE_NAME=UnmappedFeeder
 FIRMWARE_VERSION=1
+
+# ESP-NOW Settings
 ESPNOW_CHANNEL=11
+
+# Debug Settings
 DEBUG_SERIAL=true
 DEBUG_ESPNOW=true
 DEBUG_HARDWARE=false
+
+# Timing Settings
 ANNOUNCE_INTERVAL_MS=5000
 HEARTBEAT_INTERVAL_MS=30000
 CONNECTION_TIMEOUT_MS=90000
+
 # Hub heartbeat timeout (ms) - if node does not receive hub heartbeat for this long, enter fail-safe
+# Default 600000 ms (10 minutes)
 HUB_HEARTBEAT_TIMEOUT_MS=600000
+
+# ============================================================================
+# FISH FEEDER HARDWARE NOTES
+# ============================================================================
+# Platform: ESP32-WROOM
+# Servo Pin: GPIO18
+#
+# Servo Control (Microstepping Pattern):
+#   - PWM Range: 0-180 (standard servo range)
+#   - Uses attach/detach pattern from test_servo.py:
+#     1. Attach servo with PWM duty
+#     2. Wait for pulse duration
+#     3. Detach servo (motor fully stops - prevents drift)
+#
+# Command Format from Hub:
+#   Command Type 0: Emergency Stop (detach servo immediately)
+#   Command Type 1: Feed
+#     - data[1-2] = PWM value (uint16_t, little-endian)
+#     - data[3-6] = duration in ms (uint32_t, little-endian)
+#   Command Type 40: Status request
+#
+# Safety Limits:
+#   - Maximum duration: 10000ms (10 seconds)
+#   - Fail-safe: Detach servo (do nothing - safer to skip feeding)
+#
+# Hardware: WeMOS D1 Mini (ESP8266)
+# Pin: D1 (GPIO5) -> Servo signal wire
+# ============================================================================
+

@@ -962,6 +962,34 @@ static void sendLightCommand(const uint8_t* mac, uint8_t command) {
                   result ? "OK" : "FAILED");
 }
 
+// Helper: Send feeder command via ESP-NOW (PWM value + duration)
+static void sendFeederCommand(const uint8_t* mac, uint16_t pwmValue, uint32_t durationMs) {
+    CommandMessage cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.header.type = MessageType::COMMAND;
+    cmd.header.tankId = 1;
+    cmd.header.nodeType = NodeType::HUB;
+    cmd.header.timestamp = millis();
+    cmd.header.sequenceNum = 0;
+    cmd.commandId = millis() & 0xFF;
+    cmd.commandSeqID = 0;
+    cmd.finalCommand = true;
+    
+    // Command format: [cmdType=0x01][pwm_low][pwm_high][dur_b0][dur_b1][dur_b2][dur_b3]
+    cmd.commandData[0] = 0x01;  // CMD_FEED
+    cmd.commandData[1] = pwmValue & 0xFF;         // PWM low byte
+    cmd.commandData[2] = (pwmValue >> 8) & 0xFF;  // PWM high byte
+    cmd.commandData[3] = durationMs & 0xFF;         // Duration byte 0
+    cmd.commandData[4] = (durationMs >> 8) & 0xFF;  // Duration byte 1
+    cmd.commandData[5] = (durationMs >> 16) & 0xFF; // Duration byte 2
+    cmd.commandData[6] = (durationMs >> 24) & 0xFF; // Duration byte 3
+    
+    bool result = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+    Serial.printf("[SCHEDULER] Sent feeder command PWM=%u duration=%ums to %02X:%02X:%02X:%02X:%02X:%02X - %s\n",
+                  pwmValue, durationMs, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                  result ? "OK" : "FAILED");
+}
+
 // Structure to track last command sent per channel to avoid duplicate sends
 struct ChannelState {
     bool ch1_on;
@@ -972,12 +1000,21 @@ struct ChannelState {
 static std::map<String, ChannelState> g_channelStates;
 
 // Structure for next-task.json persistence
+enum class TaskType : uint8_t {
+    LIGHT = 0,
+    FEEDER = 1
+};
+
 struct NextTask {
     String mac;
-    int channel;     // 1, 2, or 3
-    bool actionOn;   // true = turn ON, false = turn OFF
-    time_t scheduledTime;  // Unix timestamp
-    String period;   // "morning" or "evening"
+    TaskType taskType;       // LIGHT or FEEDER
+    int channel;             // For LIGHT: 1, 2, or 3
+    bool actionOn;           // For LIGHT: true = turn ON, false = turn OFF
+    time_t scheduledTime;    // Unix timestamp
+    String period;           // For LIGHT: "morning" or "evening"
+    // For FEEDER:
+    uint16_t pwmValue;       // Servo PWM value (duty cycle)
+    uint32_t durationMs;     // Pulse duration in ms
 };
 
 static const char* NEXT_TASK_FILE = "/config/schedule/next-task.json";
@@ -1015,7 +1052,7 @@ static time_t minutesToUnixTime(int minutes, bool forceToday = false) {
     return result;
 }
 
-// Helper: Calculate all upcoming tasks from a device schedule
+// Helper: Calculate all upcoming tasks from a light device schedule
 static void calculateNextTasks(const char* macStr, JsonObject schedule, std::vector<NextTask>& tasks) {
     const char* periods[] = {"morning", "evening"};
     
@@ -1037,21 +1074,109 @@ static void calculateNextTasks(const char* macStr, JsonObject schedule, std::vec
             // Create ON task
             NextTask onTask;
             onTask.mac = macStr;
+            onTask.taskType = TaskType::LIGHT;
             onTask.channel = ch;
             onTask.actionOn = true;
             onTask.scheduledTime = minutesToUnixTime(startMinutes);
             onTask.period = periodName;
+            onTask.pwmValue = 0;
+            onTask.durationMs = 0;
             tasks.push_back(onTask);
             
             // Create OFF task
             NextTask offTask;
             offTask.mac = macStr;
+            offTask.taskType = TaskType::LIGHT;
             offTask.channel = ch;
             offTask.actionOn = false;
             offTask.scheduledTime = minutesToUnixTime(offMinutes);
             offTask.period = periodName;
+            offTask.pwmValue = 0;
+            offTask.durationMs = 0;
             tasks.push_back(offTask);
         }
+    }
+}
+
+// Helper: Calculate all upcoming tasks from a feeder device schedule
+static void calculateFeederNextTasks(const char* macStr, JsonObject schedule, 
+                                      uint16_t pwmValue, uint32_t durationMs,
+                                      std::vector<NextTask>& tasks) {
+    // Get the days configuration
+    JsonObject days = schedule["days"].as<JsonObject>();
+    if (days.isNull()) return;
+    
+    // Get current time info
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) return;
+    
+    // Day of week: 0=Sunday, 1=Monday, ..., 6=Saturday
+    const char* dayNames[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+    int todayDow = timeinfo.tm_wday;
+    
+    // Check if today is enabled
+    bool todayEnabled = days[dayNames[todayDow]] | false;
+    
+    // Get feeding times
+    JsonArray feedingTimes = schedule["feedingTimes"].as<JsonArray>();
+    if (feedingTimes.isNull()) return;
+    
+    int currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+    
+    // Iterate through feeding times
+    int timeIndex = 0;
+    for (JsonObject ft : feedingTimes) {
+        bool enabled = ft["enabled"] | false;
+        if (!enabled) {
+            timeIndex++;
+            continue;
+        }
+        
+        int hour = ft["hour"] | 8;
+        int minute = ft["minute"] | 0;
+        String ampm = ft["ampm"] | "AM";
+        
+        // Convert to 24-hour format
+        if (ampm == "PM" && hour != 12) {
+            hour += 12;
+        } else if (ampm == "AM" && hour == 12) {
+            hour = 0;
+        }
+        
+        int feedMinutes = hour * 60 + minute;
+        
+        // Create task
+        NextTask task;
+        task.mac = macStr;
+        task.taskType = TaskType::FEEDER;
+        task.channel = 0;  // Not used for feeder
+        task.actionOn = true;  // Always "on" action for feeding
+        task.period = String("feed") + String(timeIndex + 1);  // "feed1", "feed2", etc.
+        task.pwmValue = pwmValue;
+        task.durationMs = durationMs;
+        
+        // Determine scheduled time
+        if (todayEnabled && feedMinutes > currentMinutes) {
+            // Today, future time
+            task.scheduledTime = minutesToUnixTime(feedMinutes, true);
+        } else {
+            // Find next enabled day
+            for (int offset = 1; offset <= 7; offset++) {
+                int nextDow = (todayDow + offset) % 7;
+                if (days[dayNames[nextDow]] | false) {
+                    // This day is enabled
+                    task.scheduledTime = minutesToUnixTime(feedMinutes, true);
+                    task.scheduledTime += offset * 24 * 60 * 60;  // Add days
+                    break;
+                }
+            }
+        }
+        
+        if (task.scheduledTime > 0) {
+            tasks.push_back(task);
+        }
+        
+        timeIndex++;
     }
 }
 
@@ -1080,16 +1205,22 @@ static bool findNextTask(const std::vector<NextTask>& tasks, NextTask& next) {
 
 // Save next-task.json with all upcoming tasks
 static void saveNextTasks(const std::vector<NextTask>& tasks) {
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(8192);
     JsonArray arr = doc.createNestedArray("tasks");
     
     for (const NextTask& t : tasks) {
         JsonObject obj = arr.createNestedObject();
         obj["mac"] = t.mac;
+        obj["taskType"] = (int)t.taskType;  // 0=LIGHT, 1=FEEDER
         obj["channel"] = t.channel;
         obj["actionOn"] = t.actionOn;
         obj["scheduledTime"] = (long)t.scheduledTime;
         obj["period"] = t.period;
+        // Include feeder-specific fields
+        if (t.taskType == TaskType::FEEDER) {
+            obj["pwmValue"] = t.pwmValue;
+            obj["durationMs"] = t.durationMs;
+        }
     }
     
     doc["updatedAt"] = (long)getCurrentUnixTime();
@@ -1114,7 +1245,7 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
         return false;
     }
     
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(8192);
     DeserializationError error = deserializeJson(doc, file);
     file.close();
     
@@ -1127,10 +1258,13 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
     for (JsonObject obj : arr) {
         NextTask t;
         t.mac = obj["mac"].as<String>();
+        t.taskType = (TaskType)(obj["taskType"] | 0);  // Default to LIGHT
         t.channel = obj["channel"] | 1;
         t.actionOn = obj["actionOn"] | true;
         t.scheduledTime = obj["scheduledTime"] | 0;
         t.period = obj["period"].as<String>();
+        t.pwmValue = obj["pwmValue"] | 0;
+        t.durationMs = obj["durationMs"] | 0;
         tasks.push_back(t);
     }
     
@@ -1138,36 +1272,82 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
     return true;
 }
 
-// Rebuild next-task.json from light-schedule.json (called when schedule changes or on startup)
+// Rebuild next-task.json from light-schedule.json and feeder-schedule.json
 void rebuildNextTasks() {
     Serial.println("[SCHEDULER] Rebuilding next-task.json from schedules...");
     
     std::vector<NextTask> allTasks;
     
+    // === Process light schedules ===
     File file = FS_USER.open("/config/schedule/light-schedule.json", "r");
-    if (!file) {
-        Serial.println("[SCHEDULER] No light-schedule.json found");
-        saveNextTasks(allTasks);  // Save empty
-        return;
-    }
-    
-    DynamicJsonDocument doc(4096);
-    DeserializationError error = deserializeJson(doc, file);
-    file.close();
-    
-    if (error) {
-        Serial.printf("[SCHEDULER] Failed to parse light-schedule.json: %s\n", error.c_str());
-        saveNextTasks(allTasks);
-        return;
-    }
-    
-    JsonArray schedules = doc["schedules"].as<JsonArray>();
-    for (JsonObject sched : schedules) {
-        const char* macStr = sched["mac"];
-        if (!macStr) continue;
+    if (file) {
+        DynamicJsonDocument doc(4096);
+        DeserializationError error = deserializeJson(doc, file);
+        file.close();
         
-        JsonObject schedule = sched["schedule"];
-        calculateNextTasks(macStr, schedule, allTasks);
+        if (!error) {
+            JsonArray schedules = doc["schedules"].as<JsonArray>();
+            for (JsonObject sched : schedules) {
+                const char* macStr = sched["mac"];
+                if (!macStr) continue;
+                
+                JsonObject schedule = sched["schedule"];
+                calculateNextTasks(macStr, schedule, allTasks);
+            }
+            Serial.printf("[SCHEDULER] Processed light schedules, %d tasks so far\n", allTasks.size());
+        } else {
+            Serial.printf("[SCHEDULER] Failed to parse light-schedule.json: %s\n", error.c_str());
+        }
+    } else {
+        Serial.println("[SCHEDULER] No light-schedule.json found");
+    }
+    
+    // === Process feeder schedules ===
+    file = FS_USER.open("/config/schedule/feeder-schedule.json", "r");
+    if (file) {
+        DynamicJsonDocument schedDoc(4096);
+        DeserializationError error = deserializeJson(schedDoc, file);
+        file.close();
+        
+        if (!error) {
+            // Load calibration data to get PWM values for each feeder
+            DynamicJsonDocument calDoc(2048);
+            File calFile = FS_USER.open("/config/feeder-calibration.json", "r");
+            if (calFile) {
+                deserializeJson(calDoc, calFile);
+                calFile.close();
+            }
+            
+            JsonArray schedules = schedDoc["schedules"].as<JsonArray>();
+            for (JsonObject sched : schedules) {
+                const char* macStr = sched["mac"];
+                if (!macStr) continue;
+                
+                JsonObject schedule = sched["schedule"];
+                
+                // Look up calibration for this MAC
+                uint16_t pwmValue = 72;  // Default duty cycle
+                uint32_t durationMs = 160;  // Default pulse duration
+                
+                JsonArray calibrations = calDoc["calibrations"].as<JsonArray>();
+                for (JsonObject cal : calibrations) {
+                    String calMac = cal["mac"] | "";
+                    if (calMac.equalsIgnoreCase(macStr)) {
+                        JsonObject calibration = cal["calibration"];
+                        pwmValue = calibration["dutyCycle"] | 72;
+                        durationMs = calibration["pulseDuration"] | 160;
+                        break;
+                    }
+                }
+                
+                calculateFeederNextTasks(macStr, schedule, pwmValue, durationMs, allTasks);
+            }
+            Serial.printf("[SCHEDULER] Processed feeder schedules, %d total tasks\n", allTasks.size());
+        } else {
+            Serial.printf("[SCHEDULER] Failed to parse feeder-schedule.json: %s\n", error.c_str());
+        }
+    } else {
+        Serial.println("[SCHEDULER] No feeder-schedule.json found");
     }
     
     saveNextTasks(allTasks);
@@ -1188,26 +1368,35 @@ static bool executeTask(const NextTask& task) {
         return false;  // Will retry later
     }
     
-    // Calculate command code: CH1=10/11, CH2=20/21, CH3=30/31
-    uint8_t command = (task.channel * 10) + (task.actionOn ? 1 : 0);
-    
-    sendLightCommand(mac, command);
-    
     // Trigger Hub Task LED to blink for 30 seconds
     triggerHubTaskLED();
     
-    // Update channel state tracking
-    String macKey = task.mac;
-    macKey.toUpperCase();
-    if (g_channelStates.find(macKey) == g_channelStates.end()) {
-        g_channelStates[macKey] = {false, false, false, -1};
+    if (task.taskType == TaskType::FEEDER) {
+        // Execute feeder task
+        Serial.printf("[SCHEDULER] Executing FEEDER task: %s PWM=%u duration=%ums\n",
+                      task.mac.c_str(), task.pwmValue, task.durationMs);
+        sendFeederCommand(mac, task.pwmValue, task.durationMs);
+        return true;
+    } else {
+        // Execute light task (default)
+        // Calculate command code: CH1=10/11, CH2=20/21, CH3=30/31
+        uint8_t command = (task.channel * 10) + (task.actionOn ? 1 : 0);
+        
+        sendLightCommand(mac, command);
+        
+        // Update channel state tracking
+        String macKey = task.mac;
+        macKey.toUpperCase();
+        if (g_channelStates.find(macKey) == g_channelStates.end()) {
+            g_channelStates[macKey] = {false, false, false, -1};
+        }
+        ChannelState& state = g_channelStates[macKey];
+        if (task.channel == 1) state.ch1_on = task.actionOn;
+        else if (task.channel == 2) state.ch2_on = task.actionOn;
+        else if (task.channel == 3) state.ch3_on = task.actionOn;
+        
+        return true;
     }
-    ChannelState& state = g_channelStates[macKey];
-    if (task.channel == 1) state.ch1_on = task.actionOn;
-    else if (task.channel == 2) state.ch2_on = task.actionOn;
-    else if (task.channel == 3) state.ch3_on = task.actionOn;
-    
-    return true;
 }
 
 // Find and execute any past-due tasks, with retry logic for offline nodes
@@ -1220,9 +1409,15 @@ static void processPastDueTasks(std::vector<NextTask>& tasks, bool& needsRebuild
     
     for (auto it = tasks.begin(); it != tasks.end(); ) {
         if (it->scheduledTime <= now) {
-            Serial.printf("[SCHEDULER] Past-due task: %s CH%d %s (scheduled %ld, now %ld)\n",
-                         it->mac.c_str(), it->channel, it->actionOn ? "ON" : "OFF",
-                         (long)it->scheduledTime, (long)now);
+            if (it->taskType == TaskType::FEEDER) {
+                Serial.printf("[SCHEDULER] Past-due FEEDER task: %s %s PWM=%u (scheduled %ld, now %ld)\n",
+                             it->mac.c_str(), it->period.c_str(), it->pwmValue,
+                             (long)it->scheduledTime, (long)now);
+            } else {
+                Serial.printf("[SCHEDULER] Past-due LIGHT task: %s CH%d %s (scheduled %ld, now %ld)\n",
+                             it->mac.c_str(), it->channel, it->actionOn ? "ON" : "OFF",
+                             (long)it->scheduledTime, (long)now);
+            }
             
             if (executeTask(*it)) {
                 anyExecuted = true;
@@ -3041,6 +3236,288 @@ void setupWebServer() {
         request->send(200, "application/json", "{\"success\":true}");
     });
 
+    // ========================================================================
+    // FEEDER CALIBRATION API
+    // ========================================================================
+
+    // GET feeder calibration for a device
+    server.on("/api/feeder-calibration", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        File file = FS_USER.open("/config/feeder-calibration.json", "r");
+        if (!file) {
+            request->send(200, "application/json", "{\"success\":true,\"calibration\":null}");
+            return;
+        }
+
+        DynamicJsonDocument doc(2048);
+        DeserializationError error = deserializeJson(doc, file);
+        file.close();
+        if (error) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse feeder-calibration.json\"}");
+            return;
+        }
+
+        JsonArray calibrations = doc["calibrations"].as<JsonArray>();
+        JsonObject found;
+        for (JsonObject entry : calibrations) {
+            String entryMac = entry["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                found = entry;
+                break;
+            }
+        }
+
+        DynamicJsonDocument responseDoc(512);
+        responseDoc["success"] = true;
+
+        if (!found.isNull()) {
+            JsonObject cal = responseDoc.createNestedObject("calibration");
+            cal["dutyCycle"] = found["calibration"]["dutyCycle"] | 72;
+            cal["pulseDuration"] = found["calibration"]["pulseDuration"] | 160;
+        } else {
+            responseDoc["calibration"] = nullptr;
+        }
+
+        String response;
+        serializeJson(responseDoc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST save feeder calibration
+    server.on("/api/feeder-calibration", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(1024);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        JsonVariant calibration = body["calibration"];
+        if (calibration.isNull()) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing calibration\"}");
+            return;
+        }
+
+        File file = FS_USER.open("/config/feeder-calibration.json", "r");
+        DynamicJsonDocument doc(2048);
+        if (file) {
+            deserializeJson(doc, file);
+            file.close();
+        }
+
+        JsonArray calibrations = doc["calibrations"];
+        if (calibrations.isNull()) {
+            calibrations = doc.createNestedArray("calibrations");
+        }
+
+        // Remove existing entry for this MAC
+        for (int i = (int)calibrations.size() - 1; i >= 0; i--) {
+            String entryMac = calibrations[i]["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                calibrations.remove(i);
+            }
+        }
+
+        JsonObject newEntry = calibrations.createNestedObject();
+        newEntry["mac"] = macStr;
+        newEntry["tankId"] = body["tankId"] | 0;
+        newEntry["deviceName"] = body["deviceName"] | "";
+
+        JsonObject newCal = newEntry.createNestedObject("calibration");
+        newCal["dutyCycle"] = calibration["dutyCycle"] | 72;
+        newCal["pulseDuration"] = calibration["pulseDuration"] | 160;
+        newEntry["updatedAt"] = millis();
+
+        file = FS_USER.open("/config/feeder-calibration.json", "w");
+        if (!file) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write feeder-calibration.json\"}");
+            return;
+        }
+        serializeJson(doc, file);
+        file.close();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // ========================================================================
+    // FEEDER SCHEDULE API
+    // ========================================================================
+
+    // GET feeder schedule for a device
+    server.on("/api/feeder-schedule", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        File file = FS_USER.open("/config/schedule/feeder-schedule.json", "r");
+        if (!file) {
+            request->send(200, "application/json", "{\"success\":true,\"schedule\":null}");
+            return;
+        }
+
+        DynamicJsonDocument doc(4096);
+        DeserializationError error = deserializeJson(doc, file);
+        file.close();
+        if (error) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse feeder-schedule.json\"}");
+            return;
+        }
+
+        JsonArray schedules = doc["schedules"].as<JsonArray>();
+        JsonObject found;
+        for (JsonObject entry : schedules) {
+            String entryMac = entry["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                found = entry;
+                break;
+            }
+        }
+
+        DynamicJsonDocument responseDoc(2048);
+        responseDoc["success"] = true;
+
+        if (!found.isNull()) {
+            JsonObject sched = responseDoc.createNestedObject("schedule");
+            sched["mac"] = found["mac"] | "";
+            sched["tankId"] = found["tankId"] | 0;
+            sched["deviceName"] = found["deviceName"] | "";
+            
+            JsonObject storedSchedule = found["schedule"].as<JsonObject>();
+            if (!storedSchedule.isNull()) {
+                JsonArray ft = sched.createNestedArray("feedingTimes");
+                JsonArray storedFt = storedSchedule["feedingTimes"].as<JsonArray>();
+                for (JsonObject time : storedFt) {
+                    JsonObject t = ft.createNestedObject();
+                    t["enabled"] = time["enabled"] | false;
+                    t["hour"] = time["hour"] | 8;
+                    t["minute"] = time["minute"] | 0;
+                    t["ampm"] = time["ampm"] | "AM";
+                }
+                
+                JsonObject days = sched.createNestedObject("days");
+                JsonObject storedDays = storedSchedule["days"].as<JsonObject>();
+                days["Sunday"] = storedDays["Sunday"] | true;
+                days["Monday"] = storedDays["Monday"] | true;
+                days["Tuesday"] = storedDays["Tuesday"] | true;
+                days["Wednesday"] = storedDays["Wednesday"] | true;
+                days["Thursday"] = storedDays["Thursday"] | true;
+                days["Friday"] = storedDays["Friday"] | true;
+                days["Saturday"] = storedDays["Saturday"] | true;
+            }
+        } else {
+            responseDoc["schedule"] = nullptr;
+        }
+
+        String response;
+        serializeJson(responseDoc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST save feeder schedule
+    server.on("/api/feeder-schedule", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(2048);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        JsonVariant schedule = body["schedule"];
+        if (schedule.isNull()) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing schedule\"}");
+            return;
+        }
+
+        File file = FS_USER.open("/config/schedule/feeder-schedule.json", "r");
+        DynamicJsonDocument doc(4096);
+        if (file) {
+            deserializeJson(doc, file);
+            file.close();
+        }
+
+        JsonArray schedules = doc["schedules"];
+        if (schedules.isNull()) {
+            schedules = doc.createNestedArray("schedules");
+        }
+
+        // Remove existing entry for this MAC
+        for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+            String entryMac = schedules[i]["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                schedules.remove(i);
+            }
+        }
+
+        JsonObject newEntry = schedules.createNestedObject();
+        newEntry["mac"] = macStr;
+        newEntry["tankId"] = body["tankId"] | 0;
+        newEntry["deviceName"] = body["deviceName"] | "";
+
+        JsonObject newSched = newEntry.createNestedObject("schedule");
+        
+        // Copy feeding times
+        JsonArray ft = newSched.createNestedArray("feedingTimes");
+        JsonArray srcFt = schedule["feedingTimes"].as<JsonArray>();
+        for (JsonObject time : srcFt) {
+            JsonObject t = ft.createNestedObject();
+            t["enabled"] = time["enabled"] | false;
+            t["hour"] = time["hour"] | 8;
+            t["minute"] = time["minute"] | 0;
+            t["ampm"] = time["ampm"] | "AM";
+        }
+        
+        // Copy days
+        JsonObject days = newSched.createNestedObject("days");
+        JsonObject srcDays = schedule["days"].as<JsonObject>();
+        days["Sunday"] = srcDays["Sunday"] | true;
+        days["Monday"] = srcDays["Monday"] | true;
+        days["Tuesday"] = srcDays["Tuesday"] | true;
+        days["Wednesday"] = srcDays["Wednesday"] | true;
+        days["Thursday"] = srcDays["Thursday"] | true;
+        days["Friday"] = srcDays["Friday"] | true;
+        days["Saturday"] = srcDays["Saturday"] | true;
+
+        newEntry["updatedAt"] = millis();
+
+        file = FS_USER.open("/config/schedule/feeder-schedule.json", "w");
+        if (!file) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write feeder-schedule.json\"}");
+            return;
+        }
+        serializeJson(doc, file);
+        file.close();
+
+        // Rebuild next-task.json with updated schedule (includes feeder tasks)
+        rebuildNextTasks();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
     // GET light channel status (fetch from node)
     server.on("/api/light-status", HTTP_GET, [](AsyncWebServerRequest *request){
         if (!request->hasParam("mac")) {
@@ -4556,7 +5033,9 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         snprintf(msg, sizeof(msg), NTFY_MSG_WEBSERVER_UP, WiFi.localIP().toString().c_str());
         String url = "https://ntfy.sh/" + ntfyTopic;
         HTTPClient http;
-        http.begin(url);
+        WiFiClientSecure client;
+        client.setInsecure();
+        http.begin(client, url);
         http.addHeader("Title", "AMS Hub WebUI");
         int httpCode = http.POST(msg);
         if (httpCode > 0) {
@@ -4915,15 +5394,17 @@ void setup() {
     delay(500);
     
     // Test basic serial output
-    Serial.println();
-    Serial.println("==============================================");
-    Serial.println("  Aquarium Management System - Hub Starting");
-    Serial.println("  ESP32-S3 USB CDC Serial (HWCDC)");
-    Serial.printf("  Free Heap: %u KB, PSRAM: %u KB\n", 
-                  ESP.getFreeHeap() / 1024, 
-                  ESP.getFreePsram() / 1024);
-    Serial.println("==============================================");
-    Serial.flush();
+    if (Serial) {
+        Serial.println();
+        Serial.println("==============================================");
+        Serial.println("  Aquarium Management System - Hub Starting");
+        Serial.println("  ESP32-S3 USB CDC Serial (HWCDC)");
+        Serial.printf("  Free Heap: %u KB, PSRAM: %u KB\n", 
+                      ESP.getFreeHeap() / 1024, 
+                      ESP.getFreePsram() / 1024);
+        Serial.println("==============================================");
+        Serial.flush();
+    }
     
     // Initialize MicroCore Logger (Serial already initialized)
     Logger::begin(115200, LOG_DEBUG);

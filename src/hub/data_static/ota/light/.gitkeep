@@ -1,5 +1,0 @@
-# This directory stores downloaded OTA files for light nodes
-# Files:
-#   - firmware.bin     : Node firmware binary
-#   - node_config.txt  : Node configuration file
-#   - version.txt      : Version information (optional, copied from remote)

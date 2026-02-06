@@ -7,8 +7,7 @@
     #include <LittleFS.h>
 #else
     #include <WiFi.h>
-    #include <LITTLEFS.h>
-    #define LittleFS LITTLEFS
+    #include <LittleFS.h>
 #endif
 #include "protocol/messages.h"
 

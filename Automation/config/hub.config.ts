@@ -48,6 +48,7 @@ export const config = {
     lightControl: '/device/control/light-control.html',
     lightSchedule: '/device/schedule/light-schedule.html',
     lightDetails: '/aquarium/details/light-details.html',
+    feederSchedule: '/device/schedule/feeder-schedule.html',
     settingsWifi: '/settings/wifi-settings.html',
     settingsBackup: '/settings/backup-restore.html',
     settingsDownloadUpload: '/settings/download-upload.html',

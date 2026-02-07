@@ -1007,6 +1007,7 @@ enum class TaskType : uint8_t {
 
 struct NextTask {
     String mac;
+    String scheduleId;       // Unique identifier for this schedule entry
     TaskType taskType;       // LIGHT or FEEDER
     int channel;             // For LIGHT: 1, 2, or 3
     bool actionOn;           // For LIGHT: true = turn ON, false = turn OFF
@@ -1018,6 +1019,25 @@ struct NextTask {
 };
 
 static const char* NEXT_TASK_FILE = "/config/schedule/next-task.json";
+
+// Helper: Generate a schedule ID from components
+static String generateScheduleId(const char* mac, const char* period, int channel = 0, int feedIndex = 0, TaskType type = TaskType::LIGHT) {
+    // Format: MAC_PERIOD_CHANNEL for lights, MAC_FEEDn for feeders
+    String id = String(mac);
+    id.replace(":", "");  // Remove colons for cleaner ID
+    id.toUpperCase();
+    
+    if (type == TaskType::FEEDER) {
+        id += "_FEED";
+        id += String(feedIndex + 1);
+    } else {
+        id += "_";
+        id += String(period);
+        id += "_CH";
+        id += String(channel);
+    }
+    return id;
+}
 
 // Helper: Get current Unix timestamp
 static time_t getCurrentUnixTime() {
@@ -1071,9 +1091,13 @@ static void calculateNextTasks(const char* macStr, JsonObject schedule, std::vec
             int startMinutes = channel["start"]["hour"].as<int>() * 60 + channel["start"]["minute"].as<int>();
             int offMinutes = channel["offTime"]["hour"].as<int>() * 60 + channel["offTime"]["minute"].as<int>();
             
+            // Generate scheduleId - same for ON and OFF of same period/channel
+            String schedId = generateScheduleId(macStr, periodName, ch, 0, TaskType::LIGHT);
+            
             // Create ON task
             NextTask onTask;
             onTask.mac = macStr;
+            onTask.scheduleId = schedId;
             onTask.taskType = TaskType::LIGHT;
             onTask.channel = ch;
             onTask.actionOn = true;
@@ -1083,9 +1107,10 @@ static void calculateNextTasks(const char* macStr, JsonObject schedule, std::vec
             onTask.durationMs = 0;
             tasks.push_back(onTask);
             
-            // Create OFF task
+            // Create OFF task (same scheduleId as ON)
             NextTask offTask;
             offTask.mac = macStr;
+            offTask.scheduleId = schedId;
             offTask.taskType = TaskType::LIGHT;
             offTask.channel = ch;
             offTask.actionOn = false;
@@ -1145,9 +1170,13 @@ static void calculateFeederNextTasks(const char* macStr, JsonObject schedule,
         
         int feedMinutes = hour * 60 + minute;
         
+        // Generate scheduleId for this feeding time slot
+        String schedId = generateScheduleId(macStr, "", 0, timeIndex, TaskType::FEEDER);
+        
         // Create task
         NextTask task;
         task.mac = macStr;
+        task.scheduleId = schedId;
         task.taskType = TaskType::FEEDER;
         task.channel = 0;  // Not used for feeder
         task.actionOn = true;  // Always "on" action for feeding
@@ -1211,6 +1240,7 @@ static void saveNextTasks(const std::vector<NextTask>& tasks) {
     for (const NextTask& t : tasks) {
         JsonObject obj = arr.createNestedObject();
         obj["mac"] = t.mac;
+        obj["scheduleId"] = t.scheduleId;
         obj["taskType"] = (int)t.taskType;  // 0=LIGHT, 1=FEEDER
         obj["channel"] = t.channel;
         obj["actionOn"] = t.actionOn;
@@ -1258,6 +1288,7 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
     for (JsonObject obj : arr) {
         NextTask t;
         t.mac = obj["mac"].as<String>();
+        t.scheduleId = obj["scheduleId"].as<String>();
         t.taskType = (TaskType)(obj["taskType"] | 0);  // Default to LIGHT
         t.channel = obj["channel"] | 1;
         t.actionOn = obj["actionOn"] | true;
@@ -1272,6 +1303,103 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
     return true;
 }
 
+// Delete tasks by scheduleId - removes all tasks with matching scheduleId
+static bool deleteTasksByScheduleId(const String& scheduleId) {
+    std::vector<NextTask> tasks;
+    if (!loadNextTasks(tasks)) {
+        return false;
+    }
+
+    std::vector<NextTask> remaining;
+    remaining.reserve(tasks.size());
+    bool removed = false;
+
+    for (const NextTask& t : tasks) {
+        if (t.scheduleId == scheduleId) {
+            removed = true;
+            Serial.printf("[SCHEDULER] Deleting task with scheduleId: %s\n", scheduleId.c_str());
+            continue;
+        }
+        remaining.push_back(t);
+    }
+
+    if (!removed) {
+        return false;
+    }
+
+    saveNextTasks(remaining);
+    return true;
+}
+
+// Delete tasks by multiple scheduleIds
+static int deleteTasksByScheduleIds(const std::vector<String>& scheduleIds) {
+    std::vector<NextTask> tasks;
+    if (!loadNextTasks(tasks)) {
+        return 0;
+    }
+
+    std::vector<NextTask> remaining;
+    remaining.reserve(tasks.size());
+    int removedCount = 0;
+
+    for (const NextTask& t : tasks) {
+        bool shouldRemove = false;
+        for (const String& id : scheduleIds) {
+            if (t.scheduleId == id) {
+                shouldRemove = true;
+                break;
+            }
+        }
+        
+        if (shouldRemove) {
+            removedCount++;
+            Serial.printf("[SCHEDULER] Deleting task with scheduleId: %s\n", t.scheduleId.c_str());
+            continue;
+        }
+        remaining.push_back(t);
+    }
+
+    if (removedCount > 0) {
+        saveNextTasks(remaining);
+    }
+    return removedCount;
+}
+
+static bool deleteNextTaskEntry(const NextTask& target) {
+    std::vector<NextTask> tasks;
+    if (!loadNextTasks(tasks)) {
+        return false;
+    }
+
+    std::vector<NextTask> remaining;
+    remaining.reserve(tasks.size());
+    bool removed = false;
+
+    for (const NextTask& t : tasks) {
+        bool match = t.mac.equalsIgnoreCase(target.mac) &&
+                     t.taskType == target.taskType &&
+                     t.channel == target.channel &&
+                     t.actionOn == target.actionOn &&
+                     t.scheduledTime == target.scheduledTime &&
+                     t.period == target.period &&
+                     t.pwmValue == target.pwmValue &&
+                     t.durationMs == target.durationMs;
+
+        if (match && !removed) {
+            removed = true;
+            continue;
+        }
+
+        remaining.push_back(t);
+    }
+
+    if (!removed) {
+        return false;
+    }
+
+    saveNextTasks(remaining);
+    return true;
+}
 // Rebuild next-task.json from light-schedule.json and feeder-schedule.json
 void rebuildNextTasks() {
     Serial.println("[SCHEDULER] Rebuilding next-task.json from schedules...");
@@ -3636,6 +3764,95 @@ void setupWebServer() {
         request->send(200, "application/json", "{\"success\":true}");
     });
 
+    // POST delete an upcoming next-task entry by scheduleId
+    server.on("/api/next-task/delete", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(1024);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        // Prefer scheduleId-based deletion
+        String scheduleId = body["scheduleId"] | "";
+        if (scheduleId.length() > 0) {
+            if (deleteTasksByScheduleId(scheduleId)) {
+                request->send(200, "application/json", "{\"success\":true}");
+                return;
+            }
+            request->send(404, "application/json", "{\"success\":false,\"error\":\"Task not found\"}");
+            return;
+        }
+
+        // Fallback to legacy field-based deletion
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing scheduleId or mac\"}");
+            return;
+        }
+
+        NextTask target;
+        target.mac = macStr;
+        target.taskType = (TaskType)(body["taskType"] | 0);
+        target.channel = body["channel"] | 0;
+        target.actionOn = body["actionOn"] | false;
+        target.scheduledTime = (time_t)(body["scheduledTime"] | 0);
+        target.period = body["period"] | "";
+        target.pwmValue = body["pwmValue"] | 0;
+        target.durationMs = body["durationMs"] | 0;
+
+        if (deleteNextTaskEntry(target)) {
+            request->send(200, "application/json", "{\"success\":true}");
+            return;
+        }
+
+        request->send(404, "application/json", "{\"success\":false,\"error\":\"Task not found\"}");
+    });
+
+    // POST delete selected tasks by scheduleIds and rebuild
+    server.on("/api/next-task/delete-selected", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(4096);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        JsonArray idsArray = body["scheduleIds"].as<JsonArray>();
+        if (idsArray.isNull() || idsArray.size() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing or empty scheduleIds array\"}");
+            return;
+        }
+
+        std::vector<String> scheduleIds;
+        for (JsonVariant v : idsArray) {
+            String id = v.as<String>();
+            if (id.length() > 0) {
+                scheduleIds.push_back(id);
+            }
+        }
+
+        int deleted = deleteTasksByScheduleIds(scheduleIds);
+        Serial.printf("[SCHEDULER] Deleted %d tasks by scheduleIds\n", deleted);
+
+        // Rebuild next-task.json from schedule files to recalculate future occurrences
+        rebuildNextTasks();
+
+        DynamicJsonDocument response(256);
+        response["success"] = true;
+        response["deleted"] = deleted;
+        
+        String responseStr;
+        serializeJson(response, responseStr);
+        request->send(200, "application/json", responseStr);
+    });
+
     // GET light channel status (fetch from node)
     server.on("/api/light-status", HTTP_GET, [](AsyncWebServerRequest *request){
         if (!request->hasParam("mac")) {
@@ -3653,6 +3870,7 @@ void setupWebServer() {
             request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
             return;
         }
+
 
         if (config.debugESPNOW) {
             Serial.printf("[LIGHT] Status request for %s\n", macKey.c_str());

@@ -6,8 +6,41 @@
   <title>Feeder Schedule (static)</title>
   <link rel="stylesheet" href="/styles/styles.css">
 </head>
-<body style="font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; padding:2rem;">
-  <h1>Feeder Schedule — static preview</h1>
-  <p>This is a static copy used for OTA and preview builds. Use the live hub UI to configure schedules.</p>
+<body>
+  <nav class="navbar">
+    <div class="navbar-content">
+      <div class="navbar-brand">
+        <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+        <div>
+          <h1 class="brand-title">Aquarium Hub</h1>
+          <p class="brand-subtitle">Feeder Schedule</p>
+        </div>
+      </div>
+      <div class="navbar-actions">
+        <a href="/device/manage-devices.html" class="btn btn-secondary">
+          <span>←</span> Back
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <aside class="sidebar"></aside>
+
+    <main class="main-content">
+      <div class="page-header">
+        <h1>Feeder Schedule</h1>
+        <p class="page-description">Static preview page for OTA and offline assets.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-content">
+          <p>This is a static copy used for OTA and preview builds. Use the live hub UI to configure schedules.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/scripts/sidebar-inject.js"></script>
 </body>
 </html>

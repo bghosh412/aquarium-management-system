@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0c4a6e">
+  <title>Manage Schedules - Aquarium Hub</title>
+  <link rel="stylesheet" href="/styles/styles.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-content">
+      <div class="navbar-brand">
+        <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+        <div>
+          <h1 class="brand-title">Aquarium Hub</h1>
+          <p class="brand-subtitle">Schedule Management</p>
+        </div>
+      </div>
+      <div class="navbar-actions">
+        <button class="btn btn-secondary" id="refreshSchedules">
+          <span>↻</span> Refresh
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <aside class="sidebar"></aside>
+
+    <main class="main-content">
+      <div class="page-header">
+        <h1>Upcoming Schedules</h1>
+        <p class="page-description">All upcoming automation tasks based on the hub schedule cache.</p>
+      </div>
+
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-content" style="display: flex; gap: 2rem; flex-wrap: wrap; align-items: center;">
+          <div>
+            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">Total Tasks</div>
+            <div style="font-size: 1.5rem; font-weight: 700;" id="taskCount">0</div>
+          </div>
+          <div>
+            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">Last Updated</div>
+            <div style="font-size: 1.1rem; font-weight: 600;" id="tasksUpdated">--</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+          <div style="display: flex; align-items: center; gap: 1rem;">
+            <h3>Schedule Queue</h3>
+            <span class="badge badge-secondary" id="scheduleBadge">0 tasks</span>
+          </div>
+          <button class="btn btn-secondary" id="deleteSelectedBtn" style="display: none;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.25rem;">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+            </svg>
+            Delete Selected (<span id="selectedCount">0</span>)
+          </button>
+        </div>
+        <div class="card-content" style="padding: 0;">
+          <div style="overflow-x: auto;">
+            <table class="node-table">
+              <thead>
+                <tr>
+                  <th style="width: 40px;"><input type="checkbox" id="selectAllCheckbox" title="Select all"></th>
+                  <th>Aquarium</th>
+                  <th>Device</th>
+                  <th>Status</th>
+                  <th>Next Task</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="scheduleTableBody"></tbody>
+            </table>
+          </div>
+          <div id="emptyState" style="display: none; text-align: center; padding: 2.5rem;">
+            <div style="font-size: 3rem; margin-bottom: 0.75rem;">📅</div>
+            <h3>No upcoming tasks</h3>
+            <p style="color: var(--color-text-secondary); margin-top: 0.5rem;">Schedules will appear here once configured for devices.</p>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/scripts/sidebar-inject.js"></script>
+  <script src="/scripts/app.js"></script>
+  <script src="/scripts/manage-schedule.js"></script>
+</body>
+</html>

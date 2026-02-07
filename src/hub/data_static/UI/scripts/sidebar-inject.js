@@ -27,6 +27,19 @@
             });
         })
         .catch(function() {
-            sidebar.innerHTML = '<nav class="sidebar-nav"><a class="nav-item" href="/index.html">Dashboard</a></nav>';
+            sidebar.innerHTML = ''
+                + '<div class="sidebar-header"><h3>Navigation</h3></div>'
+                + '<nav class="sidebar-nav">'
+                + '<a class="nav-item" href="/index.html">Dashboard</a>'
+                + '<a class="nav-item" href="/aquarium/aquarium-selection.html">Aquariums</a>'
+                + '<a class="nav-item" href="/device/manage-devices.html">Devices</a>'
+                + '<a class="nav-item" href="/manage-schedule.html">Schedule</a>'
+                + '<a class="nav-item" href="/settings/download-upload.html">Settings</a>'
+                + '</nav>'
+                + '<div class="sidebar-footer">'
+                + '<div class="system-info">'
+                + '<div class="info-item"><span class="info-label">Uptime</span><span class="info-value" id="uptime">--:--:--</span></div>'
+                + '<div class="info-item"><span class="info-label">Version</span><span class="info-value">v1.0.0</span></div>'
+                + '</div></div>';
         });
 })();

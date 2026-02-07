@@ -93,104 +93,63 @@
 
     <!-- Main Content Area -->
     <main class="main-content" style="margin-top:2.5rem;">
-      <!-- Dashboard Header -->
-      <div class="page-header">
-        <h2 class="page-title">Dashboard Overview</h2>
-        <p class="page-subtitle">Monitor and control your aquarium ecosystem</p>
-      </div>
+      <!-- Dashboard Overview Card -->
+      <div class="card" style="margin-bottom: 2rem;">
+        <div class="card-header">
+          <h3 class="card-title">Dashboard Overview</h3>
+          <span class="badge badge-info">Real-time Summary</span>
+        </div>
+        <div class="card-content">
+          <div class="status-list">
+            <div class="status-item">
+              <div class="status-label-group">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px; vertical-align: middle; color: #3b82f6;"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>
+                <span class="status-label">Active Aquariums</span>
+              </div>
+              <span class="badge badge-info" id="aquarium-count">0</span>
+            </div>
 
-      <!-- Loading Indicator -->
-      <div id="loadingIndicator" style="display: none; text-align: center; padding: 2rem;">
-        <div class="spinner" style="width: 40px; height: 40px; margin: 0 auto 1rem;"></div>
-        <p>Loading dashboard data...</p>
-      </div>
+            <div class="status-item">
+              <div class="status-label-group">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px; vertical-align: middle; color: #10b981;"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+                <span class="status-label">Connected Devices</span>
+              </div>
+              <span class="badge badge-success" id="device-count">0</span>
+            </div>
 
-      <!-- Stats Cards -->
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-icon blue">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
-              <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
-            </svg>
-          </div>
-          <div class="stat-info">
-            <div class="stat-label">Active Aquariums</div>
-            <div class="stat-value" id="aquarium-count">0</div>
+            <div class="status-item">
+              <div class="status-label-group">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px; vertical-align: middle; color: #f59e0b;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span class="status-label">Active Schedules</span>
+              </div>
+              <span class="badge badge-warning" id="schedule-count">0</span>
+            </div>
+
+            <div class="status-item">
+              <div class="status-label-group">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px; vertical-align: middle; color: #ef4444;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                <span class="status-label">System Alerts</span>
+              </div>
+              <span class="badge badge-danger" id="alert-count">0</span>
+            </div>
           </div>
         </div>
-
-        <div class="stat-card">
-          <div class="stat-icon green">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
-              <line x1="12" y1="18" x2="12.01" y2="18"></line>
-            </svg>
-          </div>
-          <div class="stat-info">
-            <div class="stat-label">Connected Devices</div>
-            <div class="stat-value" id="device-count">0</div>
-          </div>
-        </div>
-
-        <div class="stat-card">
-          <div class="stat-icon orange">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
-          </div>
-          <div class="stat-info">
-            <div class="stat-label">Active Schedules</div>
-            <div class="stat-value" id="schedule-count">0</div>
-          </div>
-        </div>
-
-        <div class="stat-card">
-          <div class="stat-icon red">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-              <line x1="12" y1="9" x2="12" y2="13"></line>
-              <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
-          </div>
-          <div class="stat-info">
-            <div class="stat-label">Alerts</div>
-            <div class="stat-value" id="alert-count">0</div>
-          </div>
-        </div>
-
-      <!-- Content Grid -->
-      </div>
-
-      <!-- System Log (Activity Log for WebSocket) -->
-      <div id="system-log" class="system-log" style="margin: 24px 0; padding: 16px; background: #181f2a; border-radius: 8px; min-height: 80px; max-height: 200px; overflow-y: auto; font-size: 0.95em; color: #b8c7e0;">
-        <!-- Activity log messages will appear here via JS -->
       </div>
 
       <!-- Content Grid -->
       <div class="content-grid">
-        <!-- Recent Activity -->
+        <!-- Upcoming Tasks Card -->
         <div class="card">
           <div class="card-header">
-            <h3 class="card-title">Recent Activity</h3>
-            <button class="btn-icon" title="Refresh">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="23 4 23 10 17 10"></polyline>
-                <polyline points="1 20 1 14 7 14"></polyline>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-              </svg>
-            </button>
+            <h3 class="card-title">Today's Upcoming Tasks</h3>
+            <span class="badge badge-warning" id="task-count">0 Pending</span>
           </div>
           <div class="card-content">
-            <div class="activity-list" id="activity-list">
-              <div class="activity-item">
-                <div class="activity-icon">
-                  <span class="activity-dot"></span>
-                </div>
-                <div class="activity-details">
-                  <div class="activity-title">System Initialized</div>
-                  <div class="activity-time">Just now</div>
+            <div id="upcoming-tasks-container" style="max-height: 250px; overflow-y: auto;">
+              <div id="tasks-list">
+                <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                  <div style="font-size: 2rem; margin-bottom: 0.5rem;">📅</div>
+                  <p>No tasks scheduled for today.</p>
                 </div>
               </div>
             </div>

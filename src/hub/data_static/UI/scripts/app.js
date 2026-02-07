@@ -8,38 +8,9 @@ let reconnectInterval = null;
 let uptimeInterval = null;
 let startTime = Date.now();
 
-// Add activity log entry
+// Add activity log entry (Console only now)
 function addActivityLog(message, type = 'info') {
-    const activityList = document.getElementById('activity-list');
-    if (!activityList) return;
-
-    const activityItem = document.createElement('div');
-    activityItem.className = 'activity-item';
-
-    const iconColor = {
-        'success': '#10b981',
-        'error': '#ef4444',
-        'warning': '#f59e0b',
-        'info': '#0ea5e9'
-    }[type] || '#0ea5e9';
-
-    activityItem.innerHTML = `
-        <div class="activity-icon">
-            <span class="activity-dot" style="background: ${iconColor}"></span>
-        </div>
-        <div class="activity-details">
-            <div class="activity-title">${message}</div>
-            <div class="activity-time">${new Date().toLocaleTimeString()}</div>
-        </div>
-    `;
-
-    // Insert at the beginning
-    activityList.insertBefore(activityItem, activityList.firstChild);
-
-    // Keep only last 10 entries
-    while (activityList.children.length > 10) {
-        activityList.removeChild(activityList.lastChild);
-    }
+    console.log(`[WS ${type.toUpperCase()}] ${message}`);
 }
 
 // Initialize on page load
@@ -173,7 +144,7 @@ function updateHubStatus(uptime) {
 function updateNodesList(nodeList) {
     nodes = {};
     const grid = document.getElementById('nodes-grid');
-    grid.innerHTML = '';
+    if (grid) grid.innerHTML = '';
     
     nodeList.forEach(node => {
         nodes[node.type] = node;
@@ -301,10 +272,7 @@ function padZero(num) {
 // ============================================================================
 
 function updateSystemStats() {
-    // This function is now only for hub-specific stats like memory and WiFi.
-    // Aquarium and device counts are handled by loadDashboardData().
-    
-    // Update memory status
+    // This function handles hub-specific stats like memory and WiFi.
     fetch('/api/status')
         .then(response => response.json())
         .then(data => {
@@ -313,18 +281,12 @@ function updateSystemStats() {
                 const usedPct = ((data.memory.heapUsed / data.memory.heapTotal) * 100).toFixed(1);
                 elem.textContent = `${usedPct}%`;
                 
-                // Update badge color based on usage
                 elem.className = 'badge';
-                if (usedPct < 50) {
-                    elem.classList.add('badge-success');
-                } else if (usedPct < 75) {
-                    elem.classList.add('badge-warning');
-                } else {
-                    elem.classList.add('badge-danger');
-                }
+                if (usedPct < 50) elem.classList.add('badge-success');
+                else if (usedPct < 75) elem.classList.add('badge-warning');
+                else elem.classList.add('badge-danger');
             }
             
-            // Update WiFi status (use wifi_rssi directly from API)
             const wifiElem = document.getElementById('wifi-status');
             if (wifiElem && data.wifi_rssi !== undefined) {
                 const rssi = data.wifi_rssi;
@@ -347,19 +309,17 @@ function updateSystemStats() {
 }
 
 // Load dashboard data from backend
-function loadDashboardData() {
+async function loadDashboardData() {
+    updateSystemStats();
+    
     // Load aquariums
     fetch('/api/aquariums')
         .then(response => response.json())
         .then(data => {
             if (data.aquariums && Array.isArray(data.aquariums)) {
                 const activeAquariums = data.aquariums.filter(a => a.enabled).length;
-                
-                // Update dashboard stats - using correct element ID
                 const aquariumCountElem = document.getElementById('aquarium-count');
                 if (aquariumCountElem) aquariumCountElem.textContent = activeAquariums;
-                
-                // Store in localStorage for other pages
                 localStorage.setItem('aquariums', JSON.stringify(data.aquariums));
             }
         })
@@ -370,21 +330,82 @@ function loadDashboardData() {
         .then(response => response.json())
         .then(data => {
             if (data.devices && Array.isArray(data.devices)) {
-                // Use the backend-injected `online` boolean for consistency with Manage Devices
-                const totalDevices = data.devices.length;
+                // Use same logic as manage-devices.js
                 const onlineDevices = data.devices.filter(d => d.online).length;
+                const totalDevices = data.devices.length;
                 const scheduleCount = data.devices.filter(d => d.schedules && d.schedules.length > 0).length;
+                const offlineDevices = totalDevices - onlineDevices;
 
-                // Update dashboard stats
                 const deviceCountElem = document.getElementById('device-count');
                 if (deviceCountElem) deviceCountElem.textContent = onlineDevices;
 
                 const scheduleCountElem = document.getElementById('schedule-count');
                 if (scheduleCountElem) scheduleCountElem.textContent = scheduleCount;
+                
+                const alertCountElem = document.getElementById('alert-count');
+                if (alertCountElem) alertCountElem.textContent = offlineDevices;
 
-                // Store in localStorage for other pages
                 localStorage.setItem('devices', JSON.stringify(data.devices));
             }
         })
         .catch(error => console.error('Error loading devices:', error));
+
+    // Load tasks
+    fetchUpcomingTasks();
+}
+
+async function fetchUpcomingTasks() {
+    try {
+        const response = await fetch('/api/next-tasks');
+        if (!response.ok) throw new Error('Tasks not found');
+        const data = await response.json();
+        
+        const container = document.getElementById('tasks-list');
+        const countBadge = document.getElementById('task-count');
+        
+        if (!data.tasks || data.tasks.length === 0) {
+            container.innerHTML = `
+                <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">📅</div>
+                    <p>No tasks scheduled for today.</p>
+                </div>`;
+            countBadge.textContent = '0 Pending';
+            return;
+        }
+
+        const now = new Date();
+        const currentTime = now.getHours() * 60 + now.getMinutes();
+
+        const tasksHtml = data.tasks.map(task => {
+            const [hours, minutes] = (task.time || '00:00').split(':').map(Number);
+            const taskMinutes = hours * 60 + minutes;
+            const isPending = taskMinutes >= currentTime;
+            
+            return `
+                <div class="task-item">
+                    <div class="task-time">${task.time || '--:--'}</div>
+                    <div class="task-info">
+                        <div class="task-name">${task.name || 'Unnamed Task'}</div>
+                        <div class="task-tank">${task.tankName || ('Tank ' + task.tankId)}</div>
+                    </div>
+                    <div class="task-status">
+                        <span class="badge ${isPending ? 'badge-warning' : 'badge-success'}">
+                            ${isPending ? 'Pending' : 'Done'}
+                        </span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        container.innerHTML = tasksHtml;
+        const pendingCount = data.tasks.filter(t => {
+            const [h, m] = (t.time || '00:00').split(':').map(Number);
+            return (h * 60 + m) >= currentTime;
+        }).length;
+        
+        countBadge.textContent = `${pendingCount} Pending`;
+        
+    } catch (error) {
+        console.error('Error fetching tasks:', error);
+    }
 }

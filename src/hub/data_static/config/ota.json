@@ -1,0 +1,52 @@
+{
+  "deviceTypes": [
+    {
+      "id": "light",
+      "name": "Lighting Node",
+      "nodeType": 2,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/Light/"
+    },
+    {
+      "id": "co2",
+      "name": "CO₂ Regulator Node",
+      "nodeType": 3,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/CO2/"
+    },
+    {
+      "id": "doser",
+      "name": "Doser Node",
+      "nodeType": 4,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/Doser/"
+    },
+    {
+      "id": "sensor",
+      "name": "Water Quality Sensor Node",
+      "nodeType": 5,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/Sensor/"
+    },
+    {
+      "id": "heater",
+      "name": "Heater Node",
+      "nodeType": 6,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/Heater/"
+    },
+    {
+      "id": "filter",
+      "name": "Filter Node",
+      "nodeType": 7,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/Filter/"
+    },
+    {
+      "id": "fish_feeder",
+      "name": "Fish Feeder Node",
+      "nodeType": 8,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/FishFeeder/"
+    },
+    {
+      "id": "repeater",
+      "name": "Repeater Node",
+      "nodeType": 9,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/Repeater/"
+    }
+  ]
+}

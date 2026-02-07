@@ -29,6 +29,12 @@ export const config = {
     otaFirmware: '/api/ota/firmware',
     otaLittlefs: '/api/ota/littlefs',
     otaAll: '/api/ota/all',
+    // Generic device OTA endpoints (replace {type} with device type: light, co2, heater, etc.)
+    nodesDeviceList: (type: string) => `/api/nodes/${type}/list`,
+    nodesDeviceCheckUpdate: (type: string) => `/api/nodes/${type}/check-update`,
+    nodesDeviceApplyUpdate: (type: string) => `/api/nodes/${type}/apply-update`,
+    nodesDeviceOtaStatus: (type: string) => `/api/nodes/${type}/ota-status`,
+    // Legacy endpoints (for backwards compatibility)
     nodesLightVersion: '/api/nodes/light/version',
     nodesLightList: '/api/nodes/light/list',
     reboot: '/api/reboot',

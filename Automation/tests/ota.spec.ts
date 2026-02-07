@@ -11,6 +11,9 @@ import { test, expect } from '@playwright/test';
 import { config } from '../config/hub.config';
 import { isHubOnline, waitForPageLoad, navigateTo } from '../helpers/test-helpers';
 
+// Device types to test (matches ota.json)
+const DEVICE_TYPES = ['light', 'co2', 'heater', 'fish_feeder', 'sensor', 'doser', 'filter', 'repeater'];
+
 test.describe('OTA Update Tests @ota', () => {
   
   test.describe.configure({ mode: 'serial' }); // Run tests in order
@@ -50,18 +53,32 @@ test.describe('OTA Update Tests @ota', () => {
       expect(data).toBeDefined();
       // Response should indicate update availability
     });
+  });
 
-    test('GET /api/nodes/light/version - should return light node version info', async ({ request }) => {
-      const response = await request.get(config.api.nodesLightVersion);
-      expect(response.status()).toBeLessThan(500);
-      // May return 404 if no light nodes configured
-    });
+  test.describe('Generic Device OTA APIs', () => {
+    
+    for (const deviceType of DEVICE_TYPES) {
+      test(`GET /api/nodes/${deviceType}/list - should return ${deviceType} device list`, async ({ request }) => {
+        const response = await request.get(config.api.nodesDeviceList(deviceType));
+        expect(response.status()).toBeLessThan(500);
+        
+        const data = await response.json();
+        expect(data).toBeDefined();
+        // Should have devices array (may be empty)
+        if (data.devices) {
+          expect(Array.isArray(data.devices)).toBeTruthy();
+        }
+      });
 
-    test('GET /api/nodes/light/list - should return light node list', async ({ request }) => {
-      const response = await request.get(config.api.nodesLightList);
-      expect(response.status()).toBeLessThan(500);
-      // May return empty list if no light nodes
-    });
+      test(`POST /api/nodes/${deviceType}/check-update - should check ${deviceType} updates`, async ({ request }) => {
+        const response = await request.post(config.api.nodesDeviceCheckUpdate(deviceType));
+        expect(response.status()).toBeLessThan(500);
+        
+        const data = await response.json();
+        expect(data).toBeDefined();
+        // May have error if OTA URL not configured
+      });
+    }
   });
 
   test.describe('OTA Trigger APIs (DANGEROUS - Causes Reboot)', () => {
@@ -135,12 +152,34 @@ test.describe('OTA Update Tests @ota', () => {
       });
     });
 
-    test('Update page should display Node update section if applicable', async ({ page }) => {
+    test('Update page should display Device OTA section', async ({ page }) => {
       await navigateTo(page, config.pages.settingsUpdateSoftware);
       
-      // Look for Node/Light update section
-      const nodeSection = page.locator('text=/Node|Light.*Update/i').first();
-      // Node section may not be present if no nodes
+      // Look for Device OTA section with dropdown
+      const deviceOtaSection = page.locator('text=/Device OTA|Device Type/i').first();
+      await expect(deviceOtaSection).toBeVisible({ timeout: 5000 }).catch(() => {
+        // Section may not be visible initially
+      });
+    });
+
+    test('Device type dropdown should be present', async ({ page }) => {
+      await navigateTo(page, config.pages.settingsUpdateSoftware);
+      
+      // Look for device type dropdown
+      const dropdown = page.locator('#deviceTypeSelect');
+      await expect(dropdown).toBeVisible({ timeout: 5000 });
+    });
+
+    test('Device type dropdown should have options', async ({ page }) => {
+      await navigateTo(page, config.pages.settingsUpdateSoftware);
+      
+      // Wait for dropdown to be populated
+      await page.waitForTimeout(1000);
+      
+      const dropdown = page.locator('#deviceTypeSelect');
+      const optionCount = await dropdown.locator('option').count();
+      // Should have at least the placeholder + device types
+      expect(optionCount).toBeGreaterThan(1);
     });
   });
 

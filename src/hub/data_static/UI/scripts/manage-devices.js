@@ -132,46 +132,48 @@ function renderDevices() {
         const statusText = device.online ? 'Online' : 'Offline';
         const isSelected = selectedDevices.has(device.mac);
         const deviceTypeLower = String(device.type || '').toLowerCase();
+        const typeName = getDeviceTypeName(device.type);
         
         return `
-            <div class="card" style="${isSelected ? 'border: 2px solid var(--color-primary);' : ''}">
+            <div class="card device-card" style="${isSelected ? 'border: 2px solid var(--color-primary); box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.1);' : ''}">
                 <div class="card-header">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        <input type="checkbox" class="checkbox" ${isSelected ? 'checked' : ''} 
-                               onchange="toggleDeviceSelection('${device.mac}', this.checked)">
-                        <h3 style="margin: 0;">${icon} ${device.name}</h3>
-                        <span class="badge badge-secondary">${getDeviceTypeName(device.type)}</span>
+                    <div class="device-header-top">
+                        <div class="device-name-container">
+                            <input type="checkbox" class="checkbox" ${isSelected ? 'checked' : ''} 
+                                   onchange="toggleDeviceSelection('${device.mac}', this.checked)">
+                            <h3 class="device-name" title="${device.name}">${icon} ${device.name}</h3>
+                        </div>
+                        <span class="badge ${statusClass}">${statusText}</span>
                     </div>
-                    <span class="badge ${statusClass}">${statusText}</span>
+                    <span class="badge badge-secondary device-type-badge">${typeName}</span>
                 </div>
                 <div class="card-body">
-                    <div style="margin-bottom: 1rem;">
-                        <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
-                            <strong>MAC:</strong> ${device.mac}
-                        </div>
-                        <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
-                            <strong>Tank:</strong> ${device.tankId}
-                        </div>
-                        <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
-                            <strong>Type:</strong> ${getDeviceTypeName(device.type)}
-                        </div>
+                    <div class="device-meta">
+                        <span class="meta-label">MAC:</span>
+                        <span class="meta-value">${device.mac}</span>
+                        
+                        <span class="meta-label">Tank:</span>
+                        <span class="meta-value">${device.tankId}</span>
                     </div>
                     
                     ${device.schedules && device.schedules.length > 0 ? `
-                        <div style="margin-top: 0.5rem;">
-                            <span class="badge badge-online">📅 ${device.schedules.length} schedule(s)</span>
+                        <div style="margin-top: 1rem;">
+                            <span class="badge badge-online" style="font-size: 0.75rem;">
+                                📅 ${device.schedules.length} Active Schedule${device.schedules.length > 1 ? 's' : ''}
+                            </span>
                         </div>
                     ` : ''}
                 </div>
-                <div class="card-footer" style="display: flex; gap: 0.5rem;">
-                    ${deviceTypeLower === 'light' || deviceTypeLower === 'lighting' || deviceTypeLower === 'lights' ? 
-                        `<button class="btn btn-primary device-action-btn" style="flex: 1;" onclick="viewDevice('${device.mac}')">🗓️ Schedule</button>` : 
-                        `<div style="flex: 1;"></div>`}
-                    <button class="btn btn-success device-action-btn" style="flex: 1;" onclick="setupDevice('${device.mac}')">
-                        ⚙️ Setup
+                <div class="card-footer">
+                    ${deviceTypeLower.includes('light') || deviceTypeLower.includes('feeder') || deviceTypeLower.includes('co2') || deviceTypeLower.includes('heater') ? 
+                        `<button class="device-action-btn btn-primary" onclick="viewDevice('${device.mac}')" title="View Schedules">
+                            <i class="fas fa-calendar-alt"></i> Schedule
+                        </button>` : ''}
+                    <button class="device-action-btn btn-success" onclick="setupDevice('${device.mac}')" title="Configure Device">
+                        <i class="fas fa-cog"></i> Setup
                     </button>
-                    <button class="btn btn-warning device-action-btn" style="flex: 1;" onclick="controlDevice('${device.mac}')">
-                        🎛️ Control
+                    <button class="device-action-btn btn-warning" onclick="controlDevice('${device.mac}')" title="Manual Control">
+                        <i class="fas fa-sliders-h"></i> Control
                     </button>
                 </div>
             </div>

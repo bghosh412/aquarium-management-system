@@ -8,6 +8,24 @@
     <meta name="theme-color" content="#0c4a6e">
     <title>Manage Aquarium - Aquarium Hub</title>
     <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        html, body {
+            height: 100%;
+            overflow: hidden;
+        }
+        .container {
+            height: calc(100vh - 82px);
+        }
+        .page-header { margin-bottom: 1.25rem; }
+        .form-group { margin-bottom: 0.85rem; }
+        .form-label { margin-bottom: 0.35rem; }
+        .form-input, .form-select { padding: 0.75rem 1rem; }
+        .device-card .card-body { padding: 1.25rem 1.50rem; }
+        .card-footer { padding: 0.85rem 1.25rem; }
+        .main-content { padding-top: 1.5rem; }
+        hr { margin: 1.25rem 0 !important; }
+        .device-card .card-header { padding: 1rem 1.25rem; }
+    </style>
 </head>
 <body>
     <!-- Navbar -->
@@ -41,17 +59,22 @@
                 <p class="page-description">Update aquarium settings and thresholds</p>
             </div>
 
-            <div class="card">
+            <div class="card device-card">
                 <div class="card-header">
-                    <h3>Aquarium Settings</h3>
-                    <span class="badge badge-online" id="statusBadge">Active</span>
+                    <div class="device-header-top">
+                        <div class="device-name-container">
+                            <h3 class="device-name"><i class="fas fa-edit"></i> Aquarium Settings</h3>
+                        </div>
+                        <span class="badge badge-online" id="statusBadge">Active</span>
+                    </div>
+                    <span class="badge badge-secondary device-type-badge">General Configuration</span>
                 </div>
                 <div class="card-body">
                     <form id="manageAquariumForm">
                         <!-- Tank ID (Read-only) -->
                         <div class="form-group">
                             <label for="tankId" class="form-label">Tank ID</label>
-                            <input type="number" id="tankId" class="form-input" readonly style="background: var(--color-bg); cursor: not-allowed;">
+                            <input type="number" id="tankId" class="form-input" readonly style="background: var(--bg-tertiary); cursor: not-allowed;">
                             <small class="form-help">Tank ID cannot be changed</small>
                         </div>
 
@@ -73,9 +96,9 @@
                             <input type="text" id="location" class="form-input" placeholder="e.g., Living Room">
                         </div>
 
-                        <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--color-border);">
+                        <hr style="margin: 1.25rem 0; border: none; border-top: 1px solid var(--border-color);">
 
-                        <h3 style="margin-bottom: 1.5rem;">Water Parameter Thresholds</h3>
+                        <h3 style="margin-bottom: 1rem; font-size: 0.95rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Water Parameter Thresholds</h3>
 
                         <!-- Temperature Range -->
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
@@ -112,32 +135,33 @@
                                 <input type="number" id="tdsMax" class="form-input" required>
                             </div>
                         </div>
-
-                        <!-- Action Buttons -->
-                        <div style="display: flex; gap: 1rem; margin-top: 2rem; flex-wrap: wrap;">
-                            <button type="submit" class="btn btn-primary" style="flex: 1; min-width: 150px;">
-                                <span>💾</span> Save Changes
-                            </button>
-                            <a href="aquarium-devices.html" class="btn btn-success" style="flex: 1; min-width: 150px; text-align: center; text-decoration: none;">
-                                <span>🔌</span> View Devices
-                            </a>
-                            <a href="aquarium-selection.html" class="btn btn-secondary" style="flex: 1; min-width: 150px; text-align: center; text-decoration: none;">
-                                Cancel
-                            </a>
-                        </div>
                     </form>
+                </div>
+                <div class="card-footer">
+                    <button type="submit" form="manageAquariumForm" class="device-action-btn btn-primary">
+                        <i class="fas fa-save"></i> Save Changes
+                    </button>
+                    <a id="viewDevicesBtn" href="#" class="device-action-btn btn-success" style="text-decoration: none;">
+                        <i class="fas fa-plug"></i> View Devices
+                    </a>
                 </div>
             </div>
 
             <!-- Danger Zone -->
-            <div class="card" style="border: 2px solid var(--color-accent-danger); margin-top: 2rem;">
-                <div class="card-header" style="background: rgba(239, 68, 68, 0.1);">
-                    <h3 style="color: var(--color-accent-danger);">Danger Zone</h3>
+            <div class="card device-card" style="margin-top: 1.25rem; border-color: rgba(220, 38, 38, 0.2);">
+                <div class="card-header" style="background: rgba(220, 38, 38, 0.05);">
+                    <div class="device-header-top">
+                        <div class="device-name-container">
+                            <h3 class="device-name" style="color: #dc2626;"><i class="fas fa-exclamation-triangle"></i> Danger Zone</h3>
+                        </div>
+                    </div>
                 </div>
                 <div class="card-body">
-                    <p style="margin-bottom: 1rem;">Once you delete an aquarium, there is no going back. Please be certain.</p>
-                    <button type="button" class="btn btn-danger" onclick="deleteAquarium()">
-                        <span>🗑️</span> Delete This Aquarium
+                    <p style="margin-bottom: 0; color: #7f1d1d; font-size: 0.95rem; font-weight: 500;">Once you delete an aquarium, all associated data and configurations will be permanently removed. This action cannot be undone.</p>
+                </div>
+                <div class="card-footer" style="background: rgba(220, 38, 38, 0.05);">
+                    <button type="button" class="device-action-btn btn-danger" onclick="deleteAquarium()">
+                        <i class="fas fa-trash-alt"></i> Delete This Aquarium
                     </button>
                 </div>
             </div>

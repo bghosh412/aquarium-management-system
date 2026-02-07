@@ -786,6 +786,65 @@ int countDevicesForAquarium(uint8_t tankId) {
 }
 
 // ============================================================================
+// GENERIC DEVICE OTA HELPERS
+// ============================================================================
+
+/**
+ * @brief Convert lowercase device type ID to uppercase type string for devices.json
+ * @param deviceTypeId Lowercase ID (e.g., "light", "co2", "heater")
+ * @return Uppercase type string (e.g., "LIGHT", "CO2", "HEATER")
+ */
+String deviceTypeIdToUpper(const String& deviceTypeId) {
+    String typeUpper = deviceTypeId;
+    typeUpper.toUpperCase();
+    // Handle special cases
+    if (typeUpper == "FISH_FEEDER") return "FISH_FEEDER";
+    return typeUpper;
+}
+
+/**
+ * @brief Get OTA URL for a device type from ota.json
+ * @param deviceTypeId Lowercase ID (e.g., "light", "co2")
+ * @return OTA base URL or empty string if not found
+ */
+String getDeviceTypeOtaUrl(const String& deviceTypeId) {
+    File file = FS_STATIC.open("/config/ota.json", "r");
+    if (!file) {
+        Serial.println("[DeviceOTA] ota.json not found");
+        return "";
+    }
+    
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        Serial.printf("[DeviceOTA] ota.json parse error: %s\n", error.c_str());
+        return "";
+    }
+    
+    JsonArray deviceTypes = doc["deviceTypes"];
+    for (JsonObject dt : deviceTypes) {
+        String id = dt["id"].as<String>();
+        if (id == deviceTypeId) {
+            return dt["otaUrl"].as<String>();
+        }
+    }
+    
+    Serial.printf("[DeviceOTA] Device type '%s' not found in ota.json\n", deviceTypeId.c_str());
+    return "";
+}
+
+/**
+ * @brief Check if device type is valid (exists in ota.json)
+ * @param deviceTypeId Lowercase ID
+ * @return true if valid
+ */
+bool isValidDeviceType(const String& deviceTypeId) {
+    return getDeviceTypeOtaUrl(deviceTypeId).length() > 0 || deviceTypeId.length() == 0;
+}
+
+// ============================================================================
 // CONFIGURATION LOADER (Using MicroCore ConfigManager)
 // ============================================================================
 
@@ -2785,6 +2844,11 @@ void setupWebServer() {
         serializeJson(doc, response);
         request->send(200, "application/json", response);
     });
+
+    // GET next tasks for dashboard
+    server.on("/api/next-tasks", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(FS_USER, NEXT_TASK_FILE, "application/json");
+    });
     
     // POST create new aquarium
     server.on("/api/aquariums", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
@@ -4323,44 +4387,16 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     });
 
     // ========================================================================
-    // NODE OTA ENDPOINTS
+    // NODE OTA ENDPOINTS (Generic for all device types)
     // ========================================================================
 
-    // GET Light node current version (from first online light device)
-    server.on("/api/nodes/light/version", HTTP_GET, [](AsyncWebServerRequest *request){
-        // Find first online light device from devices.json
-        File file = FS_USER.open("/config/devices.json", "r");
-        if (!file) {
-            request->send(200, "application/json", "{\"version\":null,\"error\":\"devices.json not found\"}");
-            return;
-        }
-
-        DynamicJsonDocument doc(8192);
-        DeserializationError error = deserializeJson(doc, file);
-        file.close();
-
-        if (error) {
-            request->send(200, "application/json", "{\"version\":null,\"error\":\"JSON parse error\"}");
-            return;
-        }
-
-        JsonArray devices = doc["devices"];
-        for (JsonObject device : devices) {
-            String type = device["type"].as<String>();
-            String status = device["status"].as<String>();
-            if (type == "LIGHT" && status == "ONLINE") {
-                uint8_t version = device["firmwareVersion"] | 0;
-                String response = "{\"version\":" + String(version) + "}";
-                request->send(200, "application/json", response);
-                return;
-            }
-        }
-
-        request->send(200, "application/json", "{\"version\":null,\"error\":\"No online light device\"}");
-    });
-
-    // GET Light node list (all light devices with online status and tank names)
-    server.on("/api/nodes/light/list", HTTP_GET, [](AsyncWebServerRequest *request){
+    // GET Device list for a specific type: /api/nodes/{type}/list
+    server.on("^\\/api\\/nodes\\/([a-z_]+)\\/list$", HTTP_GET, [](AsyncWebServerRequest *request){
+        String deviceTypeId = request->pathArg(0);
+        String deviceTypeUpper = deviceTypeIdToUpper(deviceTypeId);
+        
+        Serial.printf("[NodeOTA] GET /api/nodes/%s/list\n", deviceTypeId.c_str());
+        
         DynamicJsonDocument responseDoc(8192);
         JsonArray deviceArray = responseDoc.createNestedArray("devices");
 
@@ -4409,7 +4445,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             if (type.length() == 0) continue;
             String typeUpper = type;
             typeUpper.toUpperCase();
-            if (typeUpper != "LIGHT") continue;
+            if (typeUpper != deviceTypeUpper) continue;
 
             String macStr = device["mac"].as<String>();
             if (macStr.length() == 0) continue;
@@ -4437,18 +4473,24 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "application/json", response);
     });
 
-    // POST Check for light node update
-    server.on("/api/nodes/light/check-update", HTTP_POST, [](AsyncWebServerRequest *request){
-        if (config.lightNodeOtaUrl.length() == 0) {
-            request->send(200, "application/json", "{\"error\":\"LIGHT_NODE_OTA_URL not configured in hub_config.txt\"}");
+    // POST Check for device update: /api/nodes/{type}/check-update
+    server.on("^\\/api\\/nodes\\/([a-z_]+)\\/check-update$", HTTP_POST, [](AsyncWebServerRequest *request){
+        String deviceTypeId = request->pathArg(0);
+        String deviceTypeUpper = deviceTypeIdToUpper(deviceTypeId);
+        
+        Serial.printf("[NodeOTA] POST /api/nodes/%s/check-update\n", deviceTypeId.c_str());
+        
+        // Get OTA URL from ota.json
+        String baseUrl = getDeviceTypeOtaUrl(deviceTypeId);
+        if (baseUrl.length() == 0) {
+            String error = "{\"error\":\"OTA URL not configured for device type: " + deviceTypeId + "\"}";
+            request->send(200, "application/json", error);
             return;
         }
+        if (!baseUrl.endsWith("/")) baseUrl += "/";
 
         // Fetch version.txt
         std::unique_ptr<WiFiClient> client;
-        String baseUrl = config.lightNodeOtaUrl;
-        if (!baseUrl.endsWith("/")) baseUrl += "/";
-
         if (baseUrl.startsWith("https://")) {
             std::unique_ptr<WiFiClientSecure> secureClient(new WiFiClientSecure());
             secureClient->setInsecure();
@@ -4482,7 +4524,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         }
         int availableVersion = versionStr.toInt();
 
-        // Get current version from the first *actually online* light device (use live peer status)
+        // Get current version from the first online device of this type
         int currentVersion = 0;
         File devFile = FS_USER.open("/config/devices.json", "r");
         if (devFile) {
@@ -4493,10 +4535,9 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     String type = device["type"].as<String>();
                     if (type.length() == 0) continue;
 
-                    // Case-insensitive type check
                     String typeUpper = type;
                     typeUpper.toUpperCase();
-                    if (typeUpper != "LIGHT") continue;
+                    if (typeUpper != deviceTypeUpper) continue;
 
                     String macStr = device["mac"].as<String>();
                     if (macStr.length() == 0) continue;
@@ -4507,7 +4548,6 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                         continue;
                     }
 
-                    // Use live peer status (heartbeat/announce) to determine online
                     if (ESPNowManager::getInstance().isPeerOnline(mac)) {
                         currentVersion = device["firmwareVersion"] | 0;
                         break;
@@ -4523,7 +4563,6 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         bool hasFirmware = false;
         bool hasConfig = false;
 
-        // Check firmware.bin
         if (!http.begin(*client, baseUrl + "firmware.bin")) {
             Serial.println(" Failed to begin firmware.bin check");
         } else {
@@ -4532,7 +4571,6 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             http.end();
         }
 
-        // Check node_config.txt
         if (!http.begin(*client, baseUrl + "node_config.txt")) {
             Serial.println(" Failed to begin node_config.txt check");
         } else {
@@ -4548,14 +4586,15 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         responseDoc["availableVersion"] = availableVersion;
         responseDoc["hasFirmware"] = hasFirmware;
         responseDoc["hasConfig"] = hasConfig;
+        responseDoc["deviceType"] = deviceTypeId;
 
         String response;
         serializeJson(responseDoc, response);
         request->send(200, "application/json", response);
     });
 
-    // POST Apply light node update (async) - updates selected LIGHT devices
-    server.on("/api/nodes/light/apply-update", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+    // POST Apply device update (async): /api/nodes/{type}/apply-update
+    server.on("^\\/api\\/nodes\\/([a-z_]+)\\/apply-update$", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
         if (index == 0) {
             Serial.println("[NodeOTA] Received apply-update request");
@@ -4565,16 +4604,23 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             return;
         }
 
+        String deviceTypeId = request->pathArg(0);
+        Serial.printf("[NodeOTA] POST /api/nodes/%s/apply-update\n", deviceTypeId.c_str());
+
         // Check if OTA already in progress
         if (nodeOtaState.active) {
             request->send(200, "application/json", "{\"success\":false,\"error\":\"OTA transfer already in progress\"}");
             return;
         }
 
-        if (config.lightNodeOtaUrl.length() == 0) {
-            request->send(200, "application/json", "{\"success\":false,\"error\":\"LIGHT_NODE_OTA_URL not configured\"}");
+        // Get OTA URL from ota.json
+        String baseUrl = getDeviceTypeOtaUrl(deviceTypeId);
+        if (baseUrl.length() == 0) {
+            String error = "{\"success\":false,\"error\":\"OTA URL not configured for device type: " + deviceTypeId + "\"}";
+            request->send(200, "application/json", error);
             return;
         }
+        if (!baseUrl.endsWith("/")) baseUrl += "/";
 
         DynamicJsonDocument bodyDoc(1024);
         DeserializationError bodyError = deserializeJson(bodyDoc, data, len);
@@ -4588,9 +4634,6 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             request->send(200, "application/json", "{\"success\":false,\"error\":\"No devices selected\"}");
             return;
         }
-
-        String baseUrl = config.lightNodeOtaUrl;
-        if (!baseUrl.endsWith("/")) baseUrl += "/";
 
         uint8_t targetCount = 0;
         uint8_t targetMacs[10][6] = {0};
@@ -4615,7 +4658,8 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         }
 
         if (targetCount == 0) {
-            request->send(200, "application/json", "{\"success\":false,\"error\":\"No selected online light devices found\"}");
+            String error = "{\"success\":false,\"error\":\"No selected online " + deviceTypeId + " devices found\"}";
+            request->send(200, "application/json", error);
             return;
         }
 
@@ -4638,7 +4682,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             0  // Core 0
         );
 
-        Serial.printf("[NodeOTA] Started async transfer to %d device(s)\n", targetCount);
+        Serial.printf("[NodeOTA] Started async transfer to %d %s device(s)\n", targetCount, deviceTypeId.c_str());
         for (int i = 0; i < targetCount; i++) {
             Serial.printf("  [%d] %02X:%02X:%02X:%02X:%02X:%02X\n", i + 1,
                           targetMacs[i][0], targetMacs[i][1], targetMacs[i][2],
@@ -4652,8 +4696,8 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "application/json", response);
     });
 
-    // GET OTA transfer status
-    server.on("/api/nodes/light/ota-status", HTTP_GET, [](AsyncWebServerRequest *request){
+    // GET OTA transfer status: /api/nodes/{type}/ota-status (type is ignored - single OTA state)
+    server.on("^\\/api\\/nodes\\/([a-z_]+)\\/ota-status$", HTTP_GET, [](AsyncWebServerRequest *request){
         DynamicJsonDocument doc(512);
         doc["active"] = nodeOtaState.active;
         doc["completed"] = nodeOtaState.completed;

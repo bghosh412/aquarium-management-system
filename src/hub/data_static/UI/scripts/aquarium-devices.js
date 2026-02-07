@@ -151,33 +151,33 @@ function renderDevices() {
         const deviceTypeLower = String(device.type || '').toLowerCase();
         
         return `
-            <div class="card">
+            <div class="card device-card">
                 <div class="card-header">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        <h3 style="margin: 0;">${icon} ${device.name}</h3>
-                        <span class="badge badge-secondary">${getDeviceTypeName(device.type)}</span>
+                    <div class="device-header-top">
+                        <div class="device-name-container">
+                            <h3 class="device-name" title="${device.name}">${icon} ${device.name}</h3>
+                        </div>
+                        <span class="badge ${statusClass}">${statusText}</span>
                     </div>
-                    <span class="badge ${statusClass}">${statusText}</span>
+                    <span class="badge badge-secondary device-type-badge">${getDeviceTypeName(device.type)}</span>
                 </div>
                 <div class="card-body">
-                    <div style="margin-bottom: 1rem;">
-                        <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
-                            <strong>MAC:</strong> ${device.mac}
-                        </div>
+                    <div class="device-meta">
+                        <span class="meta-label">MAC:</span>
+                        <span class="meta-value">${device.mac}</span>
                         ${device.ip ? `
-                            <div style="color: var(--color-text-secondary); font-size: 0.875rem;">
-                                <strong>IP:</strong> ${device.ip}
-                            </div>
+                            <span class="meta-label">IP:</span>
+                            <span class="meta-value">${device.ip}</span>
                         ` : ''}
                     </div>
                     
                     ${device.online && device.lastSeen ? `
-                        <div style="color: var(--color-text-secondary); font-size: 0.75rem;">
+                        <div style="margin-top: 1rem; color: var(--color-text-secondary); font-size: 0.75rem;">
                             Last seen: ${formatTimestamp(device.lastSeen)}
                         </div>
                     ` : ''}
                 </div>
-                <div class="card-footer" style="display: flex; gap: 0.5rem;">
+                <div class="card-footer">
                     ${getDeviceActions(device)}
                 </div>
             </div>
@@ -219,29 +219,29 @@ function getDeviceActions(device) {
     switch(deviceType) {
         case 'light':
             return `
-                <a href="../device/control/light-control.html?mac=${device.mac}" class="btn btn-primary" style="flex: 1;">
-                    🎚️ Control
+                <a href="../device/control/light-control.html?mac=${device.mac}" class="device-action-btn btn-primary">
+                    <i class="fas fa-sliders-h"></i> Control
                 </a>
-                <a href="../device/schedule/light-schedule.html?mac=${device.mac}" class="btn btn-secondary" style="flex: 1;">
-                    📅 Schedule
+                <a href="../device/schedule/light-schedule.html?mac=${device.mac}" class="device-action-btn btn-secondary">
+                    <i class="fas fa-calendar-alt"></i> Schedule
                 </a>
             `;
         case 'heater':
             return `
-                <button class="btn btn-primary" style="flex: 1;" onclick="controlHeater('${device.mac}')">
-                    🌡️ Control
+                <button class="device-action-btn btn-primary" onclick="controlHeater('${device.mac}')">
+                    <i class="fas fa-thermometer-half"></i> Control
                 </button>
             `;
         case 'feeder':
             return `
-                <button class="btn btn-primary" style="flex: 1;" onclick="feedNow('${device.mac}')">
-                    🐟 Feed Now
+                <button class="device-action-btn btn-primary" onclick="feedNow('${device.mac}')">
+                    <i class="fas fa-fish"></i> Feed Now
                 </button>
             `;
         default:
             return `
-                <button class="btn btn-secondary" style="flex: 1;" onclick="viewDeviceDetails('${device.mac}')">
-                    ℹ️ Details
+                <button class="device-action-btn btn-secondary" onclick="viewDeviceDetails('${device.mac}')">
+                    <i class="fas fa-info-circle"></i> Details
                 </button>
             `;
     }

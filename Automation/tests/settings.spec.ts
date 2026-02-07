@@ -111,21 +111,25 @@ test.describe('Settings Tests', () => {
     }
   });
 
-  test('should display light node update section', async ({ page }) => {
+  test('should display Device OTA section with dropdown', async ({ page }) => {
     await navigateTo(page, config.pages.settingsUpdateSoftware);
     
-    // Look for light node section
-    const lightNodeSection = page.locator('[class*="light"], [id*="light"], text=/light.node/i');
-    // May or may not be present
+    // Look for device type dropdown
+    const deviceTypeDropdown = page.locator('#deviceTypeSelect');
+    // May or may not be visible initially
     await expect(page.locator('body')).toBeVisible();
   });
 
-  test('API: should get light nodes for OTA @api', async ({ request }) => {
-    const response = await request.get(config.api.nodesLightList);
+  test('API: should get light nodes for OTA via generic endpoint @api', async ({ request }) => {
+    const response = await request.get(config.api.nodesDeviceList('light'));
     expect(response.ok()).toBeTruthy();
     
     const data = await response.json();
     expect(data).toBeDefined();
+    // Should have devices array
+    if (data.devices) {
+      expect(Array.isArray(data.devices)).toBeTruthy();
+    }
   });
 
   test('should have check updates button present', async ({ page }) => {

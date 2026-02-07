@@ -2871,22 +2871,140 @@ void setupWebServer() {
     // POST delete aquarium (using query parameter)
     server.on("/api/aquarium/delete", HTTP_POST, [](AsyncWebServerRequest *request){
         if (!request->hasParam("id")) {
-            request->send(400, "text/plain", "Missing id parameter");
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing id parameter\"}");
             return;
         }
-        
+
         uint8_t id = request->getParam("id")->value().toInt();
-        
-        if (!AquariumManager::getInstance().removeAquarium(id)) {
-            request->send(404, "text/plain", "Aquarium not found");
+        Serial.printf("Request: delete aquarium %d\n", id);
+
+        // 1) Find all provisioned devices that belong to this aquarium (from devices.json)
+        DynamicJsonDocument devicesDoc(8192);
+        File devicesFile = FS_USER.open("/config/devices.json", "r");
+        std::vector<String> devicesToRemove;
+        if (devicesFile) {
+            DeserializationError derr = deserializeJson(devicesDoc, devicesFile);
+            devicesFile.close();
+            if (!derr) {
+                JsonArray devices = devicesDoc["devices"].as<JsonArray>();
+                for (JsonObject d : devices) {
+                    uint8_t tank = d["tankId"] | 0;
+                    if (tank == id) {
+                        String mac = d["mac"].as<String>();
+                        if (mac.length()) devicesToRemove.push_back(mac);
+                    }
+                }
+            }
+        }
+
+        // 2) Remove schedules (feeder & light) that reference this aquarium or its devices
+        auto removeSchedulesForTank = [&](const char* path) -> bool {
+            File f = FS_USER.open(path, "r");
+            if (!f) return true; // missing file -> nothing to do
+            DynamicJsonDocument doc(8192);
+            DeserializationError err = deserializeJson(doc, f);
+            f.close();
+            if (err) {
+                Serial.printf("[AUDIT] Failed to parse %s: %s\n", path, err.c_str());
+                return false;
+            }
+            JsonArray schedules = doc["schedules"].as<JsonArray>();
+            if (schedules.isNull()) return true;
+
+            for (int i = (int)schedules.size() - 1; i >= 0; --i) {
+                JsonObject s = schedules[i];
+                // Match by explicit tankId or by device mac
+                if (s.containsKey("tankId") && (uint8_t)(s["tankId"].as<uint8_t>()) == id) {
+                    schedules.remove(i);
+                    continue;
+                }
+                if (s.containsKey("mac")) {
+                    String mac = s["mac"].as<String>();
+                    // If mac belongs to this tank, remove
+                    for (auto &m : devicesToRemove) {
+                        if (mac.equalsIgnoreCase(m)) {
+                            schedules.remove(i);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Write back
+            File out = FS_USER.open(path, "w");
+            if (!out) {
+                Serial.printf("[AUDIT] Failed to open %s for write\n", path);
+                return false;
+            }
+            serializeJson(doc, out);
+            out.close();
+            return true;
+        };
+
+        bool ok = true;
+        ok &= removeSchedulesForTank("/config/schedule/feeder-schedule.json");
+        ok &= removeSchedulesForTank("/config/schedule/light-schedule.json");
+
+        if (!ok) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to prune schedules\"}");
             return;
         }
-        
-        // Save to file
+
+        // 3) Remove devices (JSON + in-memory + peers) belonging to this aquarium
+        if (!devicesFile) {
+            // reload if needed
+            devicesFile = FS_USER.open("/config/devices.json", "r");
+        }
+        DynamicJsonDocument devicesDoc2(8192);
+        if (devicesFile) {
+            deserializeJson(devicesDoc2, devicesFile);
+            devicesFile.close();
+        }
+        JsonArray devicesArr = devicesDoc2["devices"].as<JsonArray>();
+        if (!devicesArr.isNull()) {
+            for (int i = (int)devicesArr.size() - 1; i >= 0; --i) {
+                JsonObject d = devicesArr[i];
+                uint8_t tank = d["tankId"] | 0;
+                if (tank == id) {
+                    String mac = d["mac"].as<String>();
+
+                    // Remove from light-devices and schedules (reuse delete-device logic)
+                    // Remove from devicesArr
+                    devicesArr.remove(i);
+
+                    // Convert mac to bytes and remove from in-memory registry
+                    uint8_t macBytes[6] = {0};
+                    if (sscanf(mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                               &macBytes[0], &macBytes[1], &macBytes[2], &macBytes[3], &macBytes[4], &macBytes[5]) == 6) {
+                        AquariumManager::getInstance().removeDevice(macBytes);
+                        ESPNowManager::getInstance().removePeer(macBytes);
+                    }
+                }
+            }
+
+            // Persist devices.json
+            File outDev = FS_USER.open("/config/devices.json", "w");
+            if (!outDev) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write devices.json\"}");
+                return;
+            }
+            serializeJson(devicesDoc2, outDev);
+            outDev.close();
+        }
+
+        // 4) Rebuild next-task.json from remaining schedules to ensure no tasks remain for this tank
+        rebuildNextTasks();
+
+        // 5) Finally remove aquarium from manager and persist
+        if (!AquariumManager::getInstance().removeAquarium(id)) {
+            request->send(404, "application/json", "{\"success\":false,\"error\":\"Aquarium not found\"}");
+            return;
+        }
+
         saveAquariumsToFile();
-        
-        request->send(200, "text/plain", "Aquarium deleted successfully");
-        Serial.printf(" Deleted aquarium ID: %d\\n", id);
+
+        request->send(200, "application/json", "{\"success\":true}");
+        Serial.printf(" Deleted aquarium ID: %d (cascaded: schedules/devices/next-tasks)\n", id);
     });
     
     // GET unmapped devices

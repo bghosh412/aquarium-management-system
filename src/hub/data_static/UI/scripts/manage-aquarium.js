@@ -6,12 +6,15 @@ let currentAquarium = null;
 document.addEventListener('DOMContentLoaded', () => {
     // Get tank ID from URL
     const params = new URLSearchParams(window.location.search);
-    currentTankId = parseInt(params.get('tankId')) || parseInt(localStorage.getItem('selectedTankId'));
+    const tankIdParam = params.get('tankId') || params.get('id');
+    currentTankId = parseInt(tankIdParam) || parseInt(localStorage.getItem('selectedTankId'));
     
     if (!currentTankId) {
         window.location.href = 'aquarium-selection.html';
         return;
     }
+
+    localStorage.setItem('selectedTankId', String(currentTankId));
     
     loadAquariumData();
     
@@ -139,6 +142,10 @@ function saveAquarium() {
 }
 
 function deleteAquarium() {
+    if (!currentTankId) {
+        showNotification('Missing aquarium id', 'error');
+        return;
+    }
     if (!confirm('Are you sure you want to delete this aquarium? This action cannot be undone.')) {
         return;
     }
@@ -162,64 +169,3 @@ function deleteAquarium() {
         showNotification('Error deleting aquarium', 'error');
     });
 }
-
-// Remove old WebSocket-based delete function
-/*
-function deleteAquarium() {
-    if (!confirm('Are you sure you want to delete this aquarium? This action cannot be undone.')) {
-        return;
-    }
-    
-    // Send to hub via WebSocket
-    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
-        sendCommand({
-            type: 'deleteAquarium',
-            tankId: currentTankId
-        });
-    }
-    
-    // Remove from localStorage
-    const aquariums = JSON.parse(localStorage.getItem('aquariums') || '[]');
-    const filtered = aquariums.filter(a => a.tankId !== currentTankId);
-    localStorage.setItem('aquariums', JSON.stringify(filtered));
-    
-    showNotification('Aquarium deleted', 'success');
-    
-    setTimeout(() => {
-        window.location.href = 'aquarium-selection.html';
-    }, 1500);
-}
-
-function showNotification(message, type) {
-    const notification = document.createElement('div');
-    notification.style.cssText = `
-        position: fixed;
-        top: 80px;
-        right: 20px;
-        padding: 1rem 1.5rem;
-        background: ${type === 'success' ? 'var(--color-accent)' : 'var(--color-accent-danger)'};
-        color: white;
-        border-radius: var(--radius-md);
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        z-index: 10000;
-        animation: slideIn 0.3s ease;
-    `;
-    notification.textContent = message;
-    
-    document.body.appendChild(notification);
-    
-    setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease';
-        setTimeout(() => notification.remove(), 300);
-    }, 3000);
-}
-
-// Handle WebSocket aquarium data
-function handleAquariumUpdate(data) {
-    if (data.type === 'aquariumData' && data.tankId === currentTankId) {
-        currentAquarium = data.aquarium;
-        populateForm();
-    }
-}
-
-window.handleAquariumUpdate = handleAquariumUpdate;

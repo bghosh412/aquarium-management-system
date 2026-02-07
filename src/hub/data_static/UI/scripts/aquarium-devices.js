@@ -255,7 +255,7 @@ function formatTimestamp(timestamp) {
 
 function editAquarium() {
     if (aquarium) {
-        window.location.href = `manage-aquarium.html?id=${aquarium.id}`;
+        window.location.href = `manage-aquarium.html?tankId=${aquarium.id}`;
     }
 }
 

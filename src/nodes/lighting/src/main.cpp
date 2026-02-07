@@ -15,7 +15,8 @@
 // LIGHTING NODE - Controls aquarium lighting (3 channels ON/OFF)
 // ============================================================================
 // Hardware: 3 digital outputs for LED control (White, Blue, Red)
-// Fail-safe: TURN THE 3 PINS TO LOW
+// Relay Type: LOW-level trigger (LOW = relay ON, HIGH = relay OFF)
+// Fail-safe: TURN THE 3 PINS TO HIGH (relays OFF)
 // Pin Configuration: D1 (White), D2 (Blue), D5 (Red)
 // ============================================================================
 
@@ -29,7 +30,7 @@ struct LightingState {
     bool channel1On;
     bool channel2On;
     bool channel3On;
-} lightState = {false, false, false};
+} lightState = {true, true, true};
 
 // ============================================================================
 // HARDWARE IMPLEMENTATION (Required by NodeBase)
@@ -39,10 +40,8 @@ void setupHardware() {
     // Initialize pin state persistence
     initPinStatePersistence();
     
-    // Configure pins as outputs
-    pinMode(PIN_LED_CHANNEL1, OUTPUT);
-    pinMode(PIN_LED_CHANNEL2, OUTPUT);
-    pinMode(PIN_LED_CHANNEL3, OUTPUT);
+    // NOTE: pinMode already called in setup() for early HIGH state
+    // Pins are already configured as OUTPUT and set HIGH (relays OFF)
     
     // Register pins for persistence tracking
     registerPersistentPin(PIN_LED_CHANNEL1, "CH1_White");
@@ -54,9 +53,10 @@ void setupHardware() {
     
     if (restored > 0) {
         // Sync lightState struct with restored physical pin states
-        lightState.channel1On = (digitalRead(PIN_LED_CHANNEL1) == HIGH);
-        lightState.channel2On = (digitalRead(PIN_LED_CHANNEL2) == HIGH);
-        lightState.channel3On = (digitalRead(PIN_LED_CHANNEL3) == HIGH);
+        // LOW-level trigger: LOW = relay ON, HIGH = relay OFF
+        lightState.channel1On = (digitalRead(PIN_LED_CHANNEL1) == LOW);
+        lightState.channel2On = (digitalRead(PIN_LED_CHANNEL2) == LOW);
+        lightState.channel3On = (digitalRead(PIN_LED_CHANNEL3) == LOW);
         
         if (nodeConfig.debugSerial) {
             Serial.printf("[OK] Restored %d pin states from previous session\n", restored);
@@ -66,13 +66,13 @@ void setupHardware() {
                           lightState.channel3On ? "ON" : "OFF");
         }
     } else {
-        // No saved states - start with lights off
-        persistentDigitalWrite(PIN_LED_CHANNEL1, LOW);
-        persistentDigitalWrite(PIN_LED_CHANNEL2, LOW);
-        persistentDigitalWrite(PIN_LED_CHANNEL3, LOW);
+        // No saved states - start with lights off (HIGH = relay OFF for LOW-level trigger)
+        persistentDigitalWrite(PIN_LED_CHANNEL1, HIGH);
+        persistentDigitalWrite(PIN_LED_CHANNEL2, HIGH);
+        persistentDigitalWrite(PIN_LED_CHANNEL3, HIGH);
         
         if (nodeConfig.debugSerial) {
-            Serial.println("[OK] Lighting hardware initialized (D1/D2/D5) - all OFF");
+            Serial.println("[OK] Lighting hardware initialized (D1/D2/D5) - all OFF (pins HIGH)");
         }
     }
 }
@@ -86,18 +86,21 @@ void enterFailSafeMode() {
     lightState.channel2On = false;
     lightState.channel3On = false;
 
-    // Apply immediately
-    updateHardware();
+    // Apply immediately - set pins HIGH (relay OFF for LOW-level trigger)
+    persistentDigitalWrite(PIN_LED_CHANNEL1, HIGH);
+    persistentDigitalWrite(PIN_LED_CHANNEL2, HIGH);
+    persistentDigitalWrite(PIN_LED_CHANNEL3, HIGH);
 
     if (nodeConfig.debugESPNOW) {
-        Serial.println("[OK] Fail-safe applied: ch1=0 ch2=0 ch3=0");
+        Serial.println("[OK] Fail-safe applied: all pins HIGH (relays OFF)");
     }
 }
 
 static void readPinStatus(uint8_t* statusData) {
-    statusData[0] = (digitalRead(PIN_LED_CHANNEL1) == HIGH) ? 1 : 0;
-    statusData[1] = (digitalRead(PIN_LED_CHANNEL2) == HIGH) ? 1 : 0;
-    statusData[2] = (digitalRead(PIN_LED_CHANNEL3) == HIGH) ? 1 : 0;
+    // LOW-level trigger: LOW = relay ON (report 1), HIGH = relay OFF (report 0)
+    statusData[0] = (digitalRead(PIN_LED_CHANNEL1) == LOW) ? 1 : 0;
+    statusData[1] = (digitalRead(PIN_LED_CHANNEL2) == LOW) ? 1 : 0;
+    statusData[2] = (digitalRead(PIN_LED_CHANNEL3) == LOW) ? 1 : 0;
 }
 
 void handleCommand(const uint8_t* mac, const uint8_t* data, size_t len) {
@@ -217,9 +220,10 @@ void handleCommand(const uint8_t* mac, const uint8_t* data, size_t len) {
 
 void updateHardware() {
     // Apply lighting state to hardware pins using persistent writes
-    persistentDigitalWrite(PIN_LED_CHANNEL1, lightState.channel1On ? HIGH : LOW);
-    persistentDigitalWrite(PIN_LED_CHANNEL2, lightState.channel2On ? HIGH : LOW);
-    persistentDigitalWrite(PIN_LED_CHANNEL3, lightState.channel3On ? HIGH : LOW);
+    // LOW-level trigger: ON = LOW, OFF = HIGH
+    persistentDigitalWrite(PIN_LED_CHANNEL1, lightState.channel1On ? LOW : HIGH);
+    persistentDigitalWrite(PIN_LED_CHANNEL2, lightState.channel2On ? LOW : HIGH);
+    persistentDigitalWrite(PIN_LED_CHANNEL3, lightState.channel3On ? LOW : HIGH);
 }
 
 // ============================================================================
@@ -247,6 +251,18 @@ void onCommandReceivedWrapper(const uint8_t* mac, const uint8_t* data, size_t le
 // ============================================================================
 
 void setup() {
+    // =========================================================================
+    // CRITICAL: Set relay pins HIGH immediately on boot (before anything else)
+    // LOW-level trigger relays: HIGH = OFF, LOW = ON
+    // This prevents momentary relay activation during startup
+    // =========================================================================
+    pinMode(PIN_LED_CHANNEL1, OUTPUT);
+    pinMode(PIN_LED_CHANNEL2, OUTPUT);
+    pinMode(PIN_LED_CHANNEL3, OUTPUT);
+    digitalWrite(PIN_LED_CHANNEL1, HIGH);  // Relay OFF
+    digitalWrite(PIN_LED_CHANNEL2, HIGH);  // Relay OFF
+    digitalWrite(PIN_LED_CHANNEL3, HIGH);  // Relay OFF
+    
     Serial.begin(115200);
     delay(2000);
     

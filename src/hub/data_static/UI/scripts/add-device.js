@@ -72,12 +72,14 @@ function getDeviceIcon(type) {
         'FISH_FEEDER': '🐟',
         'SENSOR': '📊',
         'REPEATER': '📡',
+        'WAVE_MAKER': '🌊',
         // Legacy lowercase support
         'light': '💡',
         'co2': '🫧',
         'heater': '🔥',
         'feeder': '🐟',
         'sensor': '📊',
+        'wavemaker': '🌊',
         'repeater': '📡'
     };
     return icons[type] || '🔌';
@@ -91,12 +93,14 @@ function getDeviceTypeName(type) {
         'FISH_FEEDER': 'Fish Feeder',
         'SENSOR': 'Water Quality Sensor',
         'REPEATER': 'Repeater',
+        'WAVE_MAKER': 'Wave Maker',
         // Legacy lowercase support
         'light': 'Light Controller',
         'co2': 'CO₂ Regulator',
         'heater': 'Heater',
         'feeder': 'Fish Feeder',
         'sensor': 'Water Quality Sensor',
+        'wavemaker': 'Wave Maker',
         'repeater': 'Repeater'
     };
     return names[type] || 'Unknown';
@@ -216,6 +220,7 @@ function registerDiscoveredDevice(mac) {
         'HEATER': 'heater',
         'FISH_FEEDER': 'feeder',
         'SENSOR': 'sensor',
+        'WAVE_MAKER': 'wavemaker',
         'REPEATER': 'repeater'
     };
     const formType = typeMapping[device.type] || device.type.toLowerCase();
@@ -266,6 +271,7 @@ function addDeviceManually() {
         'heater': 'HEATER',
         'feeder': 'FISH_FEEDER',
         'sensor': 'SENSOR',
+        'wavemaker': 'WAVE_MAKER',
         'repeater': 'REPEATER'
     };
 

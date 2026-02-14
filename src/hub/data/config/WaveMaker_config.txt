@@ -1,0 +1,37 @@
+# ============================================================================
+# Wave Maker Configuration - Hub Side
+# ============================================================================
+# This file stores wave maker PWM parameters per device MAC address.
+# The hub reads this file to know each wave maker's operating limits.
+#
+# Format: One section per device, separated by blank lines
+# Each device section starts with MAC= and contains KEY=VALUE pairs
+#
+# ============================================================================
+# PARAMETERS:
+#   MAC              - MAC address of the wave maker node
+#   PWM_FREQUENCY    - PWM frequency in Hz (default: 200)
+#   PWM_RESOLUTION   - PWM resolution bits (default: 10, i.e. 0-1023)
+#   MAX_DUTY_PERCENT - Maximum allowed duty cycle % (default: 95.0)
+#   MIN_DUTY_PERCENT - Minimum duty cycle % before pump stalls (default: 30.0)
+#   SOFT_START       - Enable soft start ramp (true/false, default: true)
+#   SOFT_START_MS    - Soft start ramp duration in milliseconds (default: 3000)
+#   DEFAULT_DUTY     - Default duty cycle % when started (default: 60.0)
+#   DESCRIPTION      - Human-readable description
+# ============================================================================
+#
+# Example entry (uncomment and set real MAC when device is provisioned):
+#
+# MAC=AA:BB:CC:DD:EE:FF
+# PWM_FREQUENCY=200
+# PWM_RESOLUTION=10
+# MAX_DUTY_PERCENT=95.0
+# MIN_DUTY_PERCENT=30.0
+# SOFT_START=true
+# SOFT_START_MS=3000
+# DEFAULT_DUTY=60.0
+# DESCRIPTION=Main Tank Wave Maker
+#
+# ============================================================================
+# Add wave maker devices below (one section per MAC):
+# ============================================================================

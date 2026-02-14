@@ -1060,6 +1060,107 @@ static void sendFeederCommand(const uint8_t* mac, uint16_t pwmValue, uint32_t du
                   result ? "OK" : "FAILED");
 }
 
+// ============================================================================
+// WAVE MAKER COMMAND HELPERS
+// ============================================================================
+
+// Helper: Send wave maker PWM command via ESP-NOW (duty cycle % as float)
+static void sendWaveMakerCommand(const uint8_t* mac, float dutyPercent) {
+    CommandMessage cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.header.type = MessageType::COMMAND;
+    cmd.header.tankId = 1;
+    cmd.header.nodeType = NodeType::HUB;
+    cmd.header.timestamp = millis();
+    cmd.header.sequenceNum = 0;
+    cmd.commandId = millis() & 0xFF;
+    cmd.commandSeqID = 0;
+    cmd.finalCommand = true;
+
+    // Command format: [cmdType=0x01][duty_b0][duty_b1][duty_b2][duty_b3]
+    cmd.commandData[0] = 0x01;  // CMD_PWM
+    memcpy(&cmd.commandData[1], &dutyPercent, sizeof(float));
+
+    bool result = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+    Serial.printf("[WAVEMAKER] Sent PWM command duty=%.1f%% to %02X:%02X:%02X:%02X:%02X:%02X - %s\n",
+                  dutyPercent, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                  result ? "OK" : "FAILED");
+}
+
+// Helper: Send wave maker STOP command via ESP-NOW
+static void sendWaveMakerStop(const uint8_t* mac) {
+    CommandMessage cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.header.type = MessageType::COMMAND;
+    cmd.header.tankId = 1;
+    cmd.header.nodeType = NodeType::HUB;
+    cmd.header.timestamp = millis();
+    cmd.header.sequenceNum = 0;
+    cmd.commandId = millis() & 0xFF;
+    cmd.commandSeqID = 0;
+    cmd.finalCommand = true;
+
+    cmd.commandData[0] = 0x00;  // CMD_STOP
+
+    bool result = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+    Serial.printf("[WAVEMAKER] Sent STOP command to %02X:%02X:%02X:%02X:%02X:%02X - %s\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                  result ? "OK" : "FAILED");
+}
+
+// Helper: Load WaveMaker config for a specific MAC from /config/WaveMaker_config.txt
+// Returns default values if not found. Populates output params.
+static bool loadWaveMakerConfig(const String& macStr, float& maxDuty, float& minDuty, float& defaultDuty) {
+    // Set defaults
+    maxDuty = 95.0f;
+    minDuty = 30.0f;
+    defaultDuty = 60.0f;
+
+    if (!FS_STATIC.exists("/config/WaveMaker_config.txt")) {
+        Serial.println("[WAVEMAKER] Config file not found, using defaults");
+        return false;
+    }
+
+    File f = FS_STATIC.open("/config/WaveMaker_config.txt", "r");
+    if (!f) return false;
+
+    bool inSection = false;
+    bool found = false;
+
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0 || line.startsWith("#")) continue;
+
+        int eq = line.indexOf('=');
+        if (eq <= 0) continue;
+
+        String key = line.substring(0, eq);
+        String value = line.substring(eq + 1);
+        key.trim(); value.trim();
+
+        if (key == "MAC") {
+            // Check if this section is for our target MAC
+            inSection = value.equalsIgnoreCase(macStr);
+            if (inSection) found = true;
+            continue;
+        }
+
+        if (inSection) {
+            if (key == "MAX_DUTY_PERCENT") maxDuty = value.toFloat();
+            else if (key == "MIN_DUTY_PERCENT") minDuty = value.toFloat();
+            else if (key == "DEFAULT_DUTY") defaultDuty = value.toFloat();
+        }
+    }
+    f.close();
+
+    if (found) {
+        Serial.printf("[WAVEMAKER] Config loaded for %s: min=%.1f%%, max=%.1f%%, default=%.1f%%\n",
+                      macStr.c_str(), minDuty, maxDuty, defaultDuty);
+    }
+    return found;
+}
+
 // Helper: Read feed count for a MAC from central Feed_count.txt (returns -1 if not found)
 // If the file doesn't exist, create an empty Feed_count.txt so API callers can rely on its presence.
 static int getFeedCountForMac(const String& macStr) {
@@ -3977,6 +4078,103 @@ void setupWebServer() {
         String response;
         serializeJson(resp, response);
         request->send(200, "application/json", response);
+    });
+
+    // ========================================================================
+    // WAVE MAKER API
+    // ========================================================================
+
+    // GET wave maker config for a specific MAC
+    // Query params: mac
+    server.on("/api/wavemaker-config", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        float maxDuty, minDuty, defaultDuty;
+        bool found = loadWaveMakerConfig(macStr, maxDuty, minDuty, defaultDuty);
+
+        DynamicJsonDocument resp(512);
+        resp["success"] = true;
+        resp["mac"] = macStr;
+        resp["found"] = found;
+        resp["maxDutyPercent"] = maxDuty;
+        resp["minDutyPercent"] = minDuty;
+        resp["defaultDuty"] = defaultDuty;
+        resp["pwmFrequency"] = 200;
+        resp["pwmResolution"] = 10;
+        resp["softStart"] = true;
+
+        String response;
+        serializeJson(resp, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST wave maker command (STOP or PWM with duty cycle)
+    // Body JSON: {"mac":"AA:BB:CC:DD:EE:FF", "command":"PWM", "dutyPercent": 65.0}
+    //        or: {"mac":"AA:BB:CC:DD:EE:FF", "command":"STOP"}
+    server.on("/api/wavemaker-command", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(512);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        String command = body["command"] | "";
+        if (macStr.length() == 0 || command.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac or command\"}");
+            return;
+        }
+
+        uint8_t mac[6];
+        if (!parseMacAddress(macStr.c_str(), mac)) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+            return;
+        }
+
+        if (command.equalsIgnoreCase("STOP")) {
+            sendWaveMakerStop(mac);
+
+            DynamicJsonDocument resp(256);
+            resp["success"] = true;
+            resp["command"] = "STOP";
+            resp["mac"] = macStr;
+            String response;
+            serializeJson(resp, response);
+            request->send(200, "application/json", response);
+        } else if (command.equalsIgnoreCase("PWM")) {
+            float dutyPercent = body["dutyPercent"] | 0.0f;
+
+            // Load config to validate against min/max
+            float maxDuty, minDuty, defaultDuty;
+            loadWaveMakerConfig(macStr, maxDuty, minDuty, defaultDuty);
+
+            if (dutyPercent <= 0.0f) {
+                dutyPercent = defaultDuty;  // Use default from config
+            }
+            if (dutyPercent < minDuty) dutyPercent = minDuty;
+            if (dutyPercent > maxDuty) dutyPercent = maxDuty;
+
+            sendWaveMakerCommand(mac, dutyPercent);
+
+            DynamicJsonDocument resp(256);
+            resp["success"] = true;
+            resp["command"] = "PWM";
+            resp["mac"] = macStr;
+            resp["dutyPercent"] = dutyPercent;
+            String response;
+            serializeJson(resp, response);
+            request->send(200, "application/json", response);
+        } else {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Unknown command. Use STOP or PWM\"}");
+        }
     });
 
     // ========================================================================

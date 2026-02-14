@@ -15,6 +15,7 @@ static const char* nodeTypeToString(NodeType type) {
         case NodeType::FISH_FEEDER: return "FISH_FEEDER";
         case NodeType::SENSOR: return "SENSOR";
         case NodeType::REPEATER: return "REPEATER";
+        case NodeType::WAVE_MAKER: return "WAVE_MAKER";
         default: return "UNKNOWN";
     }
 }
@@ -317,11 +318,25 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
         snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         
+        // Convert NodeType enum to string (needed for both update and new entry)
+        const char* typeStr = "UNKNOWN";
+        switch(msg.header.nodeType) {
+            case NodeType::LIGHT: typeStr = "LIGHT"; break;
+            case NodeType::CO2: typeStr = "CO2"; break;
+            case NodeType::HEATER: typeStr = "HEATER"; break;
+            case NodeType::FISH_FEEDER: typeStr = "FISH_FEEDER"; break;
+            case NodeType::SENSOR: typeStr = "SENSOR"; break;
+            case NodeType::REPEATER: typeStr = "REPEATER"; break;
+            case NodeType::WAVE_MAKER: typeStr = "WAVE_MAKER"; break;
+            default: typeStr = "UNKNOWN"; break;
+        }
+
         bool alreadyExists = false;
         for (JsonObject device : unmappedDevices) {
             const char* existingMac = device["mac"];
             if (existingMac && strcasecmp(existingMac, macStr) == 0) {
-                // Update existing entry
+                // Update existing entry - refresh type in case it was UNKNOWN
+                device["type"] = typeStr;
                 device["lastSeen"] = millis();
                 device["announceCount"] = device["announceCount"].as<int>() + 1;
                 alreadyExists = true;
@@ -334,18 +349,6 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
             // Add new unmapped device
             JsonObject newDevice = unmappedDevices.createNestedObject();
             newDevice["mac"] = macStr;
-            
-            // Convert NodeType enum to string
-            const char* typeStr = "UNKNOWN";
-            switch(msg.header.nodeType) {
-                case NodeType::LIGHT: typeStr = "LIGHT"; break;
-                case NodeType::CO2: typeStr = "CO2"; break;
-                case NodeType::HEATER: typeStr = "HEATER"; break;
-                case NodeType::FISH_FEEDER: typeStr = "FISH_FEEDER"; break;
-                case NodeType::SENSOR: typeStr = "SENSOR"; break;
-                case NodeType::REPEATER: typeStr = "REPEATER"; break;
-                default: typeStr = "UNKNOWN"; break;
-            }
             newDevice["type"] = typeStr;
             newDevice["firmwareVersion"] = msg.firmwareVersion;
             newDevice["capabilities"] = msg.capabilities;
@@ -448,6 +451,7 @@ void AquariumManager::handleHeartbeat(const uint8_t* mac, const HeartbeatMessage
 
             for (JsonObject device : unmappedDevices) {
                 if (device["mac"].as<String>() == String(macStr)) {
+                    device["type"] = nodeTypeToString(msg.header.nodeType);
                     device["lastSeen"] = millis();
                     device["announceCount"] = device["announceCount"].as<int>() + 1;
                     alreadyExists = true;
@@ -808,6 +812,9 @@ Device* AquariumManager::_createDevice(const uint8_t* mac, NodeType type, const 
             break;
         case NodeType::REPEATER:
             // return new RepeaterDevice(mac, name);
+            break;
+        case NodeType::WAVE_MAKER:
+            // return new WaveMakerDevice(mac, name);
             break;
         default:
             Serial.printf(" Unknown device type: %d\n", (int)type);

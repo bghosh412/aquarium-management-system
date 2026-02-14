@@ -29,7 +29,8 @@ enum class NodeType : uint8_t {
     HEATER = 0x06,
     FILTER = 0x07,
     FISH_FEEDER = 0x08,
-    REPEATER = 0x09
+    REPEATER = 0x09,
+    WAVE_MAKER = 0x0A
 };
 
 // Base message header (included in all messages)

@@ -221,16 +221,33 @@ platformio run --environment node_lighting --target upload --upload-port /dev/tt
 
 ### Filesystem Upload (Hub Only)
 
-**Upload WebUI and config files to LittleFS:**
+The hub uses **dual LittleFS partitions** to separate static assets from user data:
+
+| Environment | Partition | Contents | When to Use |
+|-------------|-----------|----------|-------------|
+| `hub_esp32_staticfs` | FS_STATIC | Web UI (HTML/CSS/JS), hub_config.txt, config templates | After changing UI files or static config |
+| `hub_esp32_userfs` | FS_USER | Runtime JSON (devices.json, aquariums.json, schedules, unmapped-devices.json) | Initial setup or factory reset only |
+
+**⚠️ CRITICAL: Never use `pio run -e hub_esp32 -t uploadfs` — it will overwrite user data files (device registrations, schedules, aquarium config) with factory defaults.**
+
+**Upload static filesystem (UI + hub_config) — SAFE, does not touch user data:**
 ```bash
-platformio run --environment hub_esp32 --target uploadfs
+pio run -e hub_esp32_staticfs -t uploadfs
 ```
 
-This uploads contents of `src/hub/data/` to the ESP32's filesystem.
-
-**Verify filesystem before upload:**
+**Upload user data filesystem — DESTRUCTIVE, resets all runtime data to defaults:**
 ```bash
-ls -R src/hub/data/
+pio run -e hub_esp32_userfs -t uploadfs
+```
+
+**Upload firmware only (no filesystem changes):**
+```bash
+pio run -e hub_esp32 -t upload
+```
+
+**Verify static filesystem contents before upload:**
+```bash
+ls -R src/hub/data_static/
 ```
 
 ---

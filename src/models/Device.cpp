@@ -62,6 +62,7 @@ String Device::getTypeName() const {
         case NodeType::FILTER: return "Filter";
         case NodeType::FISH_FEEDER: return "Fish Feeder";
         case NodeType::REPEATER: return "Repeater";
+        case NodeType::WAVE_MAKER: return "Wave Maker";
         default: return "Unknown";
     }
 }

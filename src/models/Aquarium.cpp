@@ -219,7 +219,7 @@ bool Aquarium::areDevicesHealthy() const {
         
         // Critical devices must be online
         NodeType type = device->getType();
-        if (type == NodeType::HEATER || type == NodeType::CO2) {
+        if (type == NodeType::HEATER || type == NodeType::CO2 || type == NodeType::WAVE_MAKER) {
             if (!device->isOnline()) {
                 return false;
             }

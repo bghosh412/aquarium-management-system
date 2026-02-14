@@ -462,8 +462,8 @@ void sendHeartbeat() {
     lastHeartbeatSent = millis();
     
     if (nodeConfig.debugESPNOW) {
-        Serial.printf("[HB] Heartbeat sent (uptime: %dmin, time: %u, ch=%d)\n",
-                      msg.uptimeMinutes, currentUnixTime, nodeConfig.espnowChannel);
+        Serial.printf("[HB] Heartbeat sent [%s] (uptime: %dmin, time: %u, ch=%d)\n",
+                      nodeConfig.nodeName.c_str(), msg.uptimeMinutes, currentUnixTime, nodeConfig.espnowChannel);
     }
 }
 

@@ -12,6 +12,7 @@ node_data_dirs = {
     "node_heater": os.path.join("src", "nodes", "heater", "data"),
     "node_water_quality": os.path.join("src", "nodes", "water_quality", "data"),
     "node_repeater": os.path.join("src", "nodes", "repeater", "data"),
+    "node_wave_maker": os.path.join("src", "nodes", "wave_maker", "data"),
 }
 
 if pioenv == "hub_esp32":

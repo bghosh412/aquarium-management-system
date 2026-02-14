@@ -1022,6 +1022,10 @@ static void sendLightCommand(const uint8_t* mac, uint8_t command) {
 }
 
 // Helper: Send feeder command via ESP-NOW (PWM value + duration)
+static std::map<String, int> g_pendingFeedAcks;            // pending feed commands waiting for node ACK
+static std::map<String, unsigned long> g_pendingFeedTs;   // timestamp of last pending send
+static const char* FEED_COUNT_PATH = "/Feed_count.txt";
+
 static void sendFeederCommand(const uint8_t* mac, uint16_t pwmValue, uint32_t durationMs) {
     CommandMessage cmd;
     memset(&cmd, 0, sizeof(cmd));
@@ -1033,7 +1037,7 @@ static void sendFeederCommand(const uint8_t* mac, uint16_t pwmValue, uint32_t du
     cmd.commandId = millis() & 0xFF;
     cmd.commandSeqID = 0;
     cmd.finalCommand = true;
-    
+
     // Command format: [cmdType=0x01][pwm_low][pwm_high][dur_b0][dur_b1][dur_b2][dur_b3]
     cmd.commandData[0] = 0x01;  // CMD_FEED
     cmd.commandData[1] = pwmValue & 0xFF;         // PWM low byte
@@ -1042,11 +1046,114 @@ static void sendFeederCommand(const uint8_t* mac, uint16_t pwmValue, uint32_t du
     cmd.commandData[4] = (durationMs >> 8) & 0xFF;  // Duration byte 1
     cmd.commandData[5] = (durationMs >> 16) & 0xFF; // Duration byte 2
     cmd.commandData[6] = (durationMs >> 24) & 0xFF; // Duration byte 3
-    
+
     bool result = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+    String macStr = macToString(mac);
+    if (result) {
+        // Track pending feed ACKs so we decrement count only after node confirms
+        g_pendingFeedAcks[macStr] = g_pendingFeedAcks[macStr] + 1;
+        g_pendingFeedTs[macStr] = millis();
+    }
+
     Serial.printf("[SCHEDULER] Sent feeder command PWM=%u duration=%ums to %02X:%02X:%02X:%02X:%02X:%02X - %s\n",
                   pwmValue, durationMs, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
                   result ? "OK" : "FAILED");
+}
+
+// Helper: Read feed count for a MAC from central Feed_count.txt (returns -1 if not found)
+// If the file doesn't exist, create an empty Feed_count.txt so API callers can rely on its presence.
+static int getFeedCountForMac(const String& macStr) {
+    if (!FS_USER.exists(FEED_COUNT_PATH)) {
+        // create an empty file (user-data partition)
+        File wf = FS_USER.open(FEED_COUNT_PATH, "w");
+        if (wf) wf.close();
+        return -1;
+    }
+
+    File f = FS_USER.open(FEED_COUNT_PATH, "r");
+    if (!f) {
+        // try to create an empty file if open failed for some reason
+        File wf = FS_USER.open(FEED_COUNT_PATH, "w");
+        if (wf) wf.close();
+        return -1;
+    }
+
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0 || line.startsWith("#")) continue;
+        int eq = line.indexOf('=');
+        if (eq <= 0) continue;
+        String k = line.substring(0, eq);
+        String v = line.substring(eq + 1);
+        k.trim(); v.trim();
+        if (k.equalsIgnoreCase(macStr)) {
+            f.close();
+            return v.toInt();
+        }
+    }
+    f.close();
+    return -1;
+}
+
+// Helper: Set feed count for a MAC in Feed_count.txt (creates file if missing)
+static bool setFeedCountForMac(const String& macStr, int count) {
+    // Normalize MAC to uppercase colon-separated form for human-readability
+    String macNorm = macStr;
+    macNorm.toUpperCase();
+
+    std::vector<String> lines;
+    if (FS_USER.exists(FEED_COUNT_PATH)) {
+        File rf = FS_USER.open(FEED_COUNT_PATH, "r");
+        if (rf) {
+            while (rf.available()) {
+                String line = rf.readStringUntil('\n');
+                line.trim();
+                lines.push_back(line);
+            }
+            rf.close();
+        }
+    }
+
+    bool updated = false;
+    for (size_t i = 0; i < lines.size(); i++) {
+        String l = lines[i];
+        if (l.length() == 0 || l.startsWith("#")) continue;
+        int eq = l.indexOf('=');
+        if (eq <= 0) continue;
+        String k = l.substring(0, eq);
+        k.trim();
+        if (k.equalsIgnoreCase(macNorm)) {
+            lines[i] = macNorm + String("=") + String(count);
+            updated = true;
+            break;
+        }
+    }
+    if (!updated) {
+        lines.push_back(macNorm + String("=") + String(count));
+    }
+
+    File wf = FS_USER.open(FEED_COUNT_PATH, "w");
+    if (!wf) {
+        Serial.printf("[FEED-COUNT] Failed to open %s for write\n", FEED_COUNT_PATH);
+        return false;
+    }
+    for (size_t i = 0; i < lines.size(); i++) {
+        wf.println(lines[i]);
+    }
+    wf.close();
+
+    Serial.printf("[FEED-COUNT] Saved %s=%d to %s\n", macNorm.c_str(), count, FEED_COUNT_PATH);
+    return true;
+}
+
+// Helper: Decrement feed count by one after successful ACK; returns new count or -1 on error/no-change
+static int decrementFeedCountForMac(const String& macStr) {
+    int cur = getFeedCountForMac(macStr);
+    if (cur <= 0) return -1; // nothing to decrement
+    int next = cur - 1;
+    if (!setFeedCountForMac(macStr, next)) return -1;
+    return next;
 }
 
 // Structure to track last command sent per channel to avoid duplicate sends
@@ -3873,6 +3980,190 @@ void setupWebServer() {
     });
 
     // ========================================================================
+    // NODE CONFIG API (per-node node_config.txt stored under /config as node_config_<MAC>.txt)
+    // ========================================================================
+
+    // GET a specific key from a node's node_config file
+    // Query params: mac, key
+    server.on("/api/node-config", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac") || !request->hasParam("key")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac or key\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        String key = request->getParam("key")->value();
+        if (macStr.length() == 0 || key.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid parameters\"}");
+            return;
+        }
+
+        DynamicJsonDocument resp(256);
+        resp["success"] = true;
+        resp["value"] = nullptr;
+
+        // Special-case AVAILABLE_FEED: stored centrally in Feed_count.txt (one file for all feeders)
+        if (key.equalsIgnoreCase("AVAILABLE_FEED")) {
+            int val = getFeedCountForMac(macStr);
+            if (val >= 0) resp["value"] = val; else resp["value"] = nullptr;
+
+            String out;
+            serializeJson(resp, out);
+            request->send(200, "application/json", out);
+            return;
+        }
+
+        // Fallback: per-node node_config_<mac>.txt (other keys)
+        // normalize MAC for filename (remove colons)
+        String macNo = macStr;
+        macNo.replace(":", "");
+        macNo.toLowerCase();
+        String path = String("/config/node_config_") + macNo + String(".txt");
+
+        if (!FS_USER.exists(path)) {
+            String out;
+            serializeJson(resp, out);
+            request->send(200, "application/json", out);
+            return;
+        }
+
+        File f = FS_USER.open(path, "r");
+        if (!f) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to open config file\"}");
+            return;
+        }
+
+        while (f.available()) {
+            String line = f.readStringUntil('\n');
+            line.trim();
+            if (line.length() == 0 || line.startsWith("#")) continue;
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            String k = line.substring(0, eq);
+            String v = line.substring(eq + 1);
+            k.trim(); v.trim();
+            if (k.equalsIgnoreCase(key)) {
+                resp["value"] = v;
+                break;
+            }
+        }
+        f.close();
+
+        String out;
+        serializeJson(resp, out);
+        request->send(200, "application/json", out);
+    });
+
+    // POST update a key in the node_config file for a specific node
+    // Body: { mac: "AA:BB:...", key: "AVAILABLE_FEED", value: 5 }
+    server.on("/api/node-config", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(512);
+        DeserializationError err = deserializeJson(body, data, len);
+        if (err) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        String key = body["key"] | "";
+        // Accept numeric or string values
+        String value = body["value"] | "";
+        if (macStr.length() == 0 || key.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac/key\"}");
+            return;
+        }
+
+        // Special-case AVAILABLE_FEED -> centralized Feed_count.txt in user-data
+        if (key.equalsIgnoreCase("AVAILABLE_FEED")) {
+            // Log the incoming request so we can see what was received from the UI
+            char rawValBuf[64] = {0};
+            serializeJson(body["value"], rawValBuf, sizeof(rawValBuf));
+            Serial.printf("[API] /api/node-config POST received mac=%s key=%s rawValue=%s\n", macStr.c_str(), key.c_str(), rawValBuf);
+
+            // Read numeric value robustly from JSON (default 0)
+            int v = body["value"] | 0;
+            if (v < 0) v = 0;
+
+            bool ok = setFeedCountForMac(macStr, v);
+            if (!ok) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write Feed_count.txt\"}");
+                return;
+            }
+
+            // Notify UI about the updated count
+            DynamicJsonDocument doc(256);
+            doc["mac"] = macStr;
+            doc["available"] = v;
+            String payload;
+            serializeJson(doc, payload);
+            AquariumManager::getInstance().broadcastUpdate("feedCountUpdated", payload);
+
+            // Return the saved value so the caller can confirm what was persisted
+            DynamicJsonDocument resp(128);
+            resp["success"] = true;
+            resp["value"] = v;
+            String out;
+            serializeJson(resp, out);
+            request->send(200, "application/json", out);
+            return;
+        }
+
+        // Fallback: update per-node node_config_<mac>.txt for other keys
+        String macNo = macStr;
+        macNo.replace(":", "");
+        macNo.toLowerCase();
+        String path = String("/config/node_config_") + macNo + String(".txt");
+
+        // Read existing file (if any) and update or append the key
+        std::vector<String> lines;
+        if (FS_USER.exists(path)) {
+            File rf = FS_USER.open(path, "r");
+            if (rf) {
+                while (rf.available()) {
+                    String line = rf.readStringUntil('\n');
+                    line.trim();
+                    lines.push_back(line);
+                }
+                rf.close();
+            }
+        }
+
+        bool updated = false;
+        for (size_t i = 0; i < lines.size(); i++) {
+            String l = lines[i];
+            if (l.length() == 0 || l.startsWith("#")) continue;
+            int eq = l.indexOf('=');
+            if (eq <= 0) continue;
+            String k = l.substring(0, eq);
+            k.trim();
+            if (k.equalsIgnoreCase(key)) {
+                lines[i] = key + String("=") + value;
+                updated = true;
+                break;
+            }
+        }
+        if (!updated) {
+            lines.push_back(key + String("=") + value);
+        }
+
+        // Write back file
+        File wf = FS_USER.open(path, "w");
+        if (!wf) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to open file for write\"}");
+            return;
+        }
+        for (size_t i = 0; i < lines.size(); i++) {
+            wf.println(lines[i]);
+        }
+        wf.close();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // ========================================================================
     // FEEDER SCHEDULE API
     // ========================================================================
 
@@ -6105,6 +6396,36 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
             Serial.printf("[LIGHT] STATUS update %s -> ch1=%d ch2=%d ch3=%d (nodeType=%d, pending=%s)\n",
                           macStr.c_str(), status.ch1 ? 1 : 0, status.ch2 ? 1 : 0, status.ch3 ? 1 : 0,
                           (int)msg.header.nodeType, pendingLightStatus ? "yes" : "no");
+        }
+    }
+
+    // If this is a feeder and node reports feed-in-progress AND we have a pending feed send,
+    // treat the STATUS as the ACK for a previously-sent feed command and decrement count.
+    if (msg.header.nodeType == NodeType::FISH_FEEDER) {
+        // statusData[2] = feedInProgress flag in feeder node
+        if (msg.statusData[2] == 1 && msg.statusCode == 0x00) {
+            String macKey = macToString(mac);
+            auto it = g_pendingFeedAcks.find(macKey);
+            if (it != g_pendingFeedAcks.end() && it->second > 0) {
+                int newVal = decrementFeedCountForMac(macKey);
+                if (newVal >= 0) {
+                    Serial.printf("[FEED-COUNT] Decremented available feed for %s -> %d\n", macKey.c_str(), newVal);
+
+                    // Notify UI via AquariumManager websocket callback
+                    DynamicJsonDocument doc(256);
+                    doc["mac"] = macKey;
+                    doc["available"] = newVal;
+                    String payload;
+                    serializeJson(doc, payload);
+                    AquariumManager::getInstance().broadcastUpdate("feedCountUpdated", payload);
+                } else {
+                    Serial.printf("[FEED-COUNT] No feed count entry to decrement for %s\n", macKey.c_str());
+                }
+
+                // consume one pending ack
+                it->second = it->second - 1;
+                if (it->second <= 0) g_pendingFeedAcks.erase(it);
+            }
         }
     }
 

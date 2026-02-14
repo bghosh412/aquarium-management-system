@@ -1,0 +1,6 @@
+# Feed_count.txt
+# Centralized available-feed counts for all feeder nodes.
+# Format: MAC=COUNT  (MAC in usual colon-separated form)
+# Example:
+# AA:BB:CC:DD:EE:FF=5
+# (This file is updated at runtime by the hub when feeders are used.)

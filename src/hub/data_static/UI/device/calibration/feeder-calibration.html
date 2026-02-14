@@ -87,6 +87,23 @@
                 </div>
             </div>
 
+            <!-- Reset Available Feed -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Reset Available Feed</h3>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; gap: 1rem; align-items: center; flex-wrap:wrap;">
+                        <label style="font-weight:600; margin-right:0.5rem;">Available portions</label>
+                        <select id="availableFeedSelect" style="padding:0.4rem 0.6rem; border-radius:4px; min-width:90px; font-weight:700;">
+                            <!-- options populated by JS -->
+                        </select>
+                        <button class="btn btn-primary" id="availableFeedSaveBtn" style="margin-left:0.5rem;">💾 Save</button>
+                    </div>
+                    <div style="margin-top:0.75rem; color:var(--text-secondary); font-size:0.95rem;">Set how many portions remain in the feeder — used by the node to report/refill status.</div>
+                </div>
+            </div>
+
             <!-- Instructions -->
             <div class="card">
                 <div class="card-header">
@@ -251,9 +268,96 @@
                 console.warn('Could not load saved calibration, using defaults:', err);
             }
             updateDisplay();
+
+            // load AVAILABLE_FEED from node_config.txt (hub-side per-node copy)
+            if (currentDevice && currentDevice.mac) {
+                await loadAvailableFeed(currentDevice.mac);
+            }
         }
 
         // ---- Adjust functions (local-only, no API round-trip needed) ----
+
+        // ---- Available feed helpers ----
+        async function loadAvailableFeed(mac) {
+            const select = document.getElementById('availableFeedSelect');
+            if (!select) return;
+
+            // populate dropdown 0..15 (one-time) — include 0 as 'empty' so UI reflects exact saved state
+            if (select.options.length === 0) {
+                // 0 = empty / no portions
+                const opt0 = document.createElement('option');
+                opt0.value = '0';
+                opt0.textContent = '0 (empty)';
+                select.appendChild(opt0);
+
+                for (let i = 1; i <= 15; i++) {
+                    const opt = document.createElement('option');
+                    opt.value = String(i);
+                    opt.textContent = String(i);
+                    select.appendChild(opt);
+                }
+            }
+
+            try {
+                const resp = await fetch(`/api/node-config?mac=${encodeURIComponent(mac)}&key=AVAILABLE_FEED`);
+                const data = await resp.json();
+                if (resp.ok && data.success) {
+                    const val = data.value !== null && data.value !== undefined ? String(data.value) : null;
+                    if (val && select.querySelector(`option[value="${val}"]`)) {
+                        select.value = val;
+                    } else {
+                        select.value = '1';
+                    }
+                } else {
+                    select.value = '1';
+                }
+            } catch (err) {
+                console.warn('Failed to load AVAILABLE_FEED:', err);
+                select.value = '1';
+            }
+
+            // wire save button (idempotent)
+            const saveBtn = document.getElementById('availableFeedSaveBtn');
+            if (saveBtn) {
+                saveBtn.onclick = saveAvailableFeed;
+            }
+        }
+
+        async function saveAvailableFeed() {
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+            const select = document.getElementById('availableFeedSelect');
+            if (!select) return;
+            const value = parseInt(select.value, 10) || 1;
+
+            const btn = document.getElementById('availableFeedSaveBtn');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                const payload = { mac: currentDevice.mac, key: 'AVAILABLE_FEED', value: value };
+                const resp = await fetch('/api/node-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                console.debug('[feeder-calibration] /api/node-config POST response', resp.status, data);
+                if (resp.ok && data.success) {
+                    showMessage('Available feed saved — ' + value + ' portions', 'success');
+
+                    // Refresh displayed value from server to ensure persistence
+                    await loadAvailableFeed(currentDevice.mac);
+                } else {
+                    throw new Error((data && data.error) || 'Save failed');
+                }
+            } catch (err) {
+                console.error('Save AVAILABLE_FEED error:', err);
+                showMessage('Failed to save available feed', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '💾 Save';
+            }
+        }
         function adjustDuty(delta) {
             dutyCycle = Math.max(0, Math.min(180, dutyCycle + delta));
             updateDisplay();

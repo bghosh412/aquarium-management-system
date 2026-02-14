@@ -95,15 +95,15 @@ static void onHubHeartbeatReceivedInternal(const uint8_t* mac, const HeartbeatMe
 // ============================================================================
 
 void setupStatusLED() {
-    pinMode(PIN_STATUS_LED, OUTPUT);
-    digitalWrite(PIN_STATUS_LED, LOW);  // Start OFF
+    pinMode(nodeConfig.statusLedPin, OUTPUT);
+    digitalWrite(nodeConfig.statusLedPin, LOW);  // Start OFF
     ledState = false;
     lastLEDToggle = millis();
     currentLEDMode = StatusLEDMode::WAITING_ACK;  // Start in waiting for ACK mode
     statusLEDInitialized = true;
     
     if (nodeConfig.debugSerial) {
-        Serial.printf("[LED] Status LED initialized on pin D7 (GPIO%d)\n", PIN_STATUS_LED);
+        Serial.printf("[LED] Status LED initialized on pin (GPIO%d)\n", nodeConfig.statusLedPin);
     }
 }
 
@@ -169,7 +169,7 @@ void updateStatusLED() {
             if (now - lastLEDToggle >= STATUS_LED_BLINK_INTERVAL_MS) {
                 lastLEDToggle = now;
                 ledState = !ledState;
-                digitalWrite(PIN_STATUS_LED, ledState ? HIGH : LOW);
+                digitalWrite(nodeConfig.statusLedPin, ledState ? HIGH : LOW);
             }
             break;
             
@@ -201,6 +201,8 @@ void loadNodeConfiguration(NodeType defaultType, const char* defaultName) {
     nodeConfig.debugSerial = true;
     nodeConfig.debugESPNOW = true;
     nodeConfig.debugHardware = false;
+    nodeConfig.servoPin = 18;               // Default servo pin (override via /node_config.txt)
+    nodeConfig.statusLedPin = PIN_STATUS_LED; // Default status LED pin (can be overridden)
     nodeConfig.announceIntervalMs = 5000;
     nodeConfig.heartbeatIntervalMs = 30000;
     nodeConfig.connectionTimeoutMs = 90000;
@@ -264,6 +266,10 @@ void loadNodeConfiguration(NodeType defaultType, const char* defaultName) {
             nodeConfig.debugESPNOW = true;  // Always force ON for debugging
         } else if (key == "DEBUG_HARDWARE") {
             nodeConfig.debugHardware = (value == "true");
+        } else if (key == "SERVO_PIN") {
+            nodeConfig.servoPin = (uint8_t) value.toInt();
+        } else if (key == "STATUS_LED_PIN") {
+            nodeConfig.statusLedPin = (uint8_t) value.toInt();
         } else if (key == "ANNOUNCE_INTERVAL_MS") {
             nodeConfig.announceIntervalMs = value.toInt();
         } else if (key == "HEARTBEAT_INTERVAL_MS") {
@@ -304,6 +310,8 @@ void saveNodeConfiguration() {
     file.printf("DEBUG_SERIAL=%s\\n", nodeConfig.debugSerial ? "true" : "false");
     file.printf("DEBUG_ESPNOW=%s\\n", nodeConfig.debugESPNOW ? "true" : "false");
     file.printf("DEBUG_HARDWARE=%s\\n", nodeConfig.debugHardware ? "true" : "false");
+    file.printf("SERVO_PIN=%d\\n", nodeConfig.servoPin);
+    file.printf("STATUS_LED_PIN=%d\\n", nodeConfig.statusLedPin);
     file.printf("ANNOUNCE_INTERVAL_MS=%u\\n", nodeConfig.announceIntervalMs);
     file.printf("HEARTBEAT_INTERVAL_MS=%u\\n", nodeConfig.heartbeatIntervalMs);
     file.printf("CONNECTION_TIMEOUT_MS=%u\\n", nodeConfig.connectionTimeoutMs);

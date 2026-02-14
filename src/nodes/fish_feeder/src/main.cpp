@@ -26,7 +26,7 @@
 // ============================================================================
 
 // Hardware pins (ESP32-WROOM)
-#define PIN_SERVO 18  // GPIO18 on ESP32
+// PIN_SERVO moved to /node_config.txt (SERVO_PIN) - use nodeConfig.servoPin at runtime
 
 // Servo constants
 #define SERVO_FREQ 50             // Standard servo frequency (50Hz)
@@ -84,7 +84,7 @@ struct FeederStateData {
 void attachServo(uint16_t pwmValue) {
     if (!feederState.servoAttached) {
         feederServo.setPeriodHertz(SERVO_FREQ);
-        feederServo.attach(PIN_SERVO, SERVO_MIN_US, SERVO_MAX_US);
+        feederServo.attach(nodeConfig.servoPin, SERVO_MIN_US, SERVO_MAX_US);
         feederState.servoAttached = true;
     }
     feederServo.write(pwmValue);
@@ -200,8 +200,8 @@ bool feed(uint16_t pwmValue, uint32_t durationMs) {
 
 void setupHardware() {
     // Configure servo pin
-    pinMode(PIN_SERVO, OUTPUT);
-    digitalWrite(PIN_SERVO, LOW);
+    pinMode(nodeConfig.servoPin, OUTPUT);
+    digitalWrite(nodeConfig.servoPin, LOW);
     
     // Initialize feeder state (servo NOT attached at startup)
     feederState.state = FeederState::IDLE;

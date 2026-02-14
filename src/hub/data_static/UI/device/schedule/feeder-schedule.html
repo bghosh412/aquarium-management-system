@@ -1,46 +1,420 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Feeder Schedule (static)</title>
-  <link rel="stylesheet" href="/styles/styles.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Feeder Schedule - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css">
 </head>
 <body>
-  <nav class="navbar">
-    <div class="navbar-content">
-      <div class="navbar-brand">
-        <img src="/images/logo.png" alt="Logo" class="navbar-logo">
-        <div>
-          <h1 class="brand-title">Aquarium Hub</h1>
-          <p class="brand-subtitle">Feeder Schedule</p>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Feeder Schedule</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="/device/manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
         </div>
-      </div>
-      <div class="navbar-actions">
-        <a href="/device/manage-devices.html" class="btn btn-secondary">
-          <span>←</span> Back
-        </a>
-      </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar"></aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Feeder Schedule</h1>
+                <p class="page-description">Configure the feeding schedule for your fish feeder</p>
+            </div>
+
+            <!-- Device Information -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Device Information</h3>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">—</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;" id="deviceType">Fish Feeder</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">—</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule Form -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Feeding Times</h3>
+                </div>
+                <div class="card-content">
+                    <form id="feederScheduleForm">
+                        <!-- Feeding Time 1 -->
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 600; min-width: 150px;">
+                                    <input type="checkbox" id="ft1_chk" class="checkbox"> Feeding Time 1
+                                </label>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <select id="ft1_hr" class="form-input" style="width: auto;"></select>
+                                    <span>:</span>
+                                    <select id="ft1_min" class="form-input" style="width: auto;"></select>
+                                    <select id="ft1_ampm" class="form-input" style="width: auto;"></select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Feeding Time 2 -->
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 600; min-width: 150px;">
+                                    <input type="checkbox" id="ft2_chk" class="checkbox"> Feeding Time 2
+                                </label>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <select id="ft2_hr" class="form-input" style="width: auto;"></select>
+                                    <span>:</span>
+                                    <select id="ft2_min" class="form-input" style="width: auto;"></select>
+                                    <select id="ft2_ampm" class="form-input" style="width: auto;"></select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Feeding Time 3 -->
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 600; min-width: 150px;">
+                                    <input type="checkbox" id="ft3_chk" class="checkbox"> Feeding Time 3
+                                </label>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <select id="ft3_hr" class="form-input" style="width: auto;"></select>
+                                    <span>:</span>
+                                    <select id="ft3_min" class="form-input" style="width: auto;"></select>
+                                    <select id="ft3_ampm" class="form-input" style="width: auto;"></select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                        <!-- Days Selection -->
+                        <div class="form-group">
+                            <h4 style="margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600;">Select Days</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem;">
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="day_mon" class="checkbox"> Monday
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="day_tue" class="checkbox"> Tuesday
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="day_wed" class="checkbox"> Wednesday
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="day_thu" class="checkbox"> Thursday
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="day_fri" class="checkbox"> Friday
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="day_sat" class="checkbox"> Saturday
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="day_sun" class="checkbox"> Sunday
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Submit Buttons -->
+                        <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+                            <button type="submit" class="btn btn-create-aquarium" id="saveScheduleBtn">
+                                <span>✓</span> Save Schedule
+                            </button>
+                            <button type="button" class="btn btn-cancel" id="cancelScheduleBtn">
+                                Cancel
+                            </button>
+                            <button type="button" class="btn btn-danger" id="deleteScheduleBtn" title="Delete schedule for this device">
+                                🗑️ Delete Schedule
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </main>
     </div>
-  </nav>
 
-  <div class="container">
-    <aside class="sidebar"></aside>
+    <script src="/scripts/sidebar-inject.js"></script>
+    <script>
+        // ---- Populate dropdowns ----
+        function populateHours(id) {
+            const sel = document.getElementById(id);
+            sel.innerHTML = '';
+            for (let i = 1; i <= 12; i++) {
+                const opt = document.createElement('option');
+                opt.value = i;
+                opt.textContent = i;
+                sel.appendChild(opt);
+            }
+        }
 
-    <main class="main-content">
-      <div class="page-header">
-        <h1>Feeder Schedule</h1>
-        <p class="page-description">Static preview page for OTA and offline assets.</p>
-      </div>
+        function populateMinutes(id) {
+            const sel = document.getElementById(id);
+            sel.innerHTML = '';
+            [0, 15, 30, 45].forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = String(m).padStart(2, '0');
+                sel.appendChild(opt);
+            });
+        }
 
-      <div class="card">
-        <div class="card-content">
-          <p>This is a static copy used for OTA and preview builds. Use the live hub UI to configure schedules.</p>
-        </div>
-      </div>
-    </main>
-  </div>
+        function populateAMPM(id) {
+            const sel = document.getElementById(id);
+            sel.innerHTML = '';
+            ['AM', 'PM'].forEach(val => {
+                const opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = val;
+                sel.appendChild(opt);
+            });
+        }
 
-  <script src="/scripts/sidebar-inject.js"></script>
+        // Init all 3 feeding-time dropdowns
+        for (let i = 1; i <= 3; i++) {
+            populateHours('ft' + i + '_hr');
+            populateMinutes('ft' + i + '_min');
+            populateAMPM('ft' + i + '_ampm');
+        }
+
+        // ---- Day-name mapping ----
+        const dayMap = {
+            Monday: 'day_mon', Tuesday: 'day_tue', Wednesday: 'day_wed',
+            Thursday: 'day_thu', Friday: 'day_fri', Saturday: 'day_sat', Sunday: 'day_sun'
+        };
+
+        // ---- State ----
+        let currentDevice = null;
+
+        // ---- Helpers ----
+        function getQueryParam(name) {
+            return new URLSearchParams(window.location.search).get(name);
+        }
+
+        function setSaveState(saving) {
+            const btn = document.getElementById('saveScheduleBtn');
+            btn.disabled = saving;
+            btn.innerHTML = saving ? 'Saving...' : '<span>✓</span> Save Schedule';
+        }
+
+        function getDeviceTypeLabel(type) {
+            const t = String(type || '').toLowerCase();
+            switch (t) {
+                case 'light': return 'Lighting';
+                case 'co2': return 'CO₂ Regulator';
+                case 'heater': return 'Heater';
+                case 'feeder': case 'fish_feeder': return 'Fish Feeder';
+                case 'sensor': return 'Water Quality Sensor';
+                case 'repeater': return 'Repeater';
+                default: return type || 'Unknown';
+            }
+        }
+
+        // ---- Apply schedule to form ----
+        function applySchedule(data) {
+            const ft = data.feedingTimes || [];
+            ft.forEach((t, i) => {
+                const idx = i + 1;
+                if (idx > 3) return;
+                const chk = document.getElementById('ft' + idx + '_chk');
+                const hr  = document.getElementById('ft' + idx + '_hr');
+                const min = document.getElementById('ft' + idx + '_min');
+                const ap  = document.getElementById('ft' + idx + '_ampm');
+                if (chk) chk.checked = !!t.enabled;
+                if (hr)  hr.value  = t.hour || 8;
+                if (min) min.value = (t.minute !== undefined) ? t.minute : 0;
+                if (ap)  ap.value  = t.ampm || 'AM';
+            });
+
+            const days = data.days || {};
+            Object.keys(dayMap).forEach(day => {
+                const el = document.getElementById(dayMap[day]);
+                if (el) el.checked = days[day] !== false;
+            });
+        }
+
+        // ---- Build payload from form ----
+        function buildPayload() {
+            const feedingTimes = [];
+            for (let i = 1; i <= 3; i++) {
+                feedingTimes.push({
+                    enabled: document.getElementById('ft' + i + '_chk').checked,
+                    hour: parseInt(document.getElementById('ft' + i + '_hr').value, 10) || 8,
+                    minute: parseInt(document.getElementById('ft' + i + '_min').value, 10) || 0,
+                    ampm: document.getElementById('ft' + i + '_ampm').value || 'AM'
+                });
+            }
+
+            const days = {};
+            Object.keys(dayMap).forEach(day => {
+                days[day] = document.getElementById(dayMap[day]).checked;
+            });
+
+            return { feedingTimes, days };
+        }
+
+        // ---- Load device from API ----
+        async function loadDeviceFromQuery() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '/device/manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const devices = data.devices || [];
+                const device = devices.find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    alert('Device not found. It may have been unmapped or removed.');
+                    window.location.href = '/device/manage-devices.html';
+                    return;
+                }
+
+                document.getElementById('tankName').textContent = 'Aquarium ' + device.tankId;
+                document.getElementById('deviceType').textContent = getDeviceTypeLabel(device.type);
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                currentDevice = device;
+
+                await loadSchedule(mac);
+            } catch (err) {
+                console.error('Error loading device:', err);
+                alert('Failed to load device information.');
+            }
+        }
+
+        // ---- Load saved schedule ----
+        async function loadSchedule(mac) {
+            try {
+                const resp = await fetch('/api/feeder-schedule?mac=' + encodeURIComponent(mac));
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error((data && data.error) || 'Failed to load schedule');
+                }
+
+                if (data.schedule) {
+                    applySchedule(data.schedule);
+                }
+            } catch (err) {
+                console.warn('No saved schedule loaded:', err);
+                const cached = localStorage.getItem('feederSchedule:' + mac);
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        if (parsed && parsed.schedule) applySchedule(parsed.schedule);
+                    } catch (e) {
+                        console.warn('Failed to parse cached schedule:', e);
+                    }
+                }
+            }
+        }
+
+        // ---- Save schedule ----
+        document.getElementById('saveScheduleBtn').onclick = async function(e) {
+            e.preventDefault();
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+
+            const schedule = buildPayload();
+            const payload = {
+                mac: currentDevice.mac,
+                tankId: currentDevice.tankId,
+                deviceName: currentDevice.name || currentDevice.mac,
+                schedule: schedule
+            };
+
+            try {
+                setSaveState(true);
+                const resp = await fetch('/api/feeder-schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error((data && data.error) || 'Save failed');
+                }
+
+                localStorage.setItem('feederSchedule:' + currentDevice.mac, JSON.stringify(payload));
+                alert('Feeder schedule saved successfully.');
+            } catch (err) {
+                console.error('Save failed:', err);
+                alert('Failed to save feeder schedule.');
+            } finally {
+                setSaveState(false);
+            }
+        };
+
+        // ---- Cancel ----
+        document.getElementById('cancelScheduleBtn').onclick = function() {
+            document.getElementById('feederScheduleForm').reset();
+        };
+
+        // ---- Delete handler (tries dedicated endpoint, falls back to action: 'delete') ----
+        document.getElementById('deleteScheduleBtn').onclick = async function(e) {
+            e.preventDefault();
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+            if (!confirm('Delete schedule for this device? This cannot be undone.')) return;
+
+            try {
+                // Try dedicated delete endpoint first
+                let resp = await fetch('/api/feeder-schedule/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: currentDevice.mac })
+                });
+
+                let data = {};
+                try { data = await resp.json(); } catch (e) { /* ignore */ }
+
+                if (!resp.ok || !data.success) {
+                    // Fallback: send delete via the main save endpoint (older hub firmware)
+                    resp = await fetch('/api/feeder-schedule', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ mac: currentDevice.mac, action: 'delete' })
+                    });
+                    data = await resp.json();
+                }
+
+                if (!resp.ok || !data.success) {
+                    throw new Error((data && data.error) || 'Delete failed');
+                }
+
+                localStorage.removeItem('feederSchedule:' + currentDevice.mac);
+                alert('Schedule deleted successfully.');
+                window.location.href = '/device/manage-devices.html';
+            } catch (err) {
+                console.error('Delete failed:', err);
+                alert('Failed to delete schedule.');
+            }
+        };
+
+        // ---- Init ----
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDeviceFromQuery();
+        });
+    </script>
 </body>
 </html>

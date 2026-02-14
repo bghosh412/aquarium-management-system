@@ -310,6 +310,12 @@ function viewDevice(mac) {
         return;
     }
 
+    // Feeder: open feeder schedule from device card
+    if (deviceType.includes('feeder')) {
+        window.location.href = `schedule/feeder-schedule.html?mac=${mac}`;
+        return;
+    }
+
     // Route to appropriate details page
     const detailsPages = {
         'co2': '../aquarium/details/co2-details.html',
@@ -338,7 +344,14 @@ function controlDevice(mac) {
         return;
     }
 
-    showNotification('Control is only available for light devices.', 'error');
+    // Feeder: open calibration/control page from device card
+    if (deviceType.includes('feeder')) {
+        localStorage.setItem('selectedDeviceMac', mac);
+        window.location.href = `calibration/feeder-calibration.html?mac=${mac}`;
+        return;
+    }
+
+    showNotification('Control is only available for light and feeder devices.', 'error');
 }
 
 function unmapDevice(mac, name) {

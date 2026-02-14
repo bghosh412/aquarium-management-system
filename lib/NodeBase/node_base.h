@@ -58,6 +58,12 @@ struct NodeConfig {
     uint32_t hubHeartbeatTimeoutMs; // ms before node declares hub offline (default 600000)
     uint8_t hubReturnMac[6];   // Hub AP MAC to reply to (populated from ACK)
     bool hubReturnMacSet;      // True when hubReturnMac contains valid MAC
+
+    // Optional per-node hardware overrides (loaded from /node_config.txt)
+    // - SERVO_PIN: overrides servo pin for fish_feeder
+    // - STATUS_LED_PIN: override default status LED pin
+    uint8_t servoPin;
+    uint8_t statusLedPin;
 };
 
 // Last seen time of hub heartbeat on node

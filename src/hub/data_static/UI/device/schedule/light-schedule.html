@@ -132,6 +132,9 @@
                             <button type="button" class="btn btn-cancel" id="cancelScheduleBtn">
                                 Cancel
                             </button>
+                            <button type="button" class="btn btn-danger" id="deleteScheduleBtn" title="Delete schedule for this device">
+                                🗑️ Delete Schedule
+                            </button>
                         </div>
                     </form>
                 </div>
@@ -240,6 +243,47 @@
         
         document.getElementById('cancelScheduleBtn').onclick = function() {
             document.getElementById('lightScheduleForm').reset();
+        };
+
+        // Delete schedule for current device
+        document.getElementById('deleteScheduleBtn').onclick = async function(e) {
+            e.preventDefault();
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+            if (!confirm('Delete schedule for this device? This cannot be undone.')) return;
+
+            // Try the dedicated delete endpoint first, then fall back to POST /api/light-schedule { action: 'delete' }
+            try {
+                let resp = await fetch('/api/light-schedule/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: currentDevice.mac })
+                });
+
+                let data = {};
+                try { data = await resp.json(); } catch (e) { /* ignore */ }
+
+                if (!resp.ok || !data.success) {
+                    // Fallback: send delete via the main save endpoint (older hub firmware)
+                    resp = await fetch('/api/light-schedule', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ mac: currentDevice.mac, action: 'delete' })
+                    });
+                    data = await resp.json();
+                }
+
+                if (!resp.ok || !data.success) {
+                    throw new Error((data && data.error) || 'Delete failed');
+                }
+
+                // Clear local cache and redirect back to devices
+                localStorage.removeItem(`lightSchedule:${currentDevice.mac}`);
+                alert('Schedule deleted successfully.');
+                window.location.href = '/device/manage-devices.html';
+            } catch (err) {
+                console.error('Delete failed:', err);
+                alert('Failed to delete schedule.');
+            }
         };
 
         // Utility: get query string param

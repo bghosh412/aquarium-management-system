@@ -1,47 +1,366 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Feeder Calibration (static)</title>
-  <link rel="stylesheet" href="/styles/styles.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>Feeder Calibration - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        .cal-status { display: flex; gap: 2rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+        .cal-status-item { display: flex; align-items: center; gap: 0.5rem; }
+        .cal-status-item .cal-label { font-weight: 600; color: var(--text-secondary); }
+        .cal-status-item .cal-value {
+            background: var(--primary-color, #0ea5e9);
+            color: #fff;
+            padding: 0.25rem 0.75rem;
+            border-radius: var(--radius-sm, 4px);
+            font-weight: 700;
+            min-width: 50px;
+            text-align: center;
+        }
+        .cal-btn-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+        .btn-cal {
+            border: none; border-radius: var(--radius-sm, 4px);
+            padding: 0.6rem 1.25rem; font-size: 1rem; cursor: pointer;
+            font-weight: 700; transition: all 0.15s;
+        }
+        .btn-cal:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-cal-adjust { background: var(--primary-color, #0ea5e9); color: #fff; min-width: 60px; }
+        .btn-cal-adjust:hover:not(:disabled) { filter: brightness(0.9); }
+        .btn-cal-adjust:active:not(:disabled) { transform: scale(0.95); }
+        .btn-cal-test { background: var(--color-accent, #10b981); color: #fff; min-width: 100px; }
+        .btn-cal-test:hover:not(:disabled) { filter: brightness(0.9); }
+        .btn-cal-save { background: var(--primary-color, #0ea5e9); color: #fff; min-width: 100px; }
+        .btn-cal-save:hover:not(:disabled) { filter: brightness(0.9); }
+        .cal-message {
+            margin-top: 1rem; padding: 0.75rem 1rem; border-radius: var(--radius-sm, 4px);
+            font-weight: 600; display: none;
+        }
+        .cal-message.msg-success { display: block; background: rgba(16,185,129,0.15); color: #065f46; border: 1px solid rgba(16,185,129,0.3); }
+        .cal-message.msg-error   { display: block; background: rgba(239,68,68,0.15);  color: #991b1b; border: 1px solid rgba(239,68,68,0.3); }
+    </style>
 </head>
 <body>
-  <nav class="navbar">
-    <div class="navbar-content">
-      <div class="navbar-brand">
-        <img src="/images/logo.png" alt="Logo" class="navbar-logo">
-        <div>
-          <h1 class="brand-title">Aquarium Hub</h1>
-          <p class="brand-subtitle">Feeder Calibration</p>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">Feeder Calibration</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="/device/manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
         </div>
-      </div>
-      <div class="navbar-actions">
-        <a href="/device/manage-devices.html" class="btn btn-secondary">
-          <span>←</span> Back
-        </a>
-      </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar"></aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Feeder Calibration</h1>
+                <p class="page-description">Adjust the servo duty cycle and pulse duration for accurate feeding</p>
+            </div>
+
+            <!-- Device Information -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Device Information</h3>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">—</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;" id="deviceType">Fish Feeder</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">—</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Instructions -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>How to Calibrate</h3>
+                </div>
+                <div class="card-content">
+                    <ol style="margin: 0; padding-left: 1.25rem; line-height: 1.8;">
+                        <li>If the disk is not dispensing a complete portion of food, press the <strong>&lt;</strong> button to decrease the duty cycle.</li>
+                        <li>If too much food is dispensed, press the <strong>&gt;</strong> button to increase the duty cycle.</li>
+                        <li>Use <strong>&lt;&lt;</strong> and <strong>&gt;&gt;</strong> for larger adjustments.</li>
+                        <li>Press <strong>Test</strong> a few times to verify the calibration.</li>
+                        <li>Once satisfied, press <strong>Save</strong> to persist the settings.</li>
+                    </ol>
+                </div>
+            </div>
+
+            <!-- Calibration Controls -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Calibration Controls</h3>
+                </div>
+                <div class="card-content">
+                    <!-- Current values -->
+                    <div class="cal-status">
+                        <div class="cal-status-item">
+                            <span class="cal-label">Duty Cycle:</span>
+                            <span class="cal-value" id="dutyCycleValue">—</span>
+                        </div>
+                        <div class="cal-status-item">
+                            <span class="cal-label">Pulse Duration:</span>
+                            <span class="cal-value" id="pulseDurationValue">—</span>
+                            <span style="font-weight: 600;">ms</span>
+                        </div>
+                    </div>
+
+                    <!-- Duty Cycle adjustment -->
+                    <div style="margin-bottom: 1.5rem;">
+                        <label style="display: block; font-weight: 600; margin-bottom: 0.75rem; font-size: 1rem;">Adjust Duty Cycle</label>
+                        <div class="cal-btn-row">
+                            <button class="btn-cal btn-cal-adjust" id="dutyDecrLarge" title="Decrease by 10">&lt;&lt;</button>
+                            <button class="btn-cal btn-cal-adjust" id="dutyDecr" title="Decrease by 1">&lt;</button>
+                            <button class="btn-cal btn-cal-adjust" id="dutyIncr" title="Increase by 1">&gt;</button>
+                            <button class="btn-cal btn-cal-adjust" id="dutyIncrLarge" title="Increase by 10">&gt;&gt;</button>
+                        </div>
+                    </div>
+
+                    <!-- Pulse Duration adjustment -->
+                    <div style="margin-bottom: 1.5rem;">
+                        <label style="display: block; font-weight: 600; margin-bottom: 0.75rem; font-size: 1rem;">Adjust Pulse Duration</label>
+                        <div class="cal-btn-row">
+                            <button class="btn-cal btn-cal-adjust" id="durDecr" title="Decrease by 5 ms">&lt;</button>
+                            <button class="btn-cal btn-cal-adjust" id="durIncr" title="Increase by 5 ms">&gt;</button>
+                        </div>
+                    </div>
+
+                    <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                    <!-- Test & Save -->
+                    <div class="cal-btn-row">
+                        <button class="btn-cal btn-cal-test" id="testBtn">🔄 Test</button>
+                        <button class="btn-cal btn-cal-save" id="saveBtn">💾 Save</button>
+                    </div>
+
+                    <!-- Feedback message -->
+                    <div class="cal-message" id="calMessage"></div>
+                </div>
+            </div>
+        </main>
     </div>
-  </nav>
 
-  <div class="container">
-    <aside class="sidebar"></aside>
+    <script src="/scripts/sidebar-inject.js"></script>
+    <script>
+        // ---- State ----
+        let currentDevice = null;
+        let dutyCycle = 72;          // default
+        let pulseDuration = 160;     // default (ms)
 
-    <main class="main-content">
-      <div class="page-header">
-        <h1>Feeder Calibration</h1>
-        <p class="page-description">Static preview page for OTA and offline assets.</p>
-      </div>
+        // ---- DOM refs (assigned after DOMContentLoaded) ----
+        let dutyCycleEl, pulseDurationEl, calMessageEl;
+        let dutyDecrLargeBtn, dutyDecrBtn, dutyIncrBtn, dutyIncrLargeBtn;
+        let durDecrBtn, durIncrBtn, testBtn, saveBtn;
 
-      <div class="card">
-        <div class="card-content">
-          <p>This static page is included in the hub static filesystem so previews and OTA assets are complete.</p>
-          <p>Use the live hub to run test feeds and save calibration.</p>
-        </div>
-      </div>
-    </main>
-  </div>
+        // ---- Helpers ----
+        function getQueryParam(name) {
+            return new URLSearchParams(window.location.search).get(name);
+        }
 
-  <script src="/scripts/sidebar-inject.js"></script>
+        function getDeviceTypeLabel(type) {
+            const t = String(type || '').toLowerCase();
+            switch (t) {
+                case 'light': return 'Lighting';
+                case 'co2': return 'CO₂ Regulator';
+                case 'heater': return 'Heater';
+                case 'feeder': case 'fish_feeder': return 'Fish Feeder';
+                case 'sensor': return 'Water Quality Sensor';
+                case 'repeater': return 'Repeater';
+                default: return type || 'Unknown';
+            }
+        }
+
+        function updateDisplay() {
+            dutyCycleEl.textContent = dutyCycle;
+            pulseDurationEl.textContent = pulseDuration;
+        }
+
+        function showMessage(text, type) {
+            calMessageEl.textContent = text;
+            calMessageEl.className = 'cal-message ' + (type === 'success' ? 'msg-success' : 'msg-error');
+            if (type === 'success') {
+                setTimeout(() => { calMessageEl.className = 'cal-message'; }, 3000);
+            }
+        }
+
+        function setAllButtons(disabled) {
+            [dutyDecrLargeBtn, dutyDecrBtn, dutyIncrBtn, dutyIncrLargeBtn,
+             durDecrBtn, durIncrBtn, testBtn, saveBtn].forEach(b => { if (b) b.disabled = disabled; });
+        }
+
+        // ---- Load device ----
+        async function loadDeviceFromQuery() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '/device/manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const devices = data.devices || [];
+                const device = devices.find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    alert('Device not found. It may have been unmapped or removed.');
+                    window.location.href = '/device/manage-devices.html';
+                    return;
+                }
+
+                document.getElementById('tankName').textContent = 'Aquarium ' + device.tankId;
+                document.getElementById('deviceType').textContent = getDeviceTypeLabel(device.type);
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                currentDevice = device;
+
+                await loadCalibration(mac);
+            } catch (err) {
+                console.error('Error loading device:', err);
+                alert('Failed to load device information.');
+            }
+        }
+
+        // ---- Load saved calibration ----
+        async function loadCalibration(mac) {
+            try {
+                const resp = await fetch('/api/feeder-calibration?mac=' + encodeURIComponent(mac));
+                const data = await resp.json();
+                if (resp.ok && data.success && data.calibration) {
+                    dutyCycle = data.calibration.dutyCycle;
+                    pulseDuration = data.calibration.pulseDuration;
+                }
+            } catch (err) {
+                console.warn('Could not load saved calibration, using defaults:', err);
+            }
+            updateDisplay();
+        }
+
+        // ---- Adjust functions (local-only, no API round-trip needed) ----
+        function adjustDuty(delta) {
+            dutyCycle = Math.max(0, Math.min(180, dutyCycle + delta));
+            updateDisplay();
+            showMessage('Duty cycle set to ' + dutyCycle, 'success');
+        }
+
+        function adjustDuration(delta) {
+            pulseDuration = Math.max(10, Math.min(2000, pulseDuration + delta));
+            updateDisplay();
+            showMessage('Pulse duration set to ' + pulseDuration + ' ms', 'success');
+        }
+
+        // ---- Test ----
+        async function testCalibration() {
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+            setAllButtons(true);
+            testBtn.textContent = 'Testing...';
+            try {
+                const resp = await fetch('/api/feeder-calibration/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mac: currentDevice.mac,
+                        dutyCycle: dutyCycle,
+                        pulseDuration: pulseDuration
+                    })
+                });
+                const data = await resp.json();
+                if (resp.ok && data.success) {
+                    showMessage('Test feed executed — duty: ' + dutyCycle + ', duration: ' + pulseDuration + ' ms', 'success');
+                } else {
+                    showMessage('Test failed: ' + (data.error || 'Unknown error'), 'error');
+                }
+            } catch (err) {
+                console.error('Test error:', err);
+                showMessage('Error running test feed', 'error');
+            } finally {
+                testBtn.textContent = '🔄 Test';
+                setAllButtons(false);
+            }
+        }
+
+        // ---- Save ----
+        async function saveCalibration() {
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+            setAllButtons(true);
+            saveBtn.textContent = 'Saving...';
+            try {
+                const payload = {
+                    mac: currentDevice.mac,
+                    tankId: currentDevice.tankId,
+                    deviceName: currentDevice.name || currentDevice.mac,
+                    calibration: {
+                        dutyCycle: dutyCycle,
+                        pulseDuration: pulseDuration
+                    }
+                };
+                const resp = await fetch('/api/feeder-calibration', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (resp.ok && data.success) {
+                    showMessage('Calibration saved — duty: ' + dutyCycle + ', duration: ' + pulseDuration + ' ms', 'success');
+                } else {
+                    throw new Error((data && data.error) || 'Save failed');
+                }
+            } catch (err) {
+                console.error('Save error:', err);
+                showMessage('Failed to save calibration', 'error');
+            } finally {
+                saveBtn.textContent = '💾 Save';
+                setAllButtons(false);
+            }
+        }
+
+        // ---- Init ----
+        document.addEventListener('DOMContentLoaded', () => {
+            dutyCycleEl      = document.getElementById('dutyCycleValue');
+            pulseDurationEl  = document.getElementById('pulseDurationValue');
+            calMessageEl     = document.getElementById('calMessage');
+            dutyDecrLargeBtn = document.getElementById('dutyDecrLarge');
+            dutyDecrBtn      = document.getElementById('dutyDecr');
+            dutyIncrBtn      = document.getElementById('dutyIncr');
+            dutyIncrLargeBtn = document.getElementById('dutyIncrLarge');
+            durDecrBtn       = document.getElementById('durDecr');
+            durIncrBtn       = document.getElementById('durIncr');
+            testBtn          = document.getElementById('testBtn');
+            saveBtn          = document.getElementById('saveBtn');
+
+            // Duty cycle buttons
+            dutyDecrLargeBtn.addEventListener('click', () => adjustDuty(-10));
+            dutyDecrBtn.addEventListener('click',      () => adjustDuty(-1));
+            dutyIncrBtn.addEventListener('click',      () => adjustDuty(1));
+            dutyIncrLargeBtn.addEventListener('click', () => adjustDuty(10));
+
+            // Pulse duration buttons
+            durDecrBtn.addEventListener('click', () => adjustDuration(-5));
+            durIncrBtn.addEventListener('click', () => adjustDuration(5));
+
+            // Action buttons
+            testBtn.addEventListener('click', testCalibration);
+            saveBtn.addEventListener('click', saveCalibration);
+
+            loadDeviceFromQuery();
+        });
+    </script>
 </body>
 </html>

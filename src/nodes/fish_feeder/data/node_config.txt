@@ -10,6 +10,10 @@ FIRMWARE_VERSION=1
 # ESP-NOW Settings
 ESPNOW_CHANNEL=11
 
+# Hardware pin overrides
+SERVO_PIN=18
+STATUS_LED_PIN=13
+
 # Debug Settings
 DEBUG_SERIAL=true
 DEBUG_ESPNOW=true

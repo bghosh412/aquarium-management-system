@@ -1463,6 +1463,27 @@ static bool deleteNextTaskEntry(const NextTask& target) {
 void rebuildNextTasks() {
     Serial.println("[SCHEDULER] Rebuilding next-task.json from schedules...");
     
+    // === Load valid (mapped) device MACs from devices.json ===
+    // Any device not in devices.json is considered deleted or unmapped
+    std::vector<String> validMacs;
+    {
+        File devFile = FS_USER.open("/config/devices.json", "r");
+        if (devFile) {
+            DynamicJsonDocument devDoc(8192);
+            DeserializationError devErr = deserializeJson(devDoc, devFile);
+            devFile.close();
+            if (!devErr) {
+                JsonArray devices = devDoc["devices"].as<JsonArray>();
+                for (JsonObject dev : devices) {
+                    String mac = dev["mac"].as<String>();
+                    mac.toUpperCase();
+                    validMacs.push_back(mac);
+                }
+            }
+        }
+        Serial.printf("[SCHEDULER] Valid mapped devices: %d\n", validMacs.size());
+    }
+    
     std::vector<NextTask> allTasks;
     
     // === Process light schedules ===
@@ -1477,6 +1498,18 @@ void rebuildNextTasks() {
             for (JsonObject sched : schedules) {
                 const char* macStr = sched["mac"];
                 if (!macStr) continue;
+                
+                // Skip if device is deleted/unmapped
+                String macUpper = String(macStr);
+                macUpper.toUpperCase();
+                bool found = false;
+                for (const String& vm : validMacs) {
+                    if (vm == macUpper) { found = true; break; }
+                }
+                if (!found) {
+                    Serial.printf("[SCHEDULER] Skipping light schedule for deleted/unmapped device: %s\n", macStr);
+                    continue;
+                }
                 
                 JsonObject schedule = sched["schedule"];
                 calculateNextTasks(macStr, schedule, allTasks);
@@ -1509,6 +1542,18 @@ void rebuildNextTasks() {
             for (JsonObject sched : schedules) {
                 const char* macStr = sched["mac"];
                 if (!macStr) continue;
+                
+                // Skip if device is deleted/unmapped
+                String macUpper = String(macStr);
+                macUpper.toUpperCase();
+                bool found = false;
+                for (const String& vm : validMacs) {
+                    if (vm == macUpper) { found = true; break; }
+                }
+                if (!found) {
+                    Serial.printf("[SCHEDULER] Skipping feeder schedule for deleted/unmapped device: %s\n", macStr);
+                    continue;
+                }
                 
                 JsonObject schedule = sched["schedule"];
                 
@@ -3440,11 +3485,46 @@ void setupWebServer() {
             return;
         }
 
-        JsonVariant schedule = body["schedule"];
-        if (schedule.isNull()) {
-            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing schedule\"}");
+        // Backwards-compatible delete-in-post support: { mac, action: "delete" }
+        if (body.containsKey("action") && String(body["action"] | "") == "delete") {
+            File file = FS_USER.open("/config/schedule/light-schedule.json", "r");
+            DynamicJsonDocument doc(4096);
+            bool changed = false;
+
+            if (file) {
+                DeserializationError err2 = deserializeJson(doc, file);
+                file.close();
+                if (!err2) {
+                    JsonArray schedules = doc["schedules"].as<JsonArray>();
+                    if (!schedules.isNull()) {
+                        for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                            String entryMac = schedules[i]["mac"] | "";
+                            if (entryMac.equalsIgnoreCase(macStr)) {
+                                schedules.remove(i);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (changed) {
+                File out = FS_USER.open("/config/schedule/light-schedule.json", "w");
+                if (!out) {
+                    request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write light-schedule.json\"}");
+                    return;
+                }
+                serializeJson(doc, out);
+                out.close();
+            }
+
+            // Rebuild next-task.json with updated schedules
+            rebuildNextTasks();
+            request->send(200, "application/json", "{\"success\":true}");
             return;
         }
+
+        JsonVariant schedule = body["schedule"];
 
         File file = FS_USER.open("/config/schedule/light-schedule.json", "r");
         DynamicJsonDocument doc(4096);
@@ -3546,6 +3626,64 @@ void setupWebServer() {
         request->send(200, "application/json", "{\"success\":true}");
     });
 
+    // POST delete light schedule for a device
+    server.on("/api/light-schedule/delete", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(512);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        File file = FS_USER.open("/config/schedule/light-schedule.json", "r");
+        DynamicJsonDocument doc(4096);
+        bool changed = false;
+
+        if (file) {
+            DeserializationError err2 = deserializeJson(doc, file);
+            file.close();
+            if (err2) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse light-schedule.json\"}");
+                return;
+            }
+
+            JsonArray schedules = doc["schedules"].as<JsonArray>();
+            if (!schedules.isNull()) {
+                for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                    String entryMac = schedules[i]["mac"] | "";
+                    if (entryMac.equalsIgnoreCase(macStr)) {
+                        schedules.remove(i);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (changed) {
+            File out = FS_USER.open("/config/schedule/light-schedule.json", "w");
+            if (!out) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write light-schedule.json\"}");
+                return;
+            }
+            serializeJson(doc, out);
+            out.close();
+        }
+
+        // Rebuild next-task.json to remove any scheduled tasks for this device
+        rebuildNextTasks();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
     // ========================================================================
     // FEEDER CALIBRATION API
     // ========================================================================
@@ -3616,7 +3754,40 @@ void setupWebServer() {
             return;
         }
 
+        // If /api/feeder-calibration/test is routed here, handle test payloads
+        String action = body["action"] | "";
         JsonVariant calibration = body["calibration"];
+        bool hasDirectParams = body.containsKey("dutyCycle") || body.containsKey("pulseDuration");
+        if (action == "test" || (calibration.isNull() && hasDirectParams)) {
+            uint16_t pwmValue = 72;
+            uint32_t durationMs = 160;
+            if (!calibration.isNull()) {
+                pwmValue = calibration["dutyCycle"] | pwmValue;
+                durationMs = calibration["pulseDuration"] | durationMs;
+            } else {
+                pwmValue = body["dutyCycle"] | pwmValue;
+                durationMs = body["pulseDuration"] | durationMs;
+            }
+
+            uint8_t mac[6];
+            if (!parseMacAddress(macStr.c_str(), mac)) {
+                request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+                return;
+            }
+
+            sendFeederCommand(mac, pwmValue, durationMs);
+
+            DynamicJsonDocument resp(256);
+            resp["success"] = true;
+            resp["dutyCycle"] = pwmValue;
+            resp["pulseDuration"] = durationMs;
+            String response;
+            serializeJson(resp, response);
+            request->send(200, "application/json", response);
+            return;
+        }
+
+        calibration = body["calibration"];
         if (calibration.isNull()) {
             request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing calibration\"}");
             return;
@@ -3661,6 +3832,44 @@ void setupWebServer() {
         file.close();
 
         request->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // POST test feeder calibration (sends a single test feed via ESP-NOW)
+    server.on("/api/feeder-calibration/test", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(512);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        uint16_t pwmValue = body["dutyCycle"] | 72;
+        uint32_t durationMs = body["pulseDuration"] | 160;
+
+        uint8_t mac[6];
+        if (!parseMacAddress(macStr.c_str(), mac)) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+            return;
+        }
+
+        sendFeederCommand(mac, pwmValue, durationMs);
+
+        DynamicJsonDocument resp(256);
+        resp["success"] = true;
+        resp["dutyCycle"] = pwmValue;
+        resp["pulseDuration"] = durationMs;
+        String response;
+        serializeJson(resp, response);
+        request->send(200, "application/json", response);
     });
 
     // ========================================================================
@@ -3757,11 +3966,46 @@ void setupWebServer() {
             return;
         }
 
-        JsonVariant schedule = body["schedule"];
-        if (schedule.isNull()) {
-            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing schedule\"}");
+        // Backwards-compatible delete-in-post support: { mac, action: "delete" }
+        if (body.containsKey("action") && String(body["action"] | "") == "delete") {
+            File file = FS_USER.open("/config/schedule/feeder-schedule.json", "r");
+            DynamicJsonDocument doc(4096);
+            bool changed = false;
+
+            if (file) {
+                DeserializationError err2 = deserializeJson(doc, file);
+                file.close();
+                if (!err2) {
+                    JsonArray schedules = doc["schedules"].as<JsonArray>();
+                    if (!schedules.isNull()) {
+                        for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                            String entryMac = schedules[i]["mac"] | "";
+                            if (entryMac.equalsIgnoreCase(macStr)) {
+                                schedules.remove(i);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (changed) {
+                File out = FS_USER.open("/config/schedule/feeder-schedule.json", "w");
+                if (!out) {
+                    request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write feeder-schedule.json\"}");
+                    return;
+                }
+                serializeJson(doc, out);
+                out.close();
+            }
+
+            // Rebuild next-task.json with updated schedules
+            rebuildNextTasks();
+            request->send(200, "application/json", "{\"success\":true}");
             return;
         }
+
+        JsonVariant schedule = body["schedule"];
 
         File file = FS_USER.open("/config/schedule/feeder-schedule.json", "r");
         DynamicJsonDocument doc(4096);
@@ -3823,6 +4067,64 @@ void setupWebServer() {
         file.close();
 
         // Rebuild next-task.json with updated schedule (includes feeder tasks)
+        rebuildNextTasks();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // POST delete feeder schedule for a device (dedicated endpoint)
+    server.on("/api/feeder-schedule/delete", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(512);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        File file = FS_USER.open("/config/schedule/feeder-schedule.json", "r");
+        DynamicJsonDocument doc(4096);
+        bool changed = false;
+
+        if (file) {
+            DeserializationError err2 = deserializeJson(doc, file);
+            file.close();
+            if (err2) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse feeder-schedule.json\"}");
+                return;
+            }
+
+            JsonArray schedules = doc["schedules"].as<JsonArray>();
+            if (!schedules.isNull()) {
+                for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                    String entryMac = schedules[i]["mac"] | "";
+                    if (entryMac.equalsIgnoreCase(macStr)) {
+                        schedules.remove(i);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (changed) {
+            File out = FS_USER.open("/config/schedule/feeder-schedule.json", "w");
+            if (!out) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write feeder-schedule.json\"}");
+                return;
+            }
+            serializeJson(doc, out);
+            out.close();
+        }
+
+        // Rebuild next-task.json to remove any scheduled tasks for this device
         rebuildNextTasks();
 
         request->send(200, "application/json", "{\"success\":true}");
@@ -5038,6 +5340,44 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             schedFile.close();
         }
 
+        // Remove from feeder-schedule.json
+        File feederSchedFile = FS_USER.open("/config/schedule/feeder-schedule.json", "r");
+        DynamicJsonDocument feederSchedDoc(4096);
+        if (feederSchedFile) {
+            deserializeJson(feederSchedDoc, feederSchedFile);
+            feederSchedFile.close();
+        }
+        JsonArray feederSchedules = feederSchedDoc["schedules"];
+        if (!feederSchedules.isNull()) {
+            for (int i = (int)feederSchedules.size() - 1; i >= 0; i--) {
+                if (feederSchedules[i]["mac"].as<String>() == macStr) {
+                    feederSchedules.remove(i);
+                }
+            }
+            feederSchedFile = FS_USER.open("/config/schedule/feeder-schedule.json", "w");
+            serializeJson(feederSchedDoc, feederSchedFile);
+            feederSchedFile.close();
+        }
+
+        // Remove from feeder-calibration.json
+        File calFile = FS_USER.open("/config/feeder-calibration.json", "r");
+        DynamicJsonDocument calDoc(2048);
+        if (calFile) {
+            deserializeJson(calDoc, calFile);
+            calFile.close();
+        }
+        JsonArray calibrations = calDoc["calibrations"];
+        if (!calibrations.isNull()) {
+            for (int i = (int)calibrations.size() - 1; i >= 0; i--) {
+                if (calibrations[i]["mac"].as<String>() == macStr) {
+                    calibrations.remove(i);
+                }
+            }
+            calFile = FS_USER.open("/config/feeder-calibration.json", "w");
+            serializeJson(calDoc, calFile);
+            calFile.close();
+        }
+
         // Also remove from memory and peer list
         uint8_t mac[6];
         if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
@@ -5046,6 +5386,10 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             ESPNowManager::getInstance().removePeer(mac);
         }
 
+        // Rebuild next-task.json to purge any remaining tasks for this device
+        rebuildNextTasks();
+
+        Serial.printf(" [OK] Device deleted: %s (cascaded: schedules/calibration/next-tasks)\n", macStr.c_str());
         request->send(200, "application/json", "{\"success\":true}");
     });
 
@@ -5283,6 +5627,74 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                 Serial.printf(" [WARN] Aquarium %d not found or device not in aquarium!\n", tankId);
             }
             */
+
+            // Normalize MAC for case-insensitive comparison
+            String macUpper = macStr;
+            macUpper.toUpperCase();
+
+            // Remove from light-devices.json
+            {
+                File f = FS_USER.open("/config/light-devices.json", "r");
+                DynamicJsonDocument ldDoc(8192);
+                if (f) { deserializeJson(ldDoc, f); f.close(); }
+                JsonArray arr = ldDoc["lightDevices"];
+                if (!arr.isNull()) {
+                    for (int i = (int)arr.size() - 1; i >= 0; i--) {
+                        String m = arr[i]["mac"].as<String>(); m.toUpperCase();
+                        if (m == macUpper) arr.remove(i);
+                    }
+                    f = FS_USER.open("/config/light-devices.json", "w");
+                    serializeJson(ldDoc, f); f.close();
+                }
+            }
+
+            // Remove from light-schedule.json
+            {
+                File f = FS_USER.open("/config/schedule/light-schedule.json", "r");
+                DynamicJsonDocument lsDoc(4096);
+                if (f) { deserializeJson(lsDoc, f); f.close(); }
+                JsonArray arr = lsDoc["schedules"];
+                if (!arr.isNull()) {
+                    for (int i = (int)arr.size() - 1; i >= 0; i--) {
+                        String m = arr[i]["mac"].as<String>(); m.toUpperCase();
+                        if (m == macUpper) arr.remove(i);
+                    }
+                    f = FS_USER.open("/config/schedule/light-schedule.json", "w");
+                    serializeJson(lsDoc, f); f.close();
+                }
+            }
+
+            // Remove from feeder-schedule.json
+            {
+                File f = FS_USER.open("/config/schedule/feeder-schedule.json", "r");
+                DynamicJsonDocument fsDoc(4096);
+                if (f) { deserializeJson(fsDoc, f); f.close(); }
+                JsonArray arr = fsDoc["schedules"];
+                if (!arr.isNull()) {
+                    for (int i = (int)arr.size() - 1; i >= 0; i--) {
+                        String m = arr[i]["mac"].as<String>(); m.toUpperCase();
+                        if (m == macUpper) arr.remove(i);
+                    }
+                    f = FS_USER.open("/config/schedule/feeder-schedule.json", "w");
+                    serializeJson(fsDoc, f); f.close();
+                }
+            }
+
+            // Remove from feeder-calibration.json
+            {
+                File f = FS_USER.open("/config/feeder-calibration.json", "r");
+                DynamicJsonDocument fcDoc(2048);
+                if (f) { deserializeJson(fcDoc, f); f.close(); }
+                JsonArray arr = fcDoc["calibrations"];
+                if (!arr.isNull()) {
+                    for (int i = (int)arr.size() - 1; i >= 0; i--) {
+                        String m = arr[i]["mac"].as<String>(); m.toUpperCase();
+                        if (m == macUpper) arr.remove(i);
+                    }
+                    f = FS_USER.open("/config/feeder-calibration.json", "w");
+                    serializeJson(fcDoc, f); f.close();
+                }
+            }
             
             // Add back to unmapped devices
             File unmappedFile = FS_USER.open("/config/unmapped-devices.json", "r");
@@ -5320,7 +5732,10 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             serializeJson(unmappedDoc, unmappedFile);
             unmappedFile.close();
             
-            Serial.printf(" Device unmapped: %s\n", macStr.c_str());
+            // Rebuild next-task.json to purge any tasks for this unmapped device
+            rebuildNextTasks();
+
+            Serial.printf(" Device unmapped: %s (next-tasks rebuilt)\n", macStr.c_str());
             
             // Send success response
             String response = "{\"success\":true,\"message\":\"Device unmapped successfully\"}";

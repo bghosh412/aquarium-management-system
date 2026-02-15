@@ -412,6 +412,36 @@ bool isAllowedConfigFile(const String& name) {
     return false;
 }
 
+// Recursively list all files on FS_USER under a given directory
+void listUserFilesRecursive(File dir, const String& prefix, JsonArray& files) {
+    File entry = dir.openNextFile();
+    while (entry) {
+        String entryName = String(entry.name());
+        // Build relative path from root
+        String relativePath;
+        if (prefix.length() > 0 && !prefix.equals("/")) {
+            relativePath = prefix;
+            if (!relativePath.endsWith("/")) relativePath += "/";
+            // entry.name() on ESP32 returns just the filename, not the full path
+            relativePath += entryName;
+        } else {
+            relativePath = "/" + entryName;
+        }
+        if (entry.isDirectory()) {
+            File subDir = FS_USER.open(relativePath);
+            if (subDir) {
+                listUserFilesRecursive(subDir, relativePath, files);
+                subDir.close();
+            }
+        } else {
+            JsonObject fileObj = files.createNestedObject();
+            fileObj["path"] = relativePath;
+            fileObj["size"] = entry.size();
+        }
+        entry = dir.openNextFile();
+    }
+}
+
 // ============================================================================
 // SEMANTIC VERSION COMPARISON
 // ============================================================================
@@ -5339,16 +5369,15 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(200, "application/json", resp);
 });
 
-    // GET settings file list
+    // GET settings file list — list ALL files on FS_USER recursively
     server.on("/api/settings/files", HTTP_GET, [](AsyncWebServerRequest *request){
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(4096);
         JsonArray files = doc.createNestedArray("files");
 
-        for (const char* fileName : kConfigJsonFiles) {
-            String path = String("/config/") + fileName;
-            if (FS_USER.exists(path)) {
-                files.add(String(fileName));
-            }
+        File root = FS_USER.open("/");
+        if (root && root.isDirectory()) {
+            listUserFilesRecursive(root, "/", files);
+            root.close();
         }
 
         String resp;
@@ -5356,7 +5385,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "application/json", resp);
     });
 
-    // GET settings file download
+    // GET settings file download — download any file from FS_USER by path
     server.on("/api/settings/download", HTTP_GET, [](AsyncWebServerRequest *request){
         if (!request->hasParam("name")) {
             request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing file name\"}");
@@ -5365,21 +5394,26 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
 
         String name = request->getParam("name")->value();
 
-        if (!isAllowedConfigFile(name)) {
-            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid file name\"}");
-            return;
+        // Ensure path starts with /
+        String path = name;
+        if (!path.startsWith("/")) {
+            path = "/" + path;
         }
 
-        String path = String("/config/") + name;
         if (!FS_USER.exists(path)) {
             request->send(404, "application/json", "{\"success\":false,\"error\":\"File not found\"}");
             return;
         }
 
-        request->send(FS_USER, path, "application/json", true);
+        // Determine content type
+        String contentType = "application/octet-stream";
+        if (path.endsWith(".json")) contentType = "application/json";
+        else if (path.endsWith(".txt")) contentType = "text/plain";
+
+        request->send(FS_USER, path, contentType, true);
     });
 
-    // POST settings file upload
+    // POST settings file upload — upload any file to FS_USER by target path
     server.on("/api/settings/upload", HTTP_POST,
         [](AsyncWebServerRequest *request){
             SettingsUploadContext* ctx = (SettingsUploadContext*)request->_tempObject;
@@ -5409,13 +5443,19 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                 }
 
                 String target = request->getParam("target")->value();
-                if (!isAllowedConfigFile(target)) {
-                    ctx->error = "Invalid target filename";
-                    return;
+                // Ensure path starts with /
+                if (!target.startsWith("/")) {
+                    target = "/" + target;
                 }
 
-                String path = String("/config/") + target;
-                ctx->file = FS_USER.open(path, "w");
+                // Create parent directories if needed
+                int lastSlash = target.lastIndexOf('/');
+                if (lastSlash > 0) {
+                    String parentDir = target.substring(0, lastSlash);
+                    FS_USER.mkdir(parentDir);
+                }
+
+                ctx->file = FS_USER.open(target, "w");
                 if (!ctx->file) {
                     ctx->error = "Failed to open file";
                     return;
@@ -6132,6 +6172,26 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             serializeJson(unmappedDoc, unmappedFile);
             unmappedFile.close();
 
+            // Remove from deleted-devices.json (allow re-provisioning)
+            File deletedFile = FS_USER.open("/config/deleted-devices.json", "r");
+            DynamicJsonDocument deletedDoc(2048);
+            if (deletedFile) {
+                deserializeJson(deletedDoc, deletedFile);
+                deletedFile.close();
+
+                JsonArray deletedDevices = deletedDoc["deletedDevices"];
+                if (!deletedDevices.isNull()) {
+                    for (int i = (int)deletedDevices.size() - 1; i >= 0; i--) {
+                        if (deletedDevices[i]["mac"].as<String>().equalsIgnoreCase(macStr)) {
+                            deletedDevices.remove(i);
+                        }
+                    }
+                    deletedFile = FS_USER.open("/config/deleted-devices.json", "w");
+                    serializeJson(deletedDoc, deletedFile);
+                    deletedFile.close();
+                }
+            }
+
             // Add to devices.json (create devices array if missing)
             File devicesFile = FS_USER.open("/config/devices.json", "r");
             DynamicJsonDocument devicesDoc(8192);
@@ -6367,6 +6427,36 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             serializeJson(wmSchedDoc, wmSchedFile);
             wmSchedFile.close();
         }
+
+        // Add to deleted-devices.json so future ANNOUNCE/HEARTBEAT won't re-add to unmapped
+        File deletedFile = FS_USER.open("/config/deleted-devices.json", "r");
+        DynamicJsonDocument deletedDoc(2048);
+        if (deletedFile) {
+            deserializeJson(deletedDoc, deletedFile);
+            deletedFile.close();
+        } else {
+            deletedDoc["metadata"]["totalDeleted"] = 0;
+        }
+
+        JsonArray deletedDevices = deletedDoc["deletedDevices"];
+        if (deletedDevices.isNull()) {
+            deletedDevices = deletedDoc.createNestedArray("deletedDevices");
+        }
+
+        for (int i = (int)deletedDevices.size() - 1; i >= 0; i--) {
+            if (deletedDevices[i]["mac"].as<String>().equalsIgnoreCase(macStr)) {
+                deletedDevices.remove(i);
+            }
+        }
+
+        JsonObject newDeleted = deletedDevices.createNestedObject();
+        newDeleted["mac"] = macStr;
+        newDeleted["deletedAt"] = millis();
+        deletedDoc["metadata"]["totalDeleted"] = (int)deletedDevices.size();
+
+        deletedFile = FS_USER.open("/config/deleted-devices.json", "w");
+        serializeJson(deletedDoc, deletedFile);
+        deletedFile.close();
 
         // Also remove from memory and peer list
         uint8_t mac[6];
@@ -6753,6 +6843,68 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     // ===== Static File Serving (MUST be registered LAST) =====
     // These catch-all handlers should come after all API routes
 
+    // ========================================================================
+    // DIAGNOSTICS API
+    // ========================================================================
+    server.on("/api/diagnostics", HTTP_GET, [](AsyncWebServerRequest *request){
+        DynamicJsonDocument doc(1024);
+
+        // WiFi info
+        doc["wifi"]["ssid"] = WiFi.SSID();
+        doc["wifi"]["rssi"] = WiFi.RSSI();
+        doc["wifi"]["ip"] = WiFi.localIP().toString();
+        doc["wifi"]["channel"] = WiFi.channel();
+
+        // ESP-NOW info
+        doc["espnow"]["expectedChannel"] = config.espnowChannel;
+        doc["espnow"]["currentChannel"] = WiFi.channel();
+        doc["espnow"]["channelMatch"] = (WiFi.channel() == config.espnowChannel);
+        auto peers = ESPNowManager::getInstance().getPeers();
+        int onlineCount = 0;
+        for (auto &p : peers) { if (p.online) onlineCount++; }
+        doc["espnow"]["totalPeers"] = (int)peers.size();
+        doc["espnow"]["onlinePeers"] = onlineCount;
+
+        // Memory info
+        doc["memory"]["freeHeap"] = ESP.getFreeHeap();
+        doc["memory"]["totalHeap"] = ESP.getHeapSize();
+        doc["memory"]["freePsram"] = ESP.getFreePsram();
+        doc["memory"]["totalPsram"] = ESP.getPsramSize();
+
+        // Filesystem info
+#ifdef DUAL_LITTLEFS
+        doc["filesystem"]["staticFs"]["total"] = StaticFS.totalBytes();
+        doc["filesystem"]["staticFs"]["used"] = StaticFS.usedBytes();
+        doc["filesystem"]["staticFs"]["free"] = StaticFS.totalBytes() - StaticFS.usedBytes();
+        doc["filesystem"]["userFs"]["total"] = UserFS.totalBytes();
+        doc["filesystem"]["userFs"]["used"] = UserFS.usedBytes();
+        doc["filesystem"]["userFs"]["free"] = UserFS.totalBytes() - UserFS.usedBytes();
+#else
+        doc["filesystem"]["singleFs"]["total"] = LittleFS.totalBytes();
+        doc["filesystem"]["singleFs"]["used"] = LittleFS.usedBytes();
+        doc["filesystem"]["singleFs"]["free"] = LittleFS.totalBytes() - LittleFS.usedBytes();
+#endif
+
+        // Uptime
+        doc["uptime"] = millis() / 1000;
+
+        String resp;
+        serializeJson(doc, resp);
+        request->send(200, "application/json", resp);
+    });
+
+    // ========================================================================
+    // WIFI RESET API
+    // ========================================================================
+    server.on("/api/wifi/reset", HTTP_POST, [](AsyncWebServerRequest *request){
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"WiFi credentials cleared. Hub will restart in AP mode.\"}");
+        // Delay to let the response be sent, then reset
+        delay(500);
+        wifiManager.resetSettings();
+        delay(500);
+        ESP.restart();
+    });
+
     // WebSocket setup
     ws.onEvent(onWebSocketEvent);
     server.addHandler(&ws);
@@ -6765,6 +6917,9 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     server.serveStatic("/fonts", FS_STATIC, "/UI/fonts");
     // Fallback: map root to UI directory and serve index.html by default
     server.serveStatic("/", FS_STATIC, "/UI/").setDefaultFile("index.html");
+
+    // Serve ota.json from static filesystem (it lives on FS_STATIC, not FS_USER)
+    server.serveStatic("/config/ota.json", FS_STATIC, "/config/ota.json");
 
     // Serve config directory from user filesystem (read-only for browser)
     server.serveStatic("/config", FS_USER, "/config/");
@@ -7297,6 +7452,9 @@ void setup() {
     // Setup WiFi
     setupWiFi();
     
+    // Small delay to let WiFi stack fully stabilize before starting mDNS
+    delay(200);
+
     // Setup mDNS
     setupMDNS();
     

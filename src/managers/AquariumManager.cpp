@@ -239,6 +239,34 @@ static void updateDeviceFirmwareInJson(const char* macStr, uint8_t firmwareVersi
     devFile.close();
 }
 
+static bool isDeletedDeviceMac(const char* macStr) {
+    File file = FS_USER.open("/config/deleted-devices.json", "r");
+    if (!file) {
+        return false;
+    }
+
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    if (error) {
+        return false;
+    }
+
+    JsonArray deletedDevices = doc["deletedDevices"];
+    if (deletedDevices.isNull()) {
+        return false;
+    }
+
+    for (JsonObject device : deletedDevices) {
+        const char* existingMac = device["mac"];
+        if (existingMac && strcasecmp(existingMac, macStr) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& msg) {
     uint64_t macKey = _macToKey(mac);
     
@@ -251,6 +279,12 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    if (isDeletedDeviceMac(macStr)) {
+        Serial.printf("   - Ignoring deleted device ANNOUNCE: %s\n", macStr);
+        _stats.totalMessagesReceived++;
+        return;
+    }
 
     // Check if device exists in persistent devices.json (provisioned)
     File devFile = FS_USER.open("/config/devices.json", "r");
@@ -431,6 +465,11 @@ void AquariumManager::handleHeartbeat(const uint8_t* mac, const HeartbeatMessage
         char macStr[18];
         snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+        if (isDeletedDeviceMac(macStr)) {
+            Serial.printf("   - Ignoring deleted device HEARTBEAT: %s\n", macStr);
+            return;
+        }
 
         // If not provisioned, persist as unmapped so UI can show it after hub restarts
         if (!isProvisionedDeviceMac(String(macStr))) {

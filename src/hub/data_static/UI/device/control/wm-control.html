@@ -208,12 +208,8 @@
             badge.className = 'badge badge-secondary';
 
             try {
-                // Send a status request command via the wavemaker-command API
-                const resp = await fetch('/api/wavemaker-command', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mac: currentDevice.mac, command: 'STATUS' })
-                });
+                // Request status via wm-status endpoint (sends ESP-NOW status request + returns cached)
+                const resp = await fetch('/api/wm-status?mac=' + encodeURIComponent(currentDevice.mac));
                 const data = await resp.json();
 
                 if (data && data.success && data.status) {
@@ -222,14 +218,13 @@
                     renderStatus();
                     badge.textContent = 'Updated';
                     badge.className = 'badge badge-online';
-                } else if (data && data.success) {
-                    // Command sent but no immediate status - show pending
+                } else if (data && data.pending) {
+                    // Status request sent but no cached data yet - poll after delay
                     badge.textContent = 'Waiting for response…';
                     badge.className = 'badge badge-secondary';
-                    // Try polling after a short delay
-                    setTimeout(() => refreshStatusPoll(), 2000);
+                    setTimeout(() => refreshStatusPoll(), 2500);
                 } else {
-                    badge.textContent = 'Error';
+                    badge.textContent = 'No data';
                     badge.className = 'badge badge-offline';
                 }
             } catch (err) {

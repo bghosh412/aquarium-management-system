@@ -47,6 +47,12 @@
       "name": "Repeater Node",
       "nodeType": 9,
       "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/Repeater/"
+    },
+    {
+      "id": "wave_maker",
+      "name": "Wave Maker Node",
+      "nodeType": 10,
+      "otaUrl": "https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Node/WaveMaker/"
     }
   ]
 }

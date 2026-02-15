@@ -18,28 +18,39 @@ function loadFileList() {
             }
 
             data.files.forEach(file => {
+                // file is now an object with {path, size}
+                const filePath = file.path || file;
+                const fileSize = file.size !== undefined ? formatFileSize(file.size) : '';
+                const fileName = filePath.split('/').pop();
+
                 const row = document.createElement('div');
                 row.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:0.75rem 1rem; border:1px solid var(--color-border); border-radius:10px; background:var(--color-bg);';
                 row.innerHTML = `
                     <div>
-                        <div style="font-weight:600;">${file}</div>
-                        <div style="font-size:0.875rem; color:var(--color-text-secondary);">/config/${file}</div>
+                        <div style="font-weight:600;">${fileName}</div>
+                        <div style="font-size:0.875rem; color:var(--color-text-secondary);">${filePath}${fileSize ? ' (' + fileSize + ')' : ''}</div>
                     </div>
-                    <a class="btn btn-secondary" href="/api/settings/download?name=${encodeURIComponent(file)}">
+                    <a class="btn btn-secondary" href="/api/settings/download?name=${encodeURIComponent(filePath)}">
                         ⬇️ Download
                     </a>
                 `;
                 fileList.appendChild(row);
 
                 const option = document.createElement('option');
-                option.value = file;
-                option.textContent = file;
+                option.value = filePath;
+                option.textContent = filePath;
                 targetSelect.appendChild(option);
             });
         })
         .catch(error => {
             console.error('Error loading file list:', error);
         });
+}
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
 function setupUploadForm() {

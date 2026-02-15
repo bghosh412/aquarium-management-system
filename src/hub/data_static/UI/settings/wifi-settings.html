@@ -51,19 +51,137 @@
 
             <div class="settings-layout">
 
+                <!-- WiFi Status -->
                 <div class="card">
                     <div class="card-header">
-                        <h3>WiFi</h3>
+                        <h3>📶 WiFi Connection</h3>
                     </div>
                     <div class="card-body">
-                        <p style="color: var(--color-text-secondary);">WiFi settings tools will be added here.</p>
+                        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+                            <div class="stat-card">
+                                <div class="stat-icon blue">📡</div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Network (SSID)</span>
+                                    <span class="stat-value" id="wifiSsid">—</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon" id="rssiIcon">📶</div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Signal Strength</span>
+                                    <span class="stat-value" id="wifiRssi">—</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon blue">🌐</div>
+                                <div class="stat-info">
+                                    <span class="stat-label">IP Address</span>
+                                    <span class="stat-value" id="wifiIp">—</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon blue">📻</div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Channel</span>
+                                    <span class="stat-value" id="wifiChannel">—</span>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Signal bar -->
+                        <div style="margin-top:1rem;">
+                            <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:var(--color-text-secondary); margin-bottom:0.25rem;">
+                                <span>Weak (-90 dBm)</span><span>Excellent (-30 dBm)</span>
+                            </div>
+                            <div style="background:var(--color-border); border-radius:8px; height:12px; overflow:hidden;">
+                                <div id="rssiBarFill" style="height:100%; width:0%; transition:width 0.5s; border-radius:8px;"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
+
+                <!-- WiFi Reset -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🔄 Reset WiFi Credentials</h3>
+                    </div>
+                    <div class="card-body">
+                        <p style="color: var(--color-text-secondary); margin-bottom:1rem;">
+                            This will erase the stored WiFi credentials and restart the hub in <strong>Access Point (AP) mode</strong>.
+                            You will need to reconnect to the hub's AP and reconfigure WiFi through the captive portal.
+                        </p>
+                        <div style="padding:1rem; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); border-radius:10px; margin-bottom:1rem;">
+                            <p style="color:#ef4444; font-weight:600; margin:0;">
+                                ⚠️ Warning: The hub will immediately disconnect from the current WiFi network and become temporarily unreachable. You will lose access to this page until you reconnect via the AP.
+                            </p>
+                        </div>
+                        <div id="resetStatus"></div>
+                        <button class="btn btn-primary" id="btnReset" onclick="resetWifi()" style="background:#ef4444; border-color:#ef4444;">
+                            🗑️ Reset WiFi &amp; Restart
+                        </button>
+                    </div>
+                </div>
+
             </div>
         </main>
     </div>
 
     <script src="/scripts/app.js?v=20260116"></script>
     <script src="/scripts/sidebar-inject.js?v=20260116"></script>
+    <script>
+        let refreshTimer = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadWifiInfo();
+            refreshTimer = setInterval(loadWifiInfo, 5000);
+        });
+
+        function loadWifiInfo() {
+            fetch('/api/diagnostics')
+                .then(r => r.json())
+                .then(d => {
+                    document.getElementById('wifiSsid').textContent = d.wifi.ssid || '—';
+                    document.getElementById('wifiIp').textContent = d.wifi.ip || '—';
+                    document.getElementById('wifiChannel').textContent = d.wifi.channel;
+
+                    const rssi = d.wifi.rssi;
+                    const label = rssi >= -50 ? 'Excellent' : rssi >= -60 ? 'Good' : rssi >= -70 ? 'Fair' : 'Weak';
+                    document.getElementById('wifiRssi').textContent = `${rssi} dBm (${label})`;
+
+                    // RSSI bar: map -90...-30 → 0...100%
+                    const pct = Math.min(100, Math.max(0, ((rssi + 90) / 60) * 100));
+                    const bar = document.getElementById('rssiBarFill');
+                    bar.style.width = pct + '%';
+                    bar.style.background = pct > 66 ? '#10b981' : pct > 33 ? '#f59e0b' : '#ef4444';
+
+                    document.getElementById('rssiIcon').className = 'stat-icon ' + (pct > 66 ? 'green' : pct > 33 ? 'orange' : 'red');
+                })
+                .catch(() => {});
+        }
+
+        function resetWifi() {
+            if (!confirm('Are you sure you want to reset WiFi credentials?\n\nThe hub will restart in AP mode and you will lose access to this page.')) return;
+            if (!confirm('This is your last chance to cancel. Proceed with WiFi reset?')) return;
+
+            const btn = document.getElementById('btnReset');
+            const status = document.getElementById('resetStatus');
+            btn.disabled = true;
+            btn.textContent = '⏳ Resetting…';
+            status.innerHTML = '<div style="color:var(--color-primary); margin-bottom:1rem;">Sending reset command…</div>';
+
+            if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+
+            fetch('/api/wifi/reset', { method: 'POST' })
+                .then(r => r.json())
+                .then(d => {
+                    status.innerHTML = '<div style="color:var(--color-accent); margin-bottom:1rem;">✅ WiFi credentials cleared. Hub is restarting in AP mode…<br>Look for the hub\'s WiFi access point to reconfigure.</div>';
+                })
+                .catch(() => {
+                    status.innerHTML = '<div style="color:var(--color-accent); margin-bottom:1rem;">Hub is restarting… Look for the hub\'s WiFi AP to reconfigure.</div>';
+                })
+                .finally(() => {
+                    btn.textContent = '🗑️ Reset WiFi & Restart';
+                });
+        }
+    </script>
 </body>
 </html>

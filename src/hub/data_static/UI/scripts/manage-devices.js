@@ -228,7 +228,7 @@ function updateSelectedCount() {
 function updateBulkButtons() {
     const hasSelection = selectedDevices.size > 0;
     document.getElementById('bulkEnableBtn').disabled = !hasSelection;
-    document.getElementById('bulkDisableBtn').disabled = !hasSelection;
+    document.getElementById('bulkUnmapBtn').disabled = !hasSelection;
     document.getElementById('bulkDeleteBtn').disabled = !hasSelection;
 }
 
@@ -255,28 +255,15 @@ function bulkEnable() {
     showNotification(`Enabled ${selectedDevices.size} device(s)`, 'success');
 }
 
-function bulkDisable() {
+function bulkUnmap() {
     if (selectedDevices.size === 0) return;
-    
-    selectedDevices.forEach(mac => {
-        sendCommand({
-            type: 'disableDevice',
-            mac: mac
-        });
-    });
-    
-    showNotification(`Disabled ${selectedDevices.size} device(s)`, 'success');
-}
 
-function bulkDelete() {
-    if (selectedDevices.size === 0) return;
-    
-    if (!confirm(`Are you sure you want to delete ${selectedDevices.size} device(s)? This cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to unmap ${selectedDevices.size} device(s)?\n\nThis will reset them to discovery mode.`)) {
         return;
     }
-    
-    const macsToRemove = Array.from(selectedDevices);
-    const requests = macsToRemove.map(mac =>
+
+    const macsToUnmap = Array.from(selectedDevices);
+    const requests = macsToUnmap.map(mac =>
         fetch('/api/unmap-device', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -291,11 +278,42 @@ function bulkDelete() {
             selectedDevices.clear();
             filterDevices();
             updateStatistics();
-            showNotification(`Unmapped ${macsToRemove.length} device(s)`, 'success');
+            showNotification(`Unmapped ${macsToUnmap.length} device(s)`, 'success');
         })
         .catch(error => {
             console.error('Error unmapping devices:', error);
             showNotification('Failed to unmap selected devices', 'error');
+        });
+}
+
+function bulkDelete() {
+    if (selectedDevices.size === 0) return;
+    
+    if (!confirm(`Are you sure you want to delete ${selectedDevices.size} device(s)?\n\nThis will permanently remove devices and all schedules.`)) {
+        return;
+    }
+    
+    const macsToRemove = Array.from(selectedDevices);
+    const requests = macsToRemove.map(mac =>
+        fetch('/api/delete-device', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac })
+        }).then(response => response.json())
+    );
+
+    Promise.all(requests)
+        .then(() => {
+            allDevices = allDevices.filter(d => !selectedDevices.has(d.mac));
+            localStorage.setItem('devices', JSON.stringify(allDevices));
+            selectedDevices.clear();
+            filterDevices();
+            updateStatistics();
+            showNotification(`Deleted ${macsToRemove.length} device(s)`, 'success');
+        })
+        .catch(error => {
+            console.error('Error deleting devices:', error);
+            showNotification('Failed to delete selected devices', 'error');
         });
 }
 

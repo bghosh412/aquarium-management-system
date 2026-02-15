@@ -51,19 +51,229 @@
 
             <div class="settings-layout">
 
+                <!-- Backup Section -->
                 <div class="card">
                     <div class="card-header">
-                        <h3>Backup/Restore</h3>
+                        <h3>📦 Create Backup</h3>
                     </div>
                     <div class="card-body">
-                        <p style="color: var(--color-text-secondary);">Backup/restore tools will be added here.</p>
+                        <p style="color: var(--color-text-secondary); margin-bottom: 1rem;">
+                            Select files to include in the backup ZIP archive.
+                        </p>
+                        <div style="display:flex; gap:0.5rem; margin-bottom:1rem;">
+                            <button class="btn btn-secondary" id="btnSelectAll" onclick="toggleAll(true)">Select All</button>
+                            <button class="btn btn-secondary" id="btnDeselectAll" onclick="toggleAll(false)">Deselect All</button>
+                            <span id="selectedCount" style="align-self:center; color:var(--color-text-secondary); font-size:0.875rem; margin-left:0.5rem;">0 selected</span>
+                        </div>
+                        <div id="backupFileList" style="display:flex; flex-direction:column; gap:0.5rem; max-height:300px; overflow-y:auto; margin-bottom:1rem;">
+                            <div style="color: var(--color-text-secondary);">Loading files…</div>
+                        </div>
+                        <div id="backupProgress" style="display:none; margin-bottom:1rem;">
+                            <div style="background:var(--color-border); border-radius:8px; height:8px; overflow:hidden;">
+                                <div id="backupBar" style="background:var(--color-primary); height:100%; width:0%; transition:width 0.3s;"></div>
+                            </div>
+                            <div id="backupProgressText" style="font-size:0.875rem; color:var(--color-text-secondary); margin-top:0.25rem;"></div>
+                        </div>
+                        <button class="btn btn-primary" id="btnBackup" onclick="createBackup()" disabled>⬇️ Download Backup (ZIP)</button>
+                    </div>
+                </div>
+
+                <!-- Restore Section -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🔄 Restore from Backup</h3>
+                    </div>
+                    <div class="card-body">
+                        <p style="color: var(--color-text-secondary); margin-bottom: 1rem;">
+                            Upload a previously downloaded backup ZIP to restore configuration files.
+                            <br><strong style="color:var(--color-accent-danger);">⚠️ This will overwrite existing files.</strong>
+                        </p>
+                        <div style="margin-bottom:1rem;">
+                            <input type="file" id="restoreFile" accept=".zip" style="margin-bottom:0.5rem;">
+                        </div>
+                        <div id="restorePreview" style="display:none; margin-bottom:1rem;">
+                            <h4 style="margin-bottom:0.5rem;">Archive Contents:</h4>
+                            <div id="restoreFileList" style="display:flex; flex-direction:column; gap:0.25rem; max-height:200px; overflow-y:auto; padding:0.75rem; background:var(--bg-tertiary); border-radius:8px; font-size:0.875rem; font-family:monospace;"></div>
+                        </div>
+                        <div id="restoreProgress" style="display:none; margin-bottom:1rem;">
+                            <div style="background:var(--color-border); border-radius:8px; height:8px; overflow:hidden;">
+                                <div id="restoreBar" style="background:var(--color-accent); height:100%; width:0%; transition:width 0.3s;"></div>
+                            </div>
+                            <div id="restoreProgressText" style="font-size:0.875rem; color:var(--color-text-secondary); margin-top:0.25rem;"></div>
+                        </div>
+                        <div id="restoreStatus"></div>
+                        <button class="btn btn-primary" id="btnRestore" onclick="restoreBackup()" disabled>⬆️ Restore from ZIP</button>
                     </div>
                 </div>
             </div>
         </main>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="/scripts/app.js?v=20260116"></script>
     <script src="/scripts/sidebar-inject.js?v=20260116"></script>
+    <script>
+        let allFiles = [];
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadBackupFiles();
+            document.getElementById('restoreFile').addEventListener('change', previewZip);
+        });
+
+        function loadBackupFiles() {
+            fetch('/api/settings/files')
+                .then(r => r.json())
+                .then(data => {
+                    allFiles = (data.files || []).map(f => f.path || f);
+                    renderBackupList();
+                })
+                .catch(() => {
+                    document.getElementById('backupFileList').innerHTML =
+                        '<div style="color:var(--color-accent-danger);">Failed to load file list.</div>';
+                });
+        }
+
+        function renderBackupList() {
+            const container = document.getElementById('backupFileList');
+            if (!allFiles.length) {
+                container.innerHTML = '<div style="color:var(--color-text-secondary);">No files found.</div>';
+                return;
+            }
+            container.innerHTML = allFiles.map((f, i) => `
+                <label style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; border:1px solid var(--color-border); border-radius:8px; cursor:pointer; background:var(--bg-secondary);">
+                    <input type="checkbox" class="backup-cb" value="${f}" checked onchange="updateCount()">
+                    <span style="font-family:monospace; font-size:0.875rem;">${f}</span>
+                </label>
+            `).join('');
+            updateCount();
+        }
+
+        function toggleAll(state) {
+            document.querySelectorAll('.backup-cb').forEach(cb => cb.checked = state);
+            updateCount();
+        }
+
+        function updateCount() {
+            const checked = document.querySelectorAll('.backup-cb:checked').length;
+            document.getElementById('selectedCount').textContent = checked + ' selected';
+            document.getElementById('btnBackup').disabled = checked === 0;
+        }
+
+        async function createBackup() {
+            const selected = [...document.querySelectorAll('.backup-cb:checked')].map(cb => cb.value);
+            if (!selected.length) return;
+
+            const btn = document.getElementById('btnBackup');
+            const progress = document.getElementById('backupProgress');
+            const bar = document.getElementById('backupBar');
+            const text = document.getElementById('backupProgressText');
+            btn.disabled = true;
+            progress.style.display = 'block';
+
+            try {
+                const zip = new JSZip();
+                for (let i = 0; i < selected.length; i++) {
+                    const pct = Math.round(((i) / selected.length) * 100);
+                    bar.style.width = pct + '%';
+                    text.textContent = `Fetching ${selected[i]} (${i + 1}/${selected.length})…`;
+
+                    const resp = await fetch('/api/settings/download?name=' + encodeURIComponent(selected[i]));
+                    if (!resp.ok) { text.textContent = `⚠️ Failed: ${selected[i]}`; continue; }
+                    const blob = await resp.blob();
+                    // Store without leading slash so zip paths are clean
+                    const zipPath = selected[i].startsWith('/') ? selected[i].substring(1) : selected[i];
+                    zip.file(zipPath, blob);
+                }
+
+                bar.style.width = '90%';
+                text.textContent = 'Generating ZIP…';
+                const content = await zip.generateAsync({ type: 'blob' });
+
+                bar.style.width = '100%';
+                text.textContent = 'Download ready!';
+
+                const a = document.createElement('a');
+                const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+                a.href = URL.createObjectURL(content);
+                a.download = `aquarium-backup-${ts}.zip`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+            } catch (e) {
+                text.textContent = '❌ Backup failed: ' + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function previewZip() {
+            const fileInput = document.getElementById('restoreFile');
+            const preview = document.getElementById('restorePreview');
+            const list = document.getElementById('restoreFileList');
+            const btnRestore = document.getElementById('btnRestore');
+
+            if (!fileInput.files.length) { preview.style.display = 'none'; btnRestore.disabled = true; return; }
+
+            try {
+                const zip = await JSZip.loadAsync(fileInput.files[0]);
+                const entries = [];
+                zip.forEach((path, entry) => { if (!entry.dir) entries.push(path); });
+                list.innerHTML = entries.map(e => `<div>📄 /${e}</div>`).join('');
+                preview.style.display = 'block';
+                btnRestore.disabled = entries.length === 0;
+            } catch (e) {
+                list.innerHTML = '<div style="color:var(--color-accent-danger);">Invalid ZIP file.</div>';
+                preview.style.display = 'block';
+                btnRestore.disabled = true;
+            }
+        }
+
+        async function restoreBackup() {
+            const fileInput = document.getElementById('restoreFile');
+            if (!fileInput.files.length) return;
+
+            if (!confirm('This will overwrite existing configuration files. Continue?')) return;
+
+            const btn = document.getElementById('btnRestore');
+            const progress = document.getElementById('restoreProgress');
+            const bar = document.getElementById('restoreBar');
+            const text = document.getElementById('restoreProgressText');
+            const status = document.getElementById('restoreStatus');
+            btn.disabled = true;
+            progress.style.display = 'block';
+            status.innerHTML = '';
+
+            try {
+                const zip = await JSZip.loadAsync(fileInput.files[0]);
+                const entries = [];
+                zip.forEach((path, entry) => { if (!entry.dir) entries.push({ path, entry }); });
+
+                let ok = 0, fail = 0;
+                for (let i = 0; i < entries.length; i++) {
+                    const pct = Math.round(((i) / entries.length) * 100);
+                    bar.style.width = pct + '%';
+                    const targetPath = '/' + entries[i].path;
+                    text.textContent = `Uploading ${targetPath} (${i + 1}/${entries.length})…`;
+
+                    const blob = await entries[i].entry.async('blob');
+                    const formData = new FormData();
+                    formData.append('file', blob, entries[i].path.split('/').pop());
+
+                    const resp = await fetch('/api/settings/upload?target=' + encodeURIComponent(targetPath), {
+                        method: 'POST', body: formData
+                    });
+                    if (resp.ok) { ok++; } else { fail++; }
+                }
+
+                bar.style.width = '100%';
+                text.textContent = 'Restore complete!';
+                status.innerHTML = `<div style="margin-top:0.5rem; color:var(--color-accent);">✅ ${ok} file(s) restored successfully.${fail ? ` ⚠️ ${fail} file(s) failed.` : ''}</div>`;
+            } catch (e) {
+                text.textContent = '❌ Restore failed: ' + e.message;
+                status.innerHTML = `<div style="color:var(--color-accent-danger);">Error: ${e.message}</div>`;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
 </body>
 </html>

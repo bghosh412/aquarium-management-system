@@ -355,13 +355,14 @@ async function loadDashboardData() {
 }
 
 async function fetchUpcomingTasks() {
+    const container = document.getElementById('tasks-list');
+    const countBadge = document.getElementById('task-count');
+    if (!container || !countBadge) return; // Not on dashboard page
+
     try {
         const response = await fetch('/api/next-tasks');
         if (!response.ok) throw new Error('Tasks not found');
         const data = await response.json();
-        
-        const container = document.getElementById('tasks-list');
-        const countBadge = document.getElementById('task-count');
         
         if (!data.tasks || data.tasks.length === 0) {
             container.innerHTML = `

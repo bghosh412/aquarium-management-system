@@ -165,7 +165,7 @@ function renderDevices() {
                     ` : ''}
                 </div>
                 <div class="card-footer">
-                    ${deviceTypeLower.includes('light') || deviceTypeLower.includes('feeder') || deviceTypeLower.includes('co2') || deviceTypeLower.includes('heater') ? 
+                    ${deviceTypeLower.includes('light') || deviceTypeLower.includes('feeder') || deviceTypeLower.includes('co2') || deviceTypeLower.includes('heater') || deviceTypeLower.includes('wave_maker') ? 
                         `<button class="device-action-btn btn-primary" onclick="viewDevice('${device.mac}')" title="View Schedules">
                             <i class="fas fa-calendar-alt"></i> Schedule
                         </button>` : ''}
@@ -191,7 +191,8 @@ function getDeviceIcon(type) {
         'heater': '🔥',
         'feeder': '🐟',
         'sensor': '📊',
-        'repeater': '📡'
+        'repeater': '📡',
+        'wave_maker': '🌊'
     };
     return icons[typeLower] || '🔌';
 }
@@ -204,7 +205,8 @@ function getDeviceTypeName(type) {
         'heater': 'Heater',
         'feeder': 'Fish Feeder',
         'sensor': 'Water Quality Sensor',
-        'repeater': 'Repeater'
+        'repeater': 'Repeater',
+        'wave_maker': 'Wave Maker'
     };
     return names[typeLower] || 'Unknown';
 }
@@ -316,6 +318,12 @@ function viewDevice(mac) {
         return;
     }
 
+    // Wave Maker: open wavemaker schedule
+    if (deviceType.includes('wave_maker')) {
+        window.location.href = `schedule/wm-schedule.html?mac=${mac}`;
+        return;
+    }
+
     // Route to appropriate details page
     const detailsPages = {
         'co2': '../aquarium/details/co2-details.html',
@@ -351,7 +359,14 @@ function controlDevice(mac) {
         return;
     }
 
-    showNotification('Control is only available for light and feeder devices.', 'error');
+    // Wave Maker: open wavemaker control page
+    if (deviceType.includes('wave_maker')) {
+        localStorage.setItem('selectedDeviceMac', mac);
+        window.location.href = `control/wm-control.html?mac=${mac}`;
+        return;
+    }
+
+    showNotification('Control is only available for light, feeder, and wave maker devices.', 'error');
 }
 
 function unmapDevice(mac, name) {

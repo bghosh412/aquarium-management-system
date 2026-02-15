@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>WaveMaker Control - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        .status-indicator { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 1.1rem; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+        .status-dot.on { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.5); }
+        .status-dot.off { background: #ef4444; }
+        .pwm-display { margin-top: 1rem; }
+        .pwm-bar-bg { width: 100%; height: 24px; background: var(--bg-tertiary); border-radius: 12px; overflow: hidden; position: relative; }
+        .pwm-bar-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #06b6d4); border-radius: 12px; transition: width 0.4s ease; }
+        .pwm-bar-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 0.8rem; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+        .action-group { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: end; }
+        @media (max-width: 600px) { .action-group { grid-template-columns: 1fr; } }
+        .slider-control { width: 100%; }
+        .slider-control input[type="range"] { width: 100%; accent-color: var(--primary-color); }
+        .slider-label { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; }
+        .spinner svg { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">WaveMaker Control</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="../../device/manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar"></aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>WaveMaker Control</h1>
+                <p class="page-description">Monitor and control your wave maker pump</p>
+            </div>
+
+            <!-- Device Info -->
+            <div class="card">
+                <div class="card-header"><h3>Device Information</h3></div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">—</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;" id="deviceType">Wave Maker</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">—</span></div>
+                        <div><span>MAC:</span> <span style="font-weight: bold;" id="deviceMac">—</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Current Status -->
+            <div class="card" style="margin-top: 1.5rem;">
+                <div class="card-header">
+                    <h3>Current Status</h3>
+                    <span class="badge badge-secondary" id="statusBadge">Fetching…</span>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                        <div class="status-indicator">
+                            <span class="status-dot off" id="statusDot"></span>
+                            <span id="statusText">Unknown</span>
+                        </div>
+                    </div>
+                    <div class="pwm-display" id="pwmDisplay" style="display:none;">
+                        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.35rem;">Current PWM Duty Cycle</div>
+                        <div class="pwm-bar-bg">
+                            <div class="pwm-bar-fill" id="pwmBarFill" style="width: 0%;"></div>
+                            <span class="pwm-bar-label" id="pwmBarLabel">0%</span>
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary" style="margin-top: 1rem;" id="refreshStatusBtn" onclick="refreshStatus()">
+                        🔄 Refresh Status
+                    </button>
+                </div>
+            </div>
+
+            <!-- Control Actions -->
+            <div class="card" style="margin-top: 1.5rem;">
+                <div class="card-header"><h3>Control Actions</h3></div>
+                <div class="card-content">
+                    <div class="form-group" style="margin-bottom: 1.5rem;">
+                        <label class="form-label" for="actionSelect">Action</label>
+                        <select id="actionSelect" class="form-input" style="max-width: 300px;" onchange="onActionChange()">
+                            <option value="speed_change">Speed Change (PWM)</option>
+                            <option value="stop">Stop</option>
+                        </select>
+                    </div>
+
+                    <div id="sliderSection">
+                        <div class="form-group">
+                            <label class="form-label">PWM Duty Cycle</label>
+                            <div class="slider-control">
+                                <input type="range" id="pwmSlider" min="30" max="95" value="60" step="1"
+                                       oninput="document.getElementById('pwmValue').textContent = this.value + '%'">
+                                <div class="slider-label">
+                                    <span id="sliderMin">30%</span>
+                                    <span style="font-weight:700; font-size:1.1rem;" id="pwmValue">60%</span>
+                                    <span id="sliderMax">95%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 1.5rem;">
+                        <button class="btn btn-primary" id="updateBtn" onclick="sendCommand()">
+                            Update
+                        </button>
+                        <span id="commandStatus" class="badge badge-secondary" style="margin-left: 1rem; display: none;"></span>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../../scripts/sidebar-inject.js"></script>
+    <script>
+        let currentDevice = null;
+        let wmConfig = { minDutyPercent: 30, maxDutyPercent: 95, defaultDuty: 60 };
+        let currentStatus = { running: false, dutyPercent: 0 };
+        let pollingId = null;
+
+        function getQueryParam(name) {
+            return new URLSearchParams(window.location.search).get(name);
+        }
+
+        // ---- Load Device ----
+        async function loadDevice() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '../manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const device = (data.devices || []).find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    alert('Device not found.');
+                    window.location.href = '../manage-devices.html';
+                    return;
+                }
+
+                currentDevice = device;
+                document.getElementById('tankName').textContent = 'Aquarium ' + device.tankId;
+                document.getElementById('deviceType').textContent = 'Wave Maker';
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                document.getElementById('deviceMac').textContent = device.mac;
+
+                await loadWmConfig(mac);
+                await refreshStatus();
+            } catch (err) {
+                console.error('Failed to load device:', err);
+                alert('Failed to load device.');
+            }
+        }
+
+        async function loadWmConfig(mac) {
+            try {
+                const resp = await fetch('/api/wavemaker-config?mac=' + encodeURIComponent(mac));
+                const data = await resp.json();
+                if (data && data.success) {
+                    wmConfig.minDutyPercent = data.minDutyPercent || 30;
+                    wmConfig.maxDutyPercent = data.maxDutyPercent || 95;
+                    wmConfig.defaultDuty = data.defaultDuty || 60;
+
+                    const slider = document.getElementById('pwmSlider');
+                    slider.min = wmConfig.minDutyPercent;
+                    slider.max = wmConfig.maxDutyPercent;
+                    slider.value = wmConfig.defaultDuty;
+                    document.getElementById('pwmValue').textContent = wmConfig.defaultDuty + '%';
+                    document.getElementById('sliderMin').textContent = wmConfig.minDutyPercent + '%';
+                    document.getElementById('sliderMax').textContent = wmConfig.maxDutyPercent + '%';
+                }
+            } catch (err) {
+                console.warn('Could not load wavemaker config:', err);
+            }
+        }
+
+        // ---- Status ----
+        async function refreshStatus() {
+            if (!currentDevice) return;
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = 'Fetching…';
+            badge.className = 'badge badge-secondary';
+
+            try {
+                // Send a status request command via the wavemaker-command API
+                const resp = await fetch('/api/wavemaker-command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: currentDevice.mac, command: 'STATUS' })
+                });
+                const data = await resp.json();
+
+                if (data && data.success && data.status) {
+                    currentStatus.running = data.status.pumpActive;
+                    currentStatus.dutyPercent = data.status.dutyPercent || 0;
+                    renderStatus();
+                    badge.textContent = 'Updated';
+                    badge.className = 'badge badge-online';
+                } else if (data && data.success) {
+                    // Command sent but no immediate status - show pending
+                    badge.textContent = 'Waiting for response…';
+                    badge.className = 'badge badge-secondary';
+                    // Try polling after a short delay
+                    setTimeout(() => refreshStatusPoll(), 2000);
+                } else {
+                    badge.textContent = 'Error';
+                    badge.className = 'badge badge-offline';
+                }
+            } catch (err) {
+                console.warn('Status refresh failed:', err);
+                badge.textContent = 'Offline';
+                badge.className = 'badge badge-offline';
+            }
+        }
+
+        async function refreshStatusPoll() {
+            if (!currentDevice) return;
+            try {
+                const resp = await fetch('/api/wm-status?mac=' + encodeURIComponent(currentDevice.mac));
+                const data = await resp.json();
+                if (data && data.success && data.status) {
+                    currentStatus.running = data.status.pumpActive;
+                    currentStatus.dutyPercent = data.status.dutyPercent || 0;
+                    renderStatus();
+                    document.getElementById('statusBadge').textContent = 'Updated';
+                    document.getElementById('statusBadge').className = 'badge badge-online';
+                }
+            } catch (err) {
+                console.warn('Status poll failed:', err);
+            }
+        }
+
+        function renderStatus() {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            const pwmDisplay = document.getElementById('pwmDisplay');
+            const fill = document.getElementById('pwmBarFill');
+            const label = document.getElementById('pwmBarLabel');
+
+            if (currentStatus.running) {
+                dot.className = 'status-dot on';
+                text.textContent = 'Running';
+                pwmDisplay.style.display = 'block';
+                const pct = Math.round(currentStatus.dutyPercent);
+                fill.style.width = pct + '%';
+                label.textContent = pct + '%';
+
+                // Set the slider to current value for convenience
+                const slider = document.getElementById('pwmSlider');
+                if (pct >= parseInt(slider.min) && pct <= parseInt(slider.max)) {
+                    slider.value = pct;
+                    document.getElementById('pwmValue').textContent = pct + '%';
+                }
+            } else {
+                dot.className = 'status-dot off';
+                text.textContent = 'Stopped';
+                pwmDisplay.style.display = 'none';
+            }
+        }
+
+        // ---- Action Change ----
+        function onActionChange() {
+            const action = document.getElementById('actionSelect').value;
+            document.getElementById('sliderSection').style.display = action === 'stop' ? 'none' : 'block';
+        }
+
+        // ---- Send Command ----
+        async function sendCommand() {
+            if (!currentDevice) return;
+
+            const action = document.getElementById('actionSelect').value;
+            const btn = document.getElementById('updateBtn');
+            const statusEl = document.getElementById('commandStatus');
+
+            btn.disabled = true;
+            btn.textContent = 'Sending…';
+            statusEl.style.display = 'inline';
+            statusEl.textContent = 'Sending command…';
+            statusEl.className = 'badge badge-secondary';
+
+            try {
+                let body;
+                if (action === 'stop') {
+                    body = { mac: currentDevice.mac, command: 'STOP' };
+                } else {
+                    const duty = parseInt(document.getElementById('pwmSlider').value, 10);
+                    body = { mac: currentDevice.mac, command: 'PWM', dutyPercent: duty };
+                }
+
+                const resp = await fetch('/api/wavemaker-command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error((data && data.error) || 'Command failed');
+
+                statusEl.textContent = 'Command sent ✓';
+                statusEl.className = 'badge badge-online';
+
+                // Refresh status after a brief delay to let the node respond
+                setTimeout(() => refreshStatus(), 2500);
+            } catch (err) {
+                console.error('Command failed:', err);
+                statusEl.textContent = 'Failed ✕';
+                statusEl.className = 'badge badge-offline';
+                alert('Failed to send command: ' + (err.message || 'Unknown error'));
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Update';
+            }
+        }
+
+        // ---- Init ----
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadDevice();
+            // Poll status every 60 seconds
+            pollingId = setInterval(refreshStatus, 60000);
+        });
+    </script>
+</body>
+</html>

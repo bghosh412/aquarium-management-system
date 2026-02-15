@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>WaveMaker Schedule - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        .schedule-table { width: 100%; border-collapse: collapse; }
+        .schedule-table th, .schedule-table td { padding: 0.75rem 0.5rem; text-align: left; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
+        .schedule-table th { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); }
+        .schedule-row { transition: background 0.15s; }
+        .schedule-row:hover { background: var(--bg-tertiary); }
+        .time-group { display: flex; gap: 0.35rem; align-items: center; }
+        .time-group select { width: auto; min-width: 50px; padding: 0.4rem 0.3rem; font-size: 0.85rem; }
+        .slider-cell { min-width: 160px; }
+        .slider-cell input[type="range"] { width: 100%; accent-color: var(--primary-color); }
+        .slider-value { display: inline-block; min-width: 3ch; text-align: right; font-weight: 600; font-size: 0.9rem; }
+        .remove-btn { background: none; border: none; color: var(--color-accent-danger, #ef4444); cursor: pointer; font-size: 1.2rem; padding: 0.25rem 0.5rem; border-radius: 4px; }
+        .remove-btn:hover { background: rgba(239,68,68,0.1); }
+        @media (max-width: 640px) {
+            .schedule-table th:nth-child(1), .schedule-table td:nth-child(1) { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/logo.png" alt="Logo" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">WaveMaker Schedule</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="/device/manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar"></aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>WaveMaker Schedule</h1>
+                <p class="page-description">Configure scheduled speed changes and stops for your wave maker</p>
+            </div>
+
+            <!-- Device Information -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Device Information</h3>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">—</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;" id="deviceType">Wave Maker</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">—</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule Table -->
+            <div class="card">
+                <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3>Schedule Entries</h3>
+                    <button type="button" class="btn btn-primary" id="addScheduleBtn" style="padding: 0.4rem 1rem; font-size: 0.85rem;">
+                        ➕ Add Schedule
+                    </button>
+                </div>
+                <div class="card-content" style="overflow-x: auto;">
+                    <table class="schedule-table" id="scheduleTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Time</th>
+                                <th>Action</th>
+                                <th>PWM %</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="scheduleBody">
+                            <!-- Rows added dynamically -->
+                        </tbody>
+                    </table>
+                    <div id="emptyMsg" style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                        No schedule entries yet. Click <strong>Add Schedule</strong> to create one.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                <button type="button" class="btn btn-create-aquarium" id="saveScheduleBtn">
+                    <span>✓</span> Save Schedule
+                </button>
+                <button type="button" class="btn btn-cancel" id="cancelScheduleBtn">
+                    Cancel
+                </button>
+                <button type="button" class="btn btn-danger" id="deleteScheduleBtn" title="Delete schedule for this device">
+                    🗑️ Delete Schedule
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <script src="/scripts/sidebar-inject.js"></script>
+    <script>
+        // ---- State ----
+        let currentDevice = null;
+        let wmConfig = { minDutyPercent: 30, maxDutyPercent: 95, defaultDuty: 60 };
+        let scheduleEntries = []; // Array of { hour, minute, ampm, action, pwmPercent }
+
+        // ---- Helpers ----
+        function getQueryParam(name) {
+            return new URLSearchParams(window.location.search).get(name);
+        }
+
+        function getDeviceTypeLabel(type) {
+            const t = String(type || '').toLowerCase();
+            switch (t) {
+                case 'light': return 'Lighting';
+                case 'co2': return 'CO₂ Regulator';
+                case 'heater': return 'Heater';
+                case 'feeder': case 'fish_feeder': return 'Fish Feeder';
+                case 'sensor': return 'Water Quality Sensor';
+                case 'repeater': return 'Repeater';
+                case 'wave_maker': return 'Wave Maker';
+                default: return type || 'Unknown';
+            }
+        }
+
+        // ---- Dropdown Helpers ----
+        function makeOptions(values, pad) {
+            return values.map(v => {
+                const text = pad ? String(v).padStart(2, '0') : String(v);
+                return `<option value="${v}">${text}</option>`;
+            }).join('');
+        }
+        const hourOptions = makeOptions([1,2,3,4,5,6,7,8,9,10,11,12], false);
+        const minuteOptions = makeOptions([0,15,30,45], true);
+        const ampmOptions = '<option value="AM">AM</option><option value="PM">PM</option>';
+
+        // ---- Render Schedule Table ----
+        function renderTable() {
+            const tbody = document.getElementById('scheduleBody');
+            const emptyMsg = document.getElementById('emptyMsg');
+
+            if (scheduleEntries.length === 0) {
+                tbody.innerHTML = '';
+                emptyMsg.style.display = 'block';
+                return;
+            }
+
+            emptyMsg.style.display = 'none';
+            tbody.innerHTML = scheduleEntries.map((entry, idx) => {
+                const sliderHidden = entry.action === 'stop' ? 'style="visibility:hidden;"' : '';
+                const pwm = entry.pwmPercent || wmConfig.defaultDuty;
+                return `
+                <tr class="schedule-row" data-idx="${idx}">
+                    <td style="font-weight:600; color: var(--text-secondary);">${idx + 1}</td>
+                    <td>
+                        <div class="time-group">
+                            <select class="form-input sc-hour" data-idx="${idx}">${hourOptions}</select>
+                            <span>:</span>
+                            <select class="form-input sc-min" data-idx="${idx}">${minuteOptions}</select>
+                            <select class="form-input sc-ampm" data-idx="${idx}">${ampmOptions}</select>
+                        </div>
+                    </td>
+                    <td>
+                        <select class="form-input sc-action" data-idx="${idx}" style="min-width:130px;">
+                            <option value="speed_change" ${entry.action === 'speed_change' ? 'selected' : ''}>Speed Change</option>
+                            <option value="stop" ${entry.action === 'stop' ? 'selected' : ''}>Stop</option>
+                        </select>
+                    </td>
+                    <td class="slider-cell">
+                        <div ${sliderHidden} class="slider-wrap" data-idx="${idx}">
+                            <input type="range" class="sc-slider" data-idx="${idx}"
+                                min="${wmConfig.minDutyPercent}" max="${wmConfig.maxDutyPercent}" value="${pwm}" step="1">
+                            <span class="slider-value" data-idx="${idx}">${pwm}%</span>
+                        </div>
+                    </td>
+                    <td>
+                        <button type="button" class="remove-btn" data-idx="${idx}" title="Remove entry">✕</button>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            // Set dropdown values after HTML is in DOM
+            scheduleEntries.forEach((entry, idx) => {
+                const row = tbody.querySelector(`tr[data-idx="${idx}"]`);
+                if (!row) return;
+                row.querySelector('.sc-hour').value = entry.hour || 8;
+                row.querySelector('.sc-min').value = entry.minute || 0;
+                row.querySelector('.sc-ampm').value = entry.ampm || 'AM';
+            });
+
+            attachRowEvents();
+        }
+
+        // ---- Attach events to each row ----
+        function attachRowEvents() {
+            // Action change -> show/hide slider
+            document.querySelectorAll('.sc-action').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    const idx = parseInt(this.dataset.idx, 10);
+                    scheduleEntries[idx].action = this.value;
+                    const wrap = document.querySelector(`.slider-wrap[data-idx="${idx}"]`);
+                    if (wrap) wrap.style.visibility = this.value === 'stop' ? 'hidden' : 'visible';
+                });
+            });
+
+            // Slider change -> update value display
+            document.querySelectorAll('.sc-slider').forEach(slider => {
+                slider.addEventListener('input', function() {
+                    const idx = parseInt(this.dataset.idx, 10);
+                    scheduleEntries[idx].pwmPercent = parseInt(this.value, 10);
+                    const valSpan = document.querySelector(`.slider-value[data-idx="${idx}"]`);
+                    if (valSpan) valSpan.textContent = this.value + '%';
+                });
+            });
+
+            // Time dropdown changes
+            document.querySelectorAll('.sc-hour').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    scheduleEntries[parseInt(this.dataset.idx, 10)].hour = parseInt(this.value, 10);
+                });
+            });
+            document.querySelectorAll('.sc-min').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    scheduleEntries[parseInt(this.dataset.idx, 10)].minute = parseInt(this.value, 10);
+                });
+            });
+            document.querySelectorAll('.sc-ampm').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    scheduleEntries[parseInt(this.dataset.idx, 10)].ampm = this.value;
+                });
+            });
+
+            // Remove button
+            document.querySelectorAll('.remove-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const idx = parseInt(this.dataset.idx, 10);
+                    scheduleEntries.splice(idx, 1);
+                    renderTable();
+                });
+            });
+        }
+
+        // ---- Add Schedule Entry ----
+        document.getElementById('addScheduleBtn').addEventListener('click', function() {
+            scheduleEntries.push({
+                hour: 8,
+                minute: 0,
+                ampm: 'AM',
+                action: 'speed_change',
+                pwmPercent: wmConfig.defaultDuty
+            });
+            renderTable();
+        });
+
+        // ---- Load Device ----
+        async function loadDeviceFromQuery() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '/device/manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const devices = data.devices || [];
+                const device = devices.find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    alert('Device not found. It may have been unmapped or removed.');
+                    window.location.href = '/device/manage-devices.html';
+                    return;
+                }
+
+                document.getElementById('tankName').textContent = 'Aquarium ' + device.tankId;
+                document.getElementById('deviceType').textContent = getDeviceTypeLabel(device.type);
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                currentDevice = device;
+
+                // Load wavemaker config (min/max/default duty)
+                await loadWmConfig(mac);
+                // Load saved schedule
+                await loadSchedule(mac);
+                renderTable();
+            } catch (err) {
+                console.error('Error loading device:', err);
+                alert('Failed to load device information.');
+            }
+        }
+
+        async function loadWmConfig(mac) {
+            try {
+                const resp = await fetch('/api/wavemaker-config?mac=' + encodeURIComponent(mac));
+                const data = await resp.json();
+                if (data && data.success) {
+                    wmConfig.minDutyPercent = data.minDutyPercent || 30;
+                    wmConfig.maxDutyPercent = data.maxDutyPercent || 95;
+                    wmConfig.defaultDuty = data.defaultDuty || 60;
+                }
+            } catch (err) {
+                console.warn('Could not load wavemaker config, using defaults:', err);
+            }
+        }
+
+        async function loadSchedule(mac) {
+            try {
+                const resp = await fetch('/api/wm-schedule?mac=' + encodeURIComponent(mac));
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error((data && data.error) || 'Failed');
+
+                if (data.schedule && data.schedule.entries && data.schedule.entries.length > 0) {
+                    scheduleEntries = data.schedule.entries.map(e => ({
+                        hour: e.hour || 8,
+                        minute: e.minute || 0,
+                        ampm: e.ampm || 'AM',
+                        action: e.action || 'speed_change',
+                        pwmPercent: e.pwmPercent || wmConfig.defaultDuty
+                    }));
+                }
+            } catch (err) {
+                console.warn('No schedule loaded:', err);
+                // Fallback to localStorage cache
+                const cached = localStorage.getItem('wmSchedule:' + mac);
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        if (parsed && parsed.entries) {
+                            scheduleEntries = parsed.entries;
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+            }
+        }
+
+        // ---- Save ----
+        function setSaveState(saving) {
+            const btn = document.getElementById('saveScheduleBtn');
+            btn.disabled = saving;
+            btn.innerHTML = saving ? 'Saving...' : '<span>✓</span> Save Schedule';
+        }
+
+        document.getElementById('saveScheduleBtn').addEventListener('click', async function() {
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+
+            const payload = {
+                mac: currentDevice.mac,
+                tankId: currentDevice.tankId,
+                deviceName: currentDevice.name || currentDevice.mac,
+                schedule: { entries: scheduleEntries }
+            };
+
+            try {
+                setSaveState(true);
+                const resp = await fetch('/api/wm-schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error((data && data.error) || 'Save failed');
+
+                localStorage.setItem('wmSchedule:' + currentDevice.mac, JSON.stringify(payload.schedule));
+                alert('WaveMaker schedule saved successfully.');
+            } catch (err) {
+                console.error('Save failed:', err);
+                alert('Failed to save schedule.');
+            } finally {
+                setSaveState(false);
+            }
+        });
+
+        // ---- Cancel ----
+        document.getElementById('cancelScheduleBtn').addEventListener('click', function() {
+            if (currentDevice) {
+                loadSchedule(currentDevice.mac).then(() => renderTable());
+            }
+        });
+
+        // ---- Delete ----
+        document.getElementById('deleteScheduleBtn').addEventListener('click', async function() {
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+            if (!confirm('Delete schedule for this device? This cannot be undone.')) return;
+
+            try {
+                let resp = await fetch('/api/wm-schedule/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: currentDevice.mac })
+                });
+
+                let data = {};
+                try { data = await resp.json(); } catch (e) { /* ignore */ }
+
+                if (!resp.ok || !data.success) {
+                    // Fallback: try action delete on main endpoint
+                    resp = await fetch('/api/wm-schedule', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ mac: currentDevice.mac, action: 'delete' })
+                    });
+                    data = await resp.json();
+                }
+
+                if (!resp.ok || !data.success) throw new Error((data && data.error) || 'Delete failed');
+
+                localStorage.removeItem('wmSchedule:' + currentDevice.mac);
+                alert('Schedule deleted successfully.');
+                window.location.href = '/device/manage-devices.html';
+            } catch (err) {
+                console.error('Delete failed:', err);
+                alert('Failed to delete schedule.');
+            }
+        });
+
+        // ---- Init ----
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDeviceFromQuery();
+        });
+    </script>
+</body>
+</html>

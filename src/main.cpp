@@ -123,6 +123,16 @@ struct LightChannelStatus {
 static std::map<String, LightChannelStatus> g_lightStatus;
 static std::map<String, uint32_t> g_lightStatusPending;
 
+struct WaveMakerStatus {
+    bool pumpActive;
+    float dutyPercent;
+    uint16_t pwmRaw;
+    uint32_t updatedAt;
+};
+
+static std::map<String, WaveMakerStatus> g_waveMakerStatus;
+static std::map<String, uint32_t> g_waveMakerStatusPending;
+
 static String macToString(const uint8_t* mac) {
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -1269,13 +1279,14 @@ static std::map<String, ChannelState> g_channelStates;
 // Structure for next-task.json persistence
 enum class TaskType : uint8_t {
     LIGHT = 0,
-    FEEDER = 1
+    FEEDER = 1,
+    WAVEMAKER = 2
 };
 
 struct NextTask {
     String mac;
     String scheduleId;       // Unique identifier for this schedule entry
-    TaskType taskType;       // LIGHT or FEEDER
+    TaskType taskType;       // LIGHT, FEEDER, or WAVEMAKER
     int channel;             // For LIGHT: 1, 2, or 3
     bool actionOn;           // For LIGHT: true = turn ON, false = turn OFF
     time_t scheduledTime;    // Unix timestamp
@@ -1283,13 +1294,15 @@ struct NextTask {
     // For FEEDER:
     uint16_t pwmValue;       // Servo PWM value (duty cycle)
     uint32_t durationMs;     // Pulse duration in ms
+    // For WAVEMAKER:
+    float dutyPercent;       // Wave maker duty cycle percentage
 };
 
 static const char* NEXT_TASK_FILE = "/config/schedule/next-task.json";
 
 // Helper: Generate a schedule ID from components
 static String generateScheduleId(const char* mac, const char* period, int channel = 0, int feedIndex = 0, TaskType type = TaskType::LIGHT) {
-    // Format: MAC_PERIOD_CHANNEL for lights, MAC_FEEDn for feeders
+    // Format: MAC_PERIOD_CHANNEL for lights, MAC_FEEDn for feeders, MAC_WMn for wavemakers
     String id = String(mac);
     id.replace(":", "");  // Remove colons for cleaner ID
     id.toUpperCase();
@@ -1297,6 +1310,9 @@ static String generateScheduleId(const char* mac, const char* period, int channe
     if (type == TaskType::FEEDER) {
         id += "_FEED";
         id += String(feedIndex + 1);
+    } else if (type == TaskType::WAVEMAKER) {
+        id += "_WM";
+        id += String(feedIndex + 1);  // reuse feedIndex as time index
     } else {
         id += "_";
         id += String(period);
@@ -1476,6 +1492,80 @@ static void calculateFeederNextTasks(const char* macStr, JsonObject schedule,
     }
 }
 
+// Helper: Calculate all upcoming tasks from a wavemaker device schedule
+static void calculateWaveMakerNextTasks(const char* macStr, JsonObject schedule,
+                                         std::vector<NextTask>& tasks) {
+    // Get the days configuration
+    JsonObject days = schedule["days"].as<JsonObject>();
+    if (days.isNull()) return;
+
+    // Get current time info
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) return;
+
+    const char* dayNames[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+    int todayDow = timeinfo.tm_wday;
+    bool todayEnabled = days[dayNames[todayDow]] | false;
+
+    JsonArray entries = schedule["entries"].as<JsonArray>();
+    if (entries.isNull()) return;
+
+    int currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+
+    int timeIndex = 0;
+    for (JsonObject entry : entries) {
+        bool enabled = entry["enabled"] | true;
+        if (!enabled) {
+            timeIndex++;
+            continue;
+        }
+
+        int hour = entry["hour"] | 8;
+        int minute = entry["minute"] | 0;
+        String ampm = entry["ampm"] | "AM";
+        String action = entry["action"] | "speed_change";
+        float dutyPct = entry["dutyPercent"] | 0.0f;
+
+        // Convert to 24-hour format
+        if (ampm == "PM" && hour != 12) hour += 12;
+        else if (ampm == "AM" && hour == 12) hour = 0;
+
+        int wmMinutes = hour * 60 + minute;
+
+        String schedId = generateScheduleId(macStr, "", 0, timeIndex, TaskType::WAVEMAKER);
+
+        NextTask task;
+        task.mac = macStr;
+        task.scheduleId = schedId;
+        task.taskType = TaskType::WAVEMAKER;
+        task.channel = 0;
+        task.actionOn = (action != "stop");
+        task.period = String("wm") + String(timeIndex + 1);
+        task.pwmValue = 0;
+        task.durationMs = 0;
+        task.dutyPercent = dutyPct;
+
+        if (todayEnabled && wmMinutes > currentMinutes) {
+            task.scheduledTime = minutesToUnixTime(wmMinutes, true);
+        } else {
+            for (int offset = 1; offset <= 7; offset++) {
+                int nextDow = (todayDow + offset) % 7;
+                if (days[dayNames[nextDow]] | false) {
+                    task.scheduledTime = minutesToUnixTime(wmMinutes, true);
+                    task.scheduledTime += offset * 24 * 60 * 60;
+                    break;
+                }
+            }
+        }
+
+        if (task.scheduledTime > 0) {
+            tasks.push_back(task);
+        }
+
+        timeIndex++;
+    }
+}
+
 // Helper: Find the single next task (soonest) from all tasks
 static bool findNextTask(const std::vector<NextTask>& tasks, NextTask& next) {
     if (tasks.empty()) return false;
@@ -1508,7 +1598,7 @@ static void saveNextTasks(const std::vector<NextTask>& tasks) {
         JsonObject obj = arr.createNestedObject();
         obj["mac"] = t.mac;
         obj["scheduleId"] = t.scheduleId;
-        obj["taskType"] = (int)t.taskType;  // 0=LIGHT, 1=FEEDER
+        obj["taskType"] = (int)t.taskType;  // 0=LIGHT, 1=FEEDER, 2=WAVEMAKER
         obj["channel"] = t.channel;
         obj["actionOn"] = t.actionOn;
         obj["scheduledTime"] = (long)t.scheduledTime;
@@ -1517,6 +1607,10 @@ static void saveNextTasks(const std::vector<NextTask>& tasks) {
         if (t.taskType == TaskType::FEEDER) {
             obj["pwmValue"] = t.pwmValue;
             obj["durationMs"] = t.durationMs;
+        }
+        // Include wavemaker-specific fields
+        if (t.taskType == TaskType::WAVEMAKER) {
+            obj["dutyPercent"] = t.dutyPercent;
         }
     }
     
@@ -1563,6 +1657,7 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
         t.period = obj["period"].as<String>();
         t.pwmValue = obj["pwmValue"] | 0;
         t.durationMs = obj["durationMs"] | 0;
+        t.dutyPercent = obj["dutyPercent"] | 0.0f;
         tasks.push_back(t);
     }
     
@@ -1790,6 +1885,42 @@ void rebuildNextTasks() {
         Serial.println("[SCHEDULER] No feeder-schedule.json found");
     }
     
+    // === Process wavemaker schedules ===
+    file = FS_USER.open("/config/schedule/wm-schedule.json", "r");
+    if (file) {
+        DynamicJsonDocument wmDoc(4096);
+        DeserializationError error = deserializeJson(wmDoc, file);
+        file.close();
+        
+        if (!error) {
+            JsonArray schedules = wmDoc["schedules"].as<JsonArray>();
+            for (JsonObject sched : schedules) {
+                const char* macStr = sched["mac"];
+                if (!macStr) continue;
+                
+                // Skip if device is deleted/unmapped
+                String macUpper = String(macStr);
+                macUpper.toUpperCase();
+                bool found = false;
+                for (const String& vm : validMacs) {
+                    if (vm == macUpper) { found = true; break; }
+                }
+                if (!found) {
+                    Serial.printf("[SCHEDULER] Skipping wm schedule for deleted/unmapped device: %s\n", macStr);
+                    continue;
+                }
+                
+                JsonObject schedule = sched["schedule"];
+                calculateWaveMakerNextTasks(macStr, schedule, allTasks);
+            }
+            Serial.printf("[SCHEDULER] Processed wavemaker schedules, %d total tasks\n", allTasks.size());
+        } else {
+            Serial.printf("[SCHEDULER] Failed to parse wm-schedule.json: %s\n", error.c_str());
+        }
+    } else {
+        Serial.println("[SCHEDULER] No wm-schedule.json found");
+    }
+    
     saveNextTasks(allTasks);
 }
 
@@ -1816,6 +1947,17 @@ static bool executeTask(const NextTask& task) {
         Serial.printf("[SCHEDULER] Executing FEEDER task: %s PWM=%u duration=%ums\n",
                       task.mac.c_str(), task.pwmValue, task.durationMs);
         sendFeederCommand(mac, task.pwmValue, task.durationMs);
+        return true;
+    } else if (task.taskType == TaskType::WAVEMAKER) {
+        // Execute wavemaker task
+        if (task.actionOn) {
+            Serial.printf("[SCHEDULER] Executing WAVEMAKER task: %s duty=%.1f%%\n",
+                          task.mac.c_str(), task.dutyPercent);
+            sendWaveMakerCommand(mac, task.dutyPercent);
+        } else {
+            Serial.printf("[SCHEDULER] Executing WAVEMAKER STOP task: %s\n", task.mac.c_str());
+            sendWaveMakerStop(mac);
+        }
         return true;
     } else {
         // Execute light task (default)
@@ -1852,6 +1994,10 @@ static void processPastDueTasks(std::vector<NextTask>& tasks, bool& needsRebuild
             if (it->taskType == TaskType::FEEDER) {
                 Serial.printf("[SCHEDULER] Past-due FEEDER task: %s %s PWM=%u (scheduled %ld, now %ld)\n",
                              it->mac.c_str(), it->period.c_str(), it->pwmValue,
+                             (long)it->scheduledTime, (long)now);
+            } else if (it->taskType == TaskType::WAVEMAKER) {
+                Serial.printf("[SCHEDULER] Past-due WAVEMAKER task: %s %s duty=%.1f%% (scheduled %ld, now %ld)\n",
+                             it->mac.c_str(), it->actionOn ? "ON" : "STOP", it->dutyPercent,
                              (long)it->scheduledTime, (long)now);
             } else {
                 Serial.printf("[SCHEDULER] Past-due LIGHT task: %s CH%d %s (scheduled %ld, now %ld)\n",
@@ -2475,6 +2621,19 @@ bool setupFilesystem() {
             Serial.println("   - light-schedule.json initialized");
         } else {
             Serial.println("   - ERROR: Failed to create light-schedule.json");
+        }
+    }
+
+    // Initialize wm-schedule.json if it doesn't exist
+    if (!FS_USER.exists("/config/schedule/wm-schedule.json")) {
+        Serial.println(" Creating wm-schedule.json...");
+        File file = FS_USER.open("/config/schedule/wm-schedule.json", "w");
+        if (file) {
+            file.print("{\"schedules\":[]}");
+            file.close();
+            Serial.println("   - wm-schedule.json initialized");
+        } else {
+            Serial.println("   - ERROR: Failed to create wm-schedule.json");
         }
     }
     
@@ -3389,6 +3548,7 @@ void setupWebServer() {
         bool ok = true;
         ok &= removeSchedulesForTank("/config/schedule/feeder-schedule.json");
         ok &= removeSchedulesForTank("/config/schedule/light-schedule.json");
+        ok &= removeSchedulesForTank("/config/schedule/wm-schedule.json");
 
         if (!ok) {
             request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to prune schedules\"}");
@@ -4175,6 +4335,328 @@ void setupWebServer() {
         } else {
             request->send(400, "application/json", "{\"success\":false,\"error\":\"Unknown command. Use STOP or PWM\"}");
         }
+    });
+
+    // GET wavemaker schedule for a specific MAC
+    server.on("/api/wm-schedule", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        File file = FS_USER.open("/config/schedule/wm-schedule.json", "r");
+        if (!file) {
+            request->send(200, "application/json", "{\"success\":true,\"schedule\":null}");
+            return;
+        }
+
+        DynamicJsonDocument doc(4096);
+        DeserializationError error = deserializeJson(doc, file);
+        file.close();
+        if (error) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse wm-schedule.json\"}");
+            return;
+        }
+
+        JsonArray schedules = doc["schedules"].as<JsonArray>();
+        JsonObject found;
+        for (JsonObject entry : schedules) {
+            String entryMac = entry["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                found = entry;
+                break;
+            }
+        }
+
+        DynamicJsonDocument responseDoc(2048);
+        responseDoc["success"] = true;
+
+        if (!found.isNull()) {
+            JsonObject sched = responseDoc.createNestedObject("schedule");
+            sched["mac"] = found["mac"] | "";
+            sched["tankId"] = found["tankId"] | 0;
+            sched["deviceName"] = found["deviceName"] | "";
+
+            JsonObject storedSchedule = found["schedule"].as<JsonObject>();
+            if (!storedSchedule.isNull()) {
+                JsonArray ent = sched.createNestedArray("entries");
+                JsonArray storedEntries = storedSchedule["entries"].as<JsonArray>();
+                for (JsonObject e : storedEntries) {
+                    JsonObject ne = ent.createNestedObject();
+                    ne["enabled"] = e["enabled"] | true;
+                    ne["hour"] = e["hour"] | 8;
+                    ne["minute"] = e["minute"] | 0;
+                    ne["ampm"] = e["ampm"] | "AM";
+                    ne["action"] = e["action"] | "speed_change";
+                    ne["dutyPercent"] = e["dutyPercent"] | 0.0f;
+                }
+
+                JsonObject days = sched.createNestedObject("days");
+                JsonObject storedDays = storedSchedule["days"].as<JsonObject>();
+                days["Sunday"] = storedDays["Sunday"] | true;
+                days["Monday"] = storedDays["Monday"] | true;
+                days["Tuesday"] = storedDays["Tuesday"] | true;
+                days["Wednesday"] = storedDays["Wednesday"] | true;
+                days["Thursday"] = storedDays["Thursday"] | true;
+                days["Friday"] = storedDays["Friday"] | true;
+                days["Saturday"] = storedDays["Saturday"] | true;
+            }
+        } else {
+            responseDoc["schedule"] = nullptr;
+        }
+
+        String response;
+        serializeJson(responseDoc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST save wavemaker schedule
+    server.on("/api/wm-schedule", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(2048);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        // Backwards-compatible delete-in-post support: { mac, action: "delete" }
+        if (body.containsKey("action") && String(body["action"] | "") == "delete") {
+            File file = FS_USER.open("/config/schedule/wm-schedule.json", "r");
+            DynamicJsonDocument doc(4096);
+            bool changed = false;
+
+            if (file) {
+                DeserializationError err2 = deserializeJson(doc, file);
+                file.close();
+                if (!err2) {
+                    JsonArray schedules = doc["schedules"].as<JsonArray>();
+                    if (!schedules.isNull()) {
+                        for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                            String entryMac = schedules[i]["mac"] | "";
+                            if (entryMac.equalsIgnoreCase(macStr)) {
+                                schedules.remove(i);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (changed) {
+                File out = FS_USER.open("/config/schedule/wm-schedule.json", "w");
+                if (!out) {
+                    request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write wm-schedule.json\"}");
+                    return;
+                }
+                serializeJson(doc, out);
+                out.close();
+            }
+
+            rebuildNextTasks();
+            request->send(200, "application/json", "{\"success\":true}");
+            return;
+        }
+
+        JsonVariant schedule = body["schedule"];
+
+        File file = FS_USER.open("/config/schedule/wm-schedule.json", "r");
+        DynamicJsonDocument doc(4096);
+        if (file) {
+            deserializeJson(doc, file);
+            file.close();
+        }
+
+        JsonArray schedules = doc["schedules"];
+        if (schedules.isNull()) {
+            schedules = doc.createNestedArray("schedules");
+        }
+
+        // Remove existing entry for this MAC
+        for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+            String entryMac = schedules[i]["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                schedules.remove(i);
+            }
+        }
+
+        JsonObject newEntry = schedules.createNestedObject();
+        newEntry["mac"] = macStr;
+        newEntry["tankId"] = body["tankId"] | 0;
+        newEntry["deviceName"] = body["deviceName"] | "";
+
+        JsonObject newSched = newEntry.createNestedObject("schedule");
+
+        // Copy entries
+        JsonArray ent = newSched.createNestedArray("entries");
+        JsonArray srcEnt = schedule["entries"].as<JsonArray>();
+        for (JsonObject e : srcEnt) {
+            JsonObject ne = ent.createNestedObject();
+            ne["enabled"] = e["enabled"] | true;
+            ne["hour"] = e["hour"] | 8;
+            ne["minute"] = e["minute"] | 0;
+            ne["ampm"] = e["ampm"] | "AM";
+            ne["action"] = e["action"] | "speed_change";
+            ne["dutyPercent"] = e["dutyPercent"] | 0.0f;
+        }
+
+        // Copy days
+        JsonObject days = newSched.createNestedObject("days");
+        JsonObject srcDays = schedule["days"].as<JsonObject>();
+        days["Sunday"] = srcDays["Sunday"] | true;
+        days["Monday"] = srcDays["Monday"] | true;
+        days["Tuesday"] = srcDays["Tuesday"] | true;
+        days["Wednesday"] = srcDays["Wednesday"] | true;
+        days["Thursday"] = srcDays["Thursday"] | true;
+        days["Friday"] = srcDays["Friday"] | true;
+        days["Saturday"] = srcDays["Saturday"] | true;
+
+        newEntry["updatedAt"] = millis();
+
+        file = FS_USER.open("/config/schedule/wm-schedule.json", "w");
+        if (!file) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write wm-schedule.json\"}");
+            return;
+        }
+        serializeJson(doc, file);
+        file.close();
+
+        rebuildNextTasks();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // POST delete wavemaker schedule for a device (dedicated endpoint)
+    server.on("/api/wm-schedule/delete", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(512);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        File file = FS_USER.open("/config/schedule/wm-schedule.json", "r");
+        DynamicJsonDocument doc(4096);
+        bool changed = false;
+
+        if (file) {
+            DeserializationError err2 = deserializeJson(doc, file);
+            file.close();
+            if (err2) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse wm-schedule.json\"}");
+                return;
+            }
+
+            JsonArray schedules = doc["schedules"].as<JsonArray>();
+            if (!schedules.isNull()) {
+                for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                    String entryMac = schedules[i]["mac"] | "";
+                    if (entryMac.equalsIgnoreCase(macStr)) {
+                        schedules.remove(i);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (changed) {
+            File out = FS_USER.open("/config/schedule/wm-schedule.json", "w");
+            if (!out) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write wm-schedule.json\"}");
+                return;
+            }
+            serializeJson(doc, out);
+            out.close();
+        }
+
+        rebuildNextTasks();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // GET wavemaker status (fetch from node via ESP-NOW status request)
+    server.on("/api/wm-status", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        String macKey = macStr;
+        macKey.toUpperCase();
+
+        uint8_t mac[6];
+        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+            return;
+        }
+
+        // Send status request command (0x28) to the wavemaker node
+        CommandMessage cmd = {};
+        cmd.header.type = MessageType::COMMAND;
+        cmd.header.tankId = 0;
+        cmd.header.nodeType = NodeType::HUB;
+        cmd.header.timestamp = millis();
+        cmd.header.sequenceNum = 0;
+        cmd.commandId = generateCommandId();
+        cmd.commandSeqID = 0;
+        cmd.finalCommand = true;
+        cmd.commandData[0] = 0x28;  // STATUS_REQUEST
+
+        uint8_t apMac[6] = {0};
+#ifdef ESP32
+        esp_read_mac(apMac, ESP_MAC_WIFI_SOFTAP);
+#endif
+        memcpy(cmd.returnMac, apMac, 6);
+
+#ifdef ESP32
+        ESPNowManager::getInstance().addPeer(mac, WIFI_IF_AP);
+#else
+        ESPNowManager::getInstance().addPeer(mac);
+#endif
+        ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd));
+
+        g_waveMakerStatusPending[macKey] = millis();
+
+        // Return cached status if available
+        auto it = g_waveMakerStatus.find(macKey);
+        if (it != g_waveMakerStatus.end()) {
+            WaveMakerStatus status = it->second;
+
+            DynamicJsonDocument responseDoc(256);
+            responseDoc["success"] = true;
+            JsonObject statusObj = responseDoc.createNestedObject("status");
+            statusObj["pumpActive"] = status.pumpActive;
+            statusObj["dutyPercent"] = status.dutyPercent;
+            statusObj["pwmRaw"] = status.pwmRaw;
+            responseDoc["updatedAt"] = status.updatedAt;
+
+            String response;
+            serializeJson(responseDoc, response);
+            request->send(200, "application/json", response);
+            return;
+        }
+
+        request->send(200, "application/json", "{\"success\":false,\"pending\":true}");
     });
 
     // ========================================================================
@@ -5867,6 +6349,25 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             calFile.close();
         }
 
+        // Remove from wm-schedule.json
+        File wmSchedFile = FS_USER.open("/config/schedule/wm-schedule.json", "r");
+        DynamicJsonDocument wmSchedDoc(4096);
+        if (wmSchedFile) {
+            deserializeJson(wmSchedDoc, wmSchedFile);
+            wmSchedFile.close();
+        }
+        JsonArray wmSchedules = wmSchedDoc["schedules"];
+        if (!wmSchedules.isNull()) {
+            for (int i = (int)wmSchedules.size() - 1; i >= 0; i--) {
+                if (wmSchedules[i]["mac"].as<String>() == macStr) {
+                    wmSchedules.remove(i);
+                }
+            }
+            wmSchedFile = FS_USER.open("/config/schedule/wm-schedule.json", "w");
+            serializeJson(wmSchedDoc, wmSchedFile);
+            wmSchedFile.close();
+        }
+
         // Also remove from memory and peer list
         uint8_t mac[6];
         if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
@@ -6182,6 +6683,22 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
                     }
                     f = FS_USER.open("/config/feeder-calibration.json", "w");
                     serializeJson(fcDoc, f); f.close();
+                }
+            }
+
+            // Remove from wm-schedule.json
+            {
+                File f = FS_USER.open("/config/schedule/wm-schedule.json", "r");
+                DynamicJsonDocument wmDoc(4096);
+                if (f) { deserializeJson(wmDoc, f); f.close(); }
+                JsonArray arr = wmDoc["schedules"];
+                if (!arr.isNull()) {
+                    for (int i = (int)arr.size() - 1; i >= 0; i--) {
+                        String m = arr[i]["mac"].as<String>(); m.toUpperCase();
+                        if (m == macUpper) arr.remove(i);
+                    }
+                    f = FS_USER.open("/config/schedule/wm-schedule.json", "w");
+                    serializeJson(wmDoc, f); f.close();
                 }
             }
             
@@ -6594,6 +7111,32 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
             Serial.printf("[LIGHT] STATUS update %s -> ch1=%d ch2=%d ch3=%d (nodeType=%d, pending=%s)\n",
                           macStr.c_str(), status.ch1 ? 1 : 0, status.ch2 ? 1 : 0, status.ch3 ? 1 : 0,
                           (int)msg.header.nodeType, pendingLightStatus ? "yes" : "no");
+        }
+    }
+
+    // Update wavemaker status cache
+    bool pendingWmStatus = (g_waveMakerStatusPending.find(macStr) != g_waveMakerStatusPending.end());
+    if (msg.header.nodeType == NodeType::WAVE_MAKER || pendingWmStatus) {
+        WaveMakerStatus wmStatus;
+        // statusData[0] = state enum, [1-2] = PWM uint16 LE, [3] = pumpActive, [4-7] = dutyPercent float LE
+        wmStatus.pumpActive = (msg.statusData[3] != 0);
+        uint16_t pwmRaw = 0;
+        memcpy(&pwmRaw, &msg.statusData[1], sizeof(uint16_t));
+        wmStatus.pwmRaw = pwmRaw;
+        float dutyPct = 0.0f;
+        memcpy(&dutyPct, &msg.statusData[4], sizeof(float));
+        wmStatus.dutyPercent = dutyPct;
+        wmStatus.updatedAt = millis();
+        g_waveMakerStatus[macStr] = wmStatus;
+
+        if (pendingWmStatus) {
+            g_waveMakerStatusPending.erase(macStr);
+        }
+
+        if (config.debugESPNOW) {
+            Serial.printf("[WAVEMAKER] STATUS update %s -> active=%d duty=%.1f%% pwm=%u (pending=%s)\n",
+                          macStr.c_str(), wmStatus.pumpActive ? 1 : 0, wmStatus.dutyPercent,
+                          wmStatus.pwmRaw, pendingWmStatus ? "yes" : "no");
         }
     }
 

@@ -4293,9 +4293,9 @@ void setupWebServer() {
         resp["maxDutyPercent"] = maxDuty;
         resp["minDutyPercent"] = minDuty;
         resp["defaultDuty"] = defaultDuty;
-        resp["pwmFrequency"] = 200;
+        resp["pwmFrequency"] = 120;
         resp["pwmResolution"] = 10;
-        resp["softStart"] = true;
+        resp["softStart"] = false;
 
         String response;
         serializeJson(resp, response);

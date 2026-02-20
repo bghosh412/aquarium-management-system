@@ -10,7 +10,7 @@
 # ============================================================================
 # PARAMETERS:
 #   MAC              - MAC address of the wave maker node
-#   PWM_FREQUENCY    - PWM frequency in Hz (default: 200)
+#   PWM_FREQUENCY    - PWM frequency in Hz (default: 120)
 #   PWM_RESOLUTION   - PWM resolution bits (default: 10, i.e. 0-1023)
 #   MAX_DUTY_PERCENT - Maximum allowed duty cycle % (default: 95.0)
 #   MIN_DUTY_PERCENT - Minimum duty cycle % before pump stalls (default: 30.0)

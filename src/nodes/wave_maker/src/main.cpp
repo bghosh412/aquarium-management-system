@@ -40,9 +40,9 @@
 #define PIN_PUMP_PWM D1   // GPIO5
 
 // PWM configuration
-#define PWM_FREQUENCY     200    // 200Hz PWM frequency
+#define PWM_FREQUENCY     120    // 120Hz PWM frequency
 #define PWM_RESOLUTION    1023   // 10-bit resolution (0-1023)
-#define MAX_DUTY_PERCENT  95.0f  // Maximum duty cycle %
+#define MAX_DUTY_PERCENT  98.0f  // Maximum duty cycle %
 #define MIN_DUTY_PERCENT  30.0f  // Minimum duty cycle % (pump stall threshold)
 
 // Soft start configuration

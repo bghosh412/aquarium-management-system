@@ -34,6 +34,7 @@ public:
     String getLocation() const { return _location; }
     String getDescription() const { return _description; }
     bool isEnabled() const { return _enabled; }
+    bool isMaintenanceMode() const { return _maintenanceMode; }
     
     // Water parameters
     float getTargetTemperature() const { return _targetTemperature; }
@@ -58,6 +59,7 @@ public:
     void setLocation(const String& loc) { _location = loc; }
     void setDescription(const String& desc) { _description = desc; }
     void setEnabled(bool enabled) { _enabled = enabled; }
+    void setMaintenanceMode(bool mode) { _maintenanceMode = mode; }
     
     // Water parameters
     void setTargetTemperature(float temp) { _targetTemperature = temp; }
@@ -190,6 +192,7 @@ private:
     String _location;               // Physical location (optional)
     String _description;            // Optional description
     bool _enabled;                  // Is this tank active?
+    bool _maintenanceMode;           // Maintenance mode flag (lights on, others stopped)
     
     // Target water parameters
     float _targetTemperature;       // Target temp in °C

@@ -79,6 +79,18 @@ function renderAquariums() {
                     <span class="meta-label">Devices:</span>
                     <span class="meta-value">${aquarium.deviceCount || 0} online</span>
                 </div>
+                <!-- Maintenance Mode Toggle -->
+                <div class="checkbox-group" style="margin-top: 0.75rem; padding: 0.5rem 0.75rem; background: ${aquarium.maintenanceMode ? 'rgba(251, 191, 36, 0.15)' : 'rgba(255,255,255,0.03)'}; border-radius: 0.5rem; border: 1px solid ${aquarium.maintenanceMode ? 'rgba(251, 191, 36, 0.4)' : 'rgba(255,255,255,0.08)'};" onclick="event.stopPropagation();">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem; margin: 0;">
+                        <input type="checkbox" 
+                               ${aquarium.maintenanceMode ? 'checked' : ''} 
+                               onchange="toggleMaintenanceMode(${aquarium.id}, this.checked)"
+                               style="width: 16px; height: 16px; accent-color: #f59e0b; cursor: pointer;">
+                        <span style="color: ${aquarium.maintenanceMode ? '#fbbf24' : 'var(--color-text-secondary)'}; font-weight: ${aquarium.maintenanceMode ? '600' : '400'};">
+                            🔧 Maintenance Mode ${aquarium.maintenanceMode ? '(Active)' : ''}
+                        </span>
+                    </label>
+                </div>
             </div>
             <div class="card-footer">
                 <button class="device-action-btn btn-primary" onclick="event.stopPropagation(); viewDevices(${aquarium.id})">
@@ -105,6 +117,43 @@ function viewDevices(tankId) {
 function manageAquarium(tankId) {
     localStorage.setItem('selectedTankId', tankId);
     window.location.href = `manage-aquarium.html?tankId=${tankId}`;
+}
+
+function toggleMaintenanceMode(tankId, enabled) {
+    const aquarium = aquariums.find(a => a.id === tankId);
+    const name = aquarium ? aquarium.name : `Tank ${tankId}`;
+    const action = enabled ? 'enable' : 'disable';
+    
+    if (!confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} Maintenance Mode for "${name}"?\n\n` +
+        (enabled 
+            ? '• Lights will be turned ON\n• CO₂, heater, wave maker, and feeder will be STOPPED\n• Scheduled tasks will be PAUSED'
+            : '• Lights will be turned OFF\n• Scheduled tasks will RESUME'))) {
+        // User cancelled - revert checkbox
+        event.target.checked = !enabled;
+        return;
+    }
+    
+    fetch('/api/aquarium/maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tankId, maintenanceMode: enabled })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log(`Maintenance mode ${enabled ? 'enabled' : 'disabled'} for tank ${tankId}`);
+            // Reload aquariums to reflect updated state
+            loadAquariums();
+        } else {
+            alert('Failed to toggle maintenance mode: ' + (data.error || 'Unknown error'));
+            event.target.checked = !enabled;
+        }
+    })
+    .catch(error => {
+        console.error('Error toggling maintenance mode:', error);
+        alert('Failed to toggle maintenance mode. Check connection.');
+        event.target.checked = !enabled;
+    });
 }
 
 // Add to window for WebSocket message handling

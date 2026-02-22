@@ -199,10 +199,10 @@ static bool ntpSynced = false;
 // Safe GPIO pins for ESP32-S3 (avoid strapping pins: GPIO0, 3, 45, 46)
 // ============================================================================
 
-#define HUB_LED_WIFI       4   // GPIO4 - WiFi status
-#define HUB_LED_DEVICE     5   // GPIO5 - Device offline status
-#define HUB_LED_TASK       6   // GPIO6 - Scheduled task indicator
-#define HUB_LED_UNMAPPED   7   // GPIO7 - Unmapped device indicator
+#define HUB_LED_WIFI       11  // GPIO11 - WiFi status
+#define HUB_LED_DEVICE     12  // GPIO12 - Device offline status
+#define HUB_LED_TASK       13  // GPIO13 - Scheduled task indicator
+#define HUB_LED_UNMAPPED   14  // GPIO14 - Unmapped device indicator
 
 #define HUB_LED_BLINK_INTERVAL_MS  300    // Blink rate (300ms on/off)
 #define HUB_LED_TASK_DURATION_MS   30000  // Task indicator blinks for 30 seconds
@@ -1954,8 +1954,50 @@ void rebuildNextTasks() {
     saveNextTasks(allTasks);
 }
 
+// Helper: Check if a device MAC belongs to an aquarium in maintenance mode
+static bool isDeviceInMaintenanceMode(const String& macStr) {
+    // Look up the device's tankId from devices.json
+    File devFile = FS_USER.open("/config/devices.json", "r");
+    if (!devFile) return false;
+    
+    JsonDocument devDoc;
+    DeserializationError err = deserializeJson(devDoc, devFile);
+    devFile.close();
+    if (err) return false;
+    
+    uint8_t tankId = 0;
+    String macUpper = macStr;
+    macUpper.toUpperCase();
+    
+    JsonArray devices = devDoc["devices"].as<JsonArray>();
+    for (JsonObject dev : devices) {
+        String devMac = dev["mac"].as<String>();
+        devMac.toUpperCase();
+        if (devMac == macUpper) {
+            tankId = dev["tankId"].as<uint8_t>();
+            break;
+        }
+    }
+    
+    if (tankId == 0) return false;
+    
+    // Check if that aquarium has maintenance mode enabled
+    Aquarium* aquarium = AquariumManager::getInstance().getAquarium(tankId);
+    if (aquarium && aquarium->isMaintenanceMode()) {
+        return true;
+    }
+    
+    return false;
+}
+
 // Execute a scheduled task
 static bool executeTask(const NextTask& task) {
+    // Check maintenance mode before executing
+    if (isDeviceInMaintenanceMode(task.mac)) {
+        Serial.printf("[SCHEDULER] Skipping task for %s (maintenance mode active)\n", task.mac.c_str());
+        return false;
+    }
+    
     uint8_t mac[6];
     if (!parseMacAddress(task.mac.c_str(), mac)) {
         Serial.printf("[SCHEDULER] Invalid MAC in task: %s\n", task.mac.c_str());
@@ -2021,6 +2063,16 @@ static void processPastDueTasks(std::vector<NextTask>& tasks, bool& needsRebuild
     
     for (auto it = tasks.begin(); it != tasks.end(); ) {
         if (it->scheduledTime <= now) {
+            // Check if device is in maintenance mode - skip but keep task for later
+            if (isDeviceInMaintenanceMode(it->mac)) {
+                Serial.printf("[SCHEDULER] SKIPPED (maintenance mode): %s task for %s\n",
+                             it->taskType == TaskType::LIGHT ? "LIGHT" : 
+                             it->taskType == TaskType::FEEDER ? "FEEDER" : "WAVEMAKER",
+                             it->mac.c_str());
+                ++it;  // Keep task in list, don't remove or reschedule
+                continue;
+            }
+            
             if (it->taskType == TaskType::FEEDER) {
                 Serial.printf("[SCHEDULER] Past-due FEEDER task: %s %s PWM=%u (scheduled %ld, now %ld)\n",
                              it->mac.c_str(), it->period.c_str(), it->pwmValue,
@@ -2126,6 +2178,10 @@ void schedulerTask(void* parameter) {
                     // Remove executed task and recalculate next occurrence
                     rebuildNextTasks();
                     loadNextTasks(tasks);
+                } else if (isDeviceInMaintenanceMode(nextTask.mac)) {
+                    // Maintenance mode - don't retry aggressively, sleep normally
+                    Serial.println("[SCHEDULER] Task skipped (maintenance mode), checking again in 60s");
+                    vTaskDelay(pdMS_TO_TICKS(60000));
                 } else {
                     // Node offline - wait 60 seconds and retry
                     Serial.println("[SCHEDULER] Node offline, retrying in 60s");
@@ -2866,6 +2922,7 @@ bool loadAquariumsFromFile() {
         aquarium->setLocation(obj["location"] | "");
         aquarium->setDescription(obj["description"] | "");
         aquarium->setEnabled(obj["enabled"] | true);
+        aquarium->setMaintenanceMode(obj["maintenanceMode"] | false);
         
         // Water parameters
         JsonObject waterParams = obj["waterParameters"];
@@ -3085,6 +3142,7 @@ bool saveAquariumsToFile() {
         obj["location"] = aquarium->getLocation();
         obj["description"] = aquarium->getDescription();
         obj["enabled"] = aquarium->isEnabled();
+        obj["maintenanceMode"] = aquarium->isMaintenanceMode();
         
         // Water parameters
         JsonObject waterParams = obj["waterParameters"].to<JsonObject>();
@@ -3258,6 +3316,7 @@ void setupWebServer() {
             obj["tankType"] = aquarium->getTankType();
             obj["location"] = aquarium->getLocation();
             obj["enabled"] = aquarium->isEnabled();
+            obj["maintenanceMode"] = aquarium->isMaintenanceMode();
             // TEMPORARY: Count devices from JSON file since Device objects don't exist yet
             obj["deviceCount"] = countDevicesForAquarium(aquarium->getId());
             
@@ -3389,6 +3448,7 @@ void setupWebServer() {
         doc["location"] = aquarium->getLocation();
         doc["description"] = aquarium->getDescription();
         doc["enabled"] = aquarium->isEnabled();
+        doc["maintenanceMode"] = aquarium->isMaintenanceMode();
         doc["deviceCount"] = aquarium->getDeviceCount();
         
         // Water parameters
@@ -3464,6 +3524,9 @@ void setupWebServer() {
         if (doc["enabled"].is<bool>()) {
             aquarium->setEnabled(doc["enabled"].as<bool>());
         }
+        if (doc["maintenanceMode"].is<bool>()) {
+            aquarium->setMaintenanceMode(doc["maintenanceMode"].as<bool>());
+        }
         
         // Update water parameters if provided
         JsonObject waterParameters = doc["waterParameters"];
@@ -3500,6 +3563,136 @@ void setupWebServer() {
         
         request->send(200, "text/plain", "Aquarium updated successfully");
         Serial.printf(" Updated aquarium: %s (ID: %d)\\n", aquarium->getName().c_str(), id);
+    });
+    
+    // POST toggle maintenance mode for an aquarium
+    server.on("/api/aquarium/maintenance", HTTP_POST, [](AsyncWebServerRequest *request){},
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;  // Wait for full body
+        
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, (const char*)data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+        
+        if (!doc["id"].is<int>() || !doc["maintenanceMode"].is<bool>()) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing id or maintenanceMode\"}");
+            return;
+        }
+        
+        uint8_t tankId = doc["id"].as<uint8_t>();
+        bool enabled = doc["maintenanceMode"].as<bool>();
+        
+        Aquarium* aquarium = AquariumManager::getInstance().getAquarium(tankId);
+        if (!aquarium) {
+            request->send(404, "application/json", "{\"success\":false,\"error\":\"Aquarium not found\"}");
+            return;
+        }
+        
+        aquarium->setMaintenanceMode(enabled);
+        
+        // Save to file
+        saveAquariumsToFile();
+        
+        // Send ESP-NOW commands to devices for this tank
+        // Load devices.json to find devices belonging to this aquarium
+        File devFile = FS_USER.open("/config/devices.json", "r");
+        if (devFile) {
+            JsonDocument devDoc;
+            DeserializationError devErr = deserializeJson(devDoc, devFile);
+            devFile.close();
+            
+            if (!devErr) {
+                JsonArray devices = devDoc["devices"].as<JsonArray>();
+                for (JsonObject dev : devices) {
+                    if (dev["tankId"].as<uint8_t>() != tankId) continue;
+                    
+                    String macStr = dev["mac"].as<String>();
+                    String devType = dev["type"].as<String>();
+                    devType.toUpperCase();
+                    
+                    uint8_t mac[6];
+                    if (!parseMacAddress(macStr.c_str(), mac)) continue;
+                    
+                    bool isOnline = ESPNowManager::getInstance().isPeerOnline(mac);
+                    
+                    if (enabled) {
+                        // MAINTENANCE ON: lights ON (all channels), stop everything else
+                        if (devType == "LIGHT") {
+                            if (isOnline) {
+                                sendLightCommand(mac, 1);  // Command 1 = All channels ON
+                                Serial.printf("[MAINTENANCE] Tank %d: Lights ON for %s\n", tankId, macStr.c_str());
+                            } else {
+                                Serial.printf("[MAINTENANCE] Tank %d: Light %s OFFLINE, skipped\n", tankId, macStr.c_str());
+                            }
+                        } else if (devType == "WAVE_MAKER") {
+                            if (isOnline) {
+                                sendWaveMakerStop(mac);
+                                Serial.printf("[MAINTENANCE] Tank %d: WaveMaker STOPPED for %s\n", tankId, macStr.c_str());
+                            }
+                        } else if (devType == "CO2") {
+                            if (isOnline) {
+                                // Send command 0x00 = STOP/OFF for CO2
+                                CommandMessage cmd;
+                                memset(&cmd, 0, sizeof(cmd));
+                                cmd.header.type = MessageType::COMMAND;
+                                cmd.header.tankId = tankId;
+                                cmd.header.nodeType = NodeType::HUB;
+                                cmd.header.timestamp = millis();
+                                cmd.commandId = millis() & 0xFF;
+                                cmd.commandSeqID = 0;
+                                cmd.finalCommand = true;
+                                cmd.commandData[0] = 0x02;  // CMD_STOP for CO2
+                                ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+                                Serial.printf("[MAINTENANCE] Tank %d: CO2 OFF for %s\n", tankId, macStr.c_str());
+                            }
+                        } else if (devType == "HEATER") {
+                            if (isOnline) {
+                                // Send heater OFF command
+                                CommandMessage cmd;
+                                memset(&cmd, 0, sizeof(cmd));
+                                cmd.header.type = MessageType::COMMAND;
+                                cmd.header.tankId = tankId;
+                                cmd.header.nodeType = NodeType::HUB;
+                                cmd.header.timestamp = millis();
+                                cmd.commandId = millis() & 0xFF;
+                                cmd.commandSeqID = 0;
+                                cmd.finalCommand = true;
+                                cmd.commandData[0] = 0x02;  // CMD_SET_MODE = manual
+                                cmd.commandData[1] = 0;     // mode = manual
+                                // Leave heater off (no target temp set)
+                                ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+                                Serial.printf("[MAINTENANCE] Tank %d: Heater OFF for %s\n", tankId, macStr.c_str());
+                            }
+                        }
+                        // FISH_FEEDER / SENSOR / REPEATER: no action needed (feeders won't trigger, sensors passive)
+                    } else {
+                        // MAINTENANCE OFF: turn lights OFF so scheduler can take over
+                        if (devType == "LIGHT") {
+                            if (isOnline) {
+                                sendLightCommand(mac, 0);  // Command 0 = All channels OFF
+                                Serial.printf("[MAINTENANCE] Tank %d: Lights OFF (scheduler resumes) for %s\n", tankId, macStr.c_str());
+                            }
+                        }
+                        // Other devices will resume via scheduler automatically
+                    }
+                }
+            }
+        }
+        
+        Serial.printf("[MAINTENANCE] Tank %d maintenance mode %s\n", tankId, enabled ? "ENABLED" : "DISABLED");
+        
+        JsonDocument respDoc;
+        respDoc["success"] = true;
+        respDoc["maintenanceMode"] = enabled;
+        respDoc["message"] = enabled ? "Maintenance mode enabled - lights ON, other devices stopped" 
+                                     : "Maintenance mode disabled - scheduler resumed";
+        String response;
+        serializeJson(respDoc, response);
+        request->send(200, "application/json", response);
     });
     
     // POST delete aquarium (using query parameter)

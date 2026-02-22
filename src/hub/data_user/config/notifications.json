@@ -1,0 +1,84 @@
+{
+    "channels": {
+        "ntfy": {
+            "type": "ntfy",
+            "url": "https://ntfy.sh/YOUR_TOPIC_HERE"
+        },
+        "log": {
+            "type": "serial"
+        }
+    },
+    "routes": [
+        {
+            "event": "system.boot",
+            "channel": "ntfy",
+            "title": "AMS Hub",
+            "priority": 3,
+            "throttleMs": 60000,
+            "enabled": true
+        },
+        {
+            "event": "system.wifi_fail",
+            "channel": "ntfy",
+            "title": "AMS Hub",
+            "priority": 4,
+            "throttleMs": 300000,
+            "enabled": true
+        },
+        {
+            "event": "system.memory_warn",
+            "channel": "ntfy",
+            "title": "AMS Memory",
+            "priority": 4,
+            "throttleMs": 300000,
+            "enabled": true
+        },
+        {
+            "event": "safety.*",
+            "channel": "ntfy",
+            "title": "SAFETY ALERT",
+            "priority": 5,
+            "throttleMs": 0,
+            "enabled": true
+        },
+        {
+            "event": "node.timeout",
+            "channel": "ntfy",
+            "title": "Node Timeout",
+            "priority": 4,
+            "throttleMs": 60000,
+            "enabled": true
+        },
+        {
+            "event": "node.*",
+            "channel": "ntfy",
+            "title": "Node Event",
+            "priority": 3,
+            "throttleMs": 30000,
+            "enabled": true
+        },
+        {
+            "event": "config.*",
+            "channel": "ntfy",
+            "title": "AMS Config",
+            "priority": 3,
+            "throttleMs": 60000,
+            "enabled": true
+        },
+        {
+            "event": "scheduler.*",
+            "channel": "ntfy",
+            "title": "AMS Scheduler",
+            "priority": 3,
+            "throttleMs": 30000,
+            "enabled": true
+        },
+        {
+            "event": "*",
+            "channel": "log",
+            "priority": 3,
+            "throttleMs": 0,
+            "enabled": true
+        }
+    ]
+}

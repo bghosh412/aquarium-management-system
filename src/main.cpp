@@ -49,6 +49,7 @@
 #include <MicroCore.h>
 #include <ConfigManager.h>
 #include <FileManager.h>
+#include <NotificationManager.h>
 
 // ============================================================================
 // DUAL LITTLEFS FILESYSTEM ABSTRACTION
@@ -150,6 +151,9 @@ TaskHandle_t watchdogTaskHandle = NULL;
 TaskHandle_t webUiTaskHandle = NULL;
 TaskHandle_t schedulerTaskHandle = NULL;
 TaskHandle_t nodeOtaTaskHandle = NULL;
+
+// Notification Manager (event-driven, async notifications)
+NotificationManager notifier;
 
 // OTA Pending State (for deferred processing in loop)
 enum class OtaPendingType { NONE, FIRMWARE, LITTLEFS, BOTH };
@@ -366,6 +370,9 @@ void registerAllDevicesAsPeers();
 
 // Web server setup
 void setupWebServer();
+
+// Notification framework setup
+void setupNotifications();
 
 // Scheduler function declarations
 void rebuildNextTasks();
@@ -1306,6 +1313,16 @@ struct ChannelState {
 };
 static std::map<String, ChannelState> g_channelStates;
 
+// Structure to track wave maker running state per MAC
+struct WaveMakerState {
+    bool running;
+    float dutyPercent;
+};
+static std::map<String, WaveMakerState> g_waveMakerStates;
+
+// Maintenance mode device state persistence
+static const char* MAINTENANCE_STATES_FILE = "/config/maintenance-states.json";
+
 // Structure for next-task.json persistence
 enum class TaskType : uint8_t {
     LIGHT = 0,
@@ -2022,13 +2039,17 @@ static bool executeTask(const NextTask& task) {
         return true;
     } else if (task.taskType == TaskType::WAVEMAKER) {
         // Execute wavemaker task
+        String wmKey = task.mac;
+        wmKey.toUpperCase();
         if (task.actionOn) {
             Serial.printf("[SCHEDULER] Executing WAVEMAKER task: %s duty=%.1f%%\n",
                           task.mac.c_str(), task.dutyPercent);
             sendWaveMakerCommand(mac, task.dutyPercent);
+            g_waveMakerStates[wmKey] = {true, task.dutyPercent};
         } else {
             Serial.printf("[SCHEDULER] Executing WAVEMAKER STOP task: %s\n", task.mac.c_str());
             sendWaveMakerStop(mac);
+            g_waveMakerStates[wmKey] = {false, 0.0f};
         }
         return true;
     } else {
@@ -2615,6 +2636,64 @@ void watchdogTask(void* parameter) {
 }
 
 // ============================================================================
+// NOTIFICATION SETUP (called from Web UI task on Core 1)
+// ============================================================================
+
+void setupNotifications() {
+    // Read NTFY_TOPIC from hub_config.txt
+    String ntfyTopic = "";
+    File configFile = FS_USER.open("/config/hub_config.txt", "r");
+    if (configFile) {
+        while (configFile.available()) {
+            String line = configFile.readStringUntil('\n');
+            line.trim();
+            if (line.startsWith("NTFY_TOPIC=")) {
+                ntfyTopic = line.substring(String("NTFY_TOPIC=").length());
+                ntfyTopic.trim();
+                break;
+            }
+        }
+        configFile.close();
+    }
+
+    // Register ntfy channel if topic is configured
+    if (ntfyTopic.length() > 0) {
+        String url = "https://ntfy.sh/" + ntfyTopic;
+        notifier.addChannel("ntfy", new NtfyChannel(url.c_str()));
+        LOG_INFO("[NTF] ntfy.sh channel registered: %s", url.c_str());
+    } else {
+        LOG_WARN("[NTF] NTFY_TOPIC not set in hub_config.txt — ntfy channel disabled");
+    }
+
+    // Always register serial channel for development logging
+    notifier.addChannel("log", new SerialChannel());
+
+    // Load routing rules from JSON config (AOP-style)
+    // Use FS_USER explicitly — dual-LittleFS means default LittleFS won't find user files
+    if (FS_USER.exists("/config/notifications.json")) {
+        notifier.loadConfig(FS_USER, "/config/notifications.json");
+        LOG_INFO("[NTF] Loaded notification routes from /config/notifications.json");
+    } else {
+        // No config file — set up sensible defaults programmatically
+        LOG_INFO("[NTF] No notifications.json found, using default routes");
+        if (ntfyTopic.length() > 0) {
+            notifier.route("system.*",    "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Hub",       60000);
+            notifier.route("safety.*",    "ntfy", NTF_PRIORITY_URGENT,  "AMS - SAFETY ALERT",  0);
+            notifier.route("node.*",      "ntfy", NTF_PRIORITY_HIGH,    "AMS - Node Event",    60000);
+            notifier.route("config.*",    "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Config",    60000);
+            notifier.route("scheduler.*", "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Scheduler", 30000);
+        }
+        // Always log everything to Serial
+        notifier.route("*", "log", NTF_PRIORITY_DEFAULT, "", 0);
+    }
+
+    // Start async worker on Core 1 (same core as WebUI)
+    notifier.begin(1);
+
+    notifier.printRoutes();
+}
+
+// ============================================================================
 // WEB UI TASK (Core 1) - Web server + UI
 // ============================================================================
 
@@ -2623,6 +2702,12 @@ void webUiTask(void* parameter) {
 
     // Setup web server on Web UI core
     setupWebServer();
+
+    // Setup notification framework (async worker on Core 1)
+    setupNotifications();
+
+    // Now that channels and routes are registered, emit boot notification
+    notifier.emitf("system.boot", NTFY_MSG_WEBSERVER_UP, WiFi.localIP().toString().c_str());
 
     // Keep task alive (AsyncWebServer runs in background)
     while (true) {
@@ -3565,10 +3650,197 @@ void setupWebServer() {
         Serial.printf(" Updated aquarium: %s (ID: %d)\\n", aquarium->getName().c_str(), id);
     });
     
+    // ========================================================================
+    // MAINTENANCE MODE HELPERS: Save / Restore device states
+    // ========================================================================
+
+    // Save current device states before entering maintenance mode
+    auto saveMaintenanceStates = [](uint8_t tankId, JsonArray devices) {
+        JsonDocument statesDoc;
+
+        // Load existing file (may have states from other aquariums)
+        File f = FS_USER.open(MAINTENANCE_STATES_FILE, "r");
+        if (f) {
+            deserializeJson(statesDoc, f);
+            f.close();
+        }
+
+        // Ensure the "states" array exists
+        if (!statesDoc["states"].is<JsonArray>()) {
+            statesDoc["states"].to<JsonArray>();
+        }
+        JsonArray states = statesDoc["states"].as<JsonArray>();
+
+        // Remove any existing entries for this tank (e.g. re-enable without disable)
+        for (int i = states.size() - 1; i >= 0; i--) {
+            if (states[i]["aquariumId"].as<uint8_t>() == tankId) {
+                states.remove(i);
+            }
+        }
+
+        // Save current state for each device belonging to this tank
+        for (JsonObject dev : devices) {
+            if (dev["tankId"].as<uint8_t>() != tankId) continue;
+
+            String macStr = dev["mac"].as<String>();
+            String devType = dev["type"].as<String>();
+            devType.toUpperCase();
+
+            JsonObject entry = states.add<JsonObject>();
+            entry["aquariumId"] = tankId;
+            entry["mac"] = macStr;
+            entry["type"] = devType;
+
+            String macKey = macStr;
+            macKey.toUpperCase();
+
+            if (devType == "LIGHT") {
+                if (g_channelStates.find(macKey) != g_channelStates.end()) {
+                    ChannelState& cs = g_channelStates[macKey];
+                    entry["ch1"] = cs.ch1_on;
+                    entry["ch2"] = cs.ch2_on;
+                    entry["ch3"] = cs.ch3_on;
+                } else {
+                    entry["ch1"] = false;
+                    entry["ch2"] = false;
+                    entry["ch3"] = false;
+                }
+                Serial.printf("[MAINTENANCE] Saved LIGHT state for %s: ch1=%d ch2=%d ch3=%d\n",
+                              macStr.c_str(),
+                              entry["ch1"].as<bool>(), entry["ch2"].as<bool>(), entry["ch3"].as<bool>());
+            } else if (devType == "WAVE_MAKER") {
+                if (g_waveMakerStates.find(macKey) != g_waveMakerStates.end()) {
+                    entry["running"] = g_waveMakerStates[macKey].running;
+                    entry["dutyPercent"] = g_waveMakerStates[macKey].dutyPercent;
+                } else {
+                    entry["running"] = false;
+                    entry["dutyPercent"] = 0.0f;
+                }
+                Serial.printf("[MAINTENANCE] Saved WAVEMAKER state for %s: running=%d duty=%.1f%%\n",
+                              macStr.c_str(),
+                              entry["running"].as<bool>(), entry["dutyPercent"].as<float>());
+            } else {
+                // CO2, HEATER, etc. - record the entry for completeness
+                Serial.printf("[MAINTENANCE] Saved %s entry for %s\n", devType.c_str(), macStr.c_str());
+            }
+        }
+
+        // Write to file (create if it doesn't exist)
+        File wf = FS_USER.open(MAINTENANCE_STATES_FILE, "w");
+        if (wf) {
+            serializeJson(statesDoc, wf);
+            wf.close();
+            Serial.printf("[MAINTENANCE] Saved device states for tank %d to %s\n", tankId, MAINTENANCE_STATES_FILE);
+        } else {
+            Serial.printf("[MAINTENANCE] ERROR: Could not write %s\n", MAINTENANCE_STATES_FILE);
+        }
+    };
+
+    // Restore device states after exiting maintenance mode, then remove entries
+    auto restoreMaintenanceStates = [](uint8_t tankId) {
+        File f = FS_USER.open(MAINTENANCE_STATES_FILE, "r");
+        if (!f) {
+            Serial.printf("[MAINTENANCE] No saved states file found (%s), nothing to restore\n", MAINTENANCE_STATES_FILE);
+            return;
+        }
+
+        JsonDocument statesDoc;
+        DeserializationError err = deserializeJson(statesDoc, f);
+        f.close();
+        if (err) {
+            Serial.printf("[MAINTENANCE] Failed to parse %s: %s\n", MAINTENANCE_STATES_FILE, err.c_str());
+            return;
+        }
+
+        if (!statesDoc["states"].is<JsonArray>()) {
+            Serial.println("[MAINTENANCE] No states array in file");
+            return;
+        }
+
+        JsonArray states = statesDoc["states"].as<JsonArray>();
+        int restoredCount = 0;
+
+        for (JsonObject entry : states) {
+            if (entry["aquariumId"].as<uint8_t>() != tankId) continue;
+
+            String macStr = entry["mac"].as<String>();
+            String devType = entry["type"].as<String>();
+
+            uint8_t mac[6];
+            if (!parseMacAddress(macStr.c_str(), mac)) continue;
+
+            bool isOnline = ESPNowManager::getInstance().isPeerOnline(mac);
+            if (!isOnline) {
+                Serial.printf("[MAINTENANCE] Restore: %s %s is OFFLINE, skipped\n", devType.c_str(), macStr.c_str());
+                continue;
+            }
+
+            if (devType == "LIGHT") {
+                bool ch1 = entry["ch1"] | false;
+                bool ch2 = entry["ch2"] | false;
+                bool ch3 = entry["ch3"] | false;
+
+                // Send per-channel commands: CH1=10/11, CH2=20/21, CH3=30/31
+                sendLightCommand(mac, ch1 ? 11 : 10);
+                sendLightCommand(mac, ch2 ? 21 : 20);
+                sendLightCommand(mac, ch3 ? 31 : 30);
+
+                // Restore in-memory channel state tracker
+                String macKey = macStr;
+                macKey.toUpperCase();
+                g_channelStates[macKey] = {ch1, ch2, ch3, -1};
+
+                Serial.printf("[MAINTENANCE] Restored LIGHT %s: ch1=%d ch2=%d ch3=%d\n",
+                              macStr.c_str(), ch1, ch2, ch3);
+                restoredCount++;
+
+            } else if (devType == "WAVE_MAKER") {
+                bool running = entry["running"] | false;
+                float duty = entry["dutyPercent"] | 0.0f;
+
+                if (running && duty > 0) {
+                    sendWaveMakerCommand(mac, duty);
+                    Serial.printf("[MAINTENANCE] Restored WAVEMAKER %s: duty=%.1f%%\n", macStr.c_str(), duty);
+                } else {
+                    sendWaveMakerStop(mac);
+                    Serial.printf("[MAINTENANCE] Restored WAVEMAKER %s: STOPPED\n", macStr.c_str());
+                }
+
+                // Restore in-memory state tracker
+                String macKey = macStr;
+                macKey.toUpperCase();
+                g_waveMakerStates[macKey] = {running, duty};
+                restoredCount++;
+
+            } else if (devType == "CO2" || devType == "HEATER") {
+                // CO2 and heater will resume via the scheduler on the next scheduled event.
+                // We don't send restore commands here to avoid conflicting with schedule logic.
+                Serial.printf("[MAINTENANCE] %s %s will resume via scheduler\n", devType.c_str(), macStr.c_str());
+            }
+        }
+
+        // Remove entries for this tank from the file
+        for (int i = states.size() - 1; i >= 0; i--) {
+            if (states[i]["aquariumId"].as<uint8_t>() == tankId) {
+                states.remove(i);
+            }
+        }
+
+        // Write updated file back (keeps entries from other tanks, creates file if needed)
+        File wf = FS_USER.open(MAINTENANCE_STATES_FILE, "w");
+        if (wf) {
+            serializeJson(statesDoc, wf);
+            wf.close();
+            Serial.printf("[MAINTENANCE] Removed saved states for tank %d (%d devices restored)\n", tankId, restoredCount);
+        } else {
+            Serial.printf("[MAINTENANCE] ERROR: Could not write %s\n", MAINTENANCE_STATES_FILE);
+        }
+    };
+
     // POST toggle maintenance mode for an aquarium
-    server.on("/api/aquarium/maintenance", HTTP_POST, [](AsyncWebServerRequest *request){},
+    server.on("/api/aquarium/maintenance", HTTP_POST, [saveMaintenanceStates, restoreMaintenanceStates](AsyncWebServerRequest *request){},
         NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        [saveMaintenanceStates, restoreMaintenanceStates](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
         if (index + len != total) return;  // Wait for full body
         
         JsonDocument doc;
@@ -3597,7 +3869,6 @@ void setupWebServer() {
         // Save to file
         saveAquariumsToFile();
         
-        // Send ESP-NOW commands to devices for this tank
         // Load devices.json to find devices belonging to this aquarium
         File devFile = FS_USER.open("/config/devices.json", "r");
         if (devFile) {
@@ -3607,20 +3878,25 @@ void setupWebServer() {
             
             if (!devErr) {
                 JsonArray devices = devDoc["devices"].as<JsonArray>();
-                for (JsonObject dev : devices) {
-                    if (dev["tankId"].as<uint8_t>() != tankId) continue;
-                    
-                    String macStr = dev["mac"].as<String>();
-                    String devType = dev["type"].as<String>();
-                    devType.toUpperCase();
-                    
-                    uint8_t mac[6];
-                    if (!parseMacAddress(macStr.c_str(), mac)) continue;
-                    
-                    bool isOnline = ESPNowManager::getInstance().isPeerOnline(mac);
-                    
-                    if (enabled) {
-                        // MAINTENANCE ON: lights ON (all channels), stop everything else
+
+                if (enabled) {
+                    // ── MAINTENANCE ON ──────────────────────────────────
+                    // 1) Save current device states BEFORE overriding
+                    saveMaintenanceStates(tankId, devices);
+
+                    // 2) Override: lights ON (all channels), stop everything else
+                    for (JsonObject dev : devices) {
+                        if (dev["tankId"].as<uint8_t>() != tankId) continue;
+
+                        String macStr = dev["mac"].as<String>();
+                        String devType = dev["type"].as<String>();
+                        devType.toUpperCase();
+
+                        uint8_t mac[6];
+                        if (!parseMacAddress(macStr.c_str(), mac)) continue;
+
+                        bool isOnline = ESPNowManager::getInstance().isPeerOnline(mac);
+
                         if (devType == "LIGHT") {
                             if (isOnline) {
                                 sendLightCommand(mac, 1);  // Command 1 = All channels ON
@@ -3635,7 +3911,6 @@ void setupWebServer() {
                             }
                         } else if (devType == "CO2") {
                             if (isOnline) {
-                                // Send command 0x00 = STOP/OFF for CO2
                                 CommandMessage cmd;
                                 memset(&cmd, 0, sizeof(cmd));
                                 cmd.header.type = MessageType::COMMAND;
@@ -3651,7 +3926,6 @@ void setupWebServer() {
                             }
                         } else if (devType == "HEATER") {
                             if (isOnline) {
-                                // Send heater OFF command
                                 CommandMessage cmd;
                                 memset(&cmd, 0, sizeof(cmd));
                                 cmd.header.type = MessageType::COMMAND;
@@ -3663,22 +3937,16 @@ void setupWebServer() {
                                 cmd.finalCommand = true;
                                 cmd.commandData[0] = 0x02;  // CMD_SET_MODE = manual
                                 cmd.commandData[1] = 0;     // mode = manual
-                                // Leave heater off (no target temp set)
                                 ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
                                 Serial.printf("[MAINTENANCE] Tank %d: Heater OFF for %s\n", tankId, macStr.c_str());
                             }
                         }
-                        // FISH_FEEDER / SENSOR / REPEATER: no action needed (feeders won't trigger, sensors passive)
-                    } else {
-                        // MAINTENANCE OFF: turn lights OFF so scheduler can take over
-                        if (devType == "LIGHT") {
-                            if (isOnline) {
-                                sendLightCommand(mac, 0);  // Command 0 = All channels OFF
-                                Serial.printf("[MAINTENANCE] Tank %d: Lights OFF (scheduler resumes) for %s\n", tankId, macStr.c_str());
-                            }
-                        }
-                        // Other devices will resume via scheduler automatically
+                        // FISH_FEEDER / SENSOR / REPEATER: no action needed
                     }
+                } else {
+                    // ── MAINTENANCE OFF ─────────────────────────────────
+                    // Restore saved device states from maintenance-states.json
+                    restoreMaintenanceStates(tankId);
                 }
             }
         }
@@ -3689,7 +3957,7 @@ void setupWebServer() {
         respDoc["success"] = true;
         respDoc["maintenanceMode"] = enabled;
         respDoc["message"] = enabled ? "Maintenance mode enabled - lights ON, other devices stopped" 
-                                     : "Maintenance mode disabled - scheduler resumed";
+                                     : "Maintenance mode disabled - devices restored to previous state";
         String response;
         serializeJson(respDoc, response);
         request->send(200, "application/json", response);
@@ -4525,6 +4793,11 @@ void setupWebServer() {
         if (command.equalsIgnoreCase("STOP")) {
             sendWaveMakerStop(mac);
 
+            // Track state
+            String wmKey = macStr;
+            wmKey.toUpperCase();
+            g_waveMakerStates[wmKey] = {false, 0.0f};
+
             DynamicJsonDocument resp(256);
             resp["success"] = true;
             resp["command"] = "STOP";
@@ -4546,6 +4819,11 @@ void setupWebServer() {
             if (dutyPercent > maxDuty) dutyPercent = maxDuty;
 
             sendWaveMakerCommand(mac, dutyPercent);
+
+            // Track state
+            String wmKey = macStr;
+            wmKey.toUpperCase();
+            g_waveMakerStates[wmKey] = {true, dutyPercent};
 
             DynamicJsonDocument resp(256);
             resp["success"] = true;
@@ -7161,41 +7439,8 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     Serial.printf("   - Access: http://%s.local\n", config.mdnsHostname.c_str());
     Serial.printf("   - Or: http://%s\n", WiFi.localIP().toString().c_str());
 
-    // --- ntfy.sh notification ---
-    // Load topic from config file
-    String ntfyTopic = "";
-    File configFile = FS_USER.open("/config/hub_config.txt", "r");
-    if (configFile) {
-        while (configFile.available()) {
-            String line = configFile.readStringUntil('\n');
-            line.trim();
-            if (line.startsWith("NTFY_TOPIC=")) {
-                ntfyTopic = line.substring(String("NTFY_TOPIC=").length());
-                ntfyTopic.trim();
-                break;
-            }
-        }
-        configFile.close();
-    }
-    if (ntfyTopic.length() > 0) {
-        char msg[128];
-        snprintf(msg, sizeof(msg), NTFY_MSG_WEBSERVER_UP, WiFi.localIP().toString().c_str());
-        String url = "https://ntfy.sh/" + ntfyTopic;
-        HTTPClient http;
-        WiFiClientSecure client;
-        client.setInsecure();
-        http.begin(client, url);
-        http.addHeader("Title", "AMS Hub WebUI");
-        int httpCode = http.POST(msg);
-        if (httpCode > 0) {
-            Serial.printf("[ntfy] Notification sent: %s\n", msg);
-        } else {
-            Serial.printf("[ntfy] Notification failed: %d\n", httpCode);
-        }
-        http.end();
-    } else {
-        Serial.println("[ntfy] NTFY_TOPIC not set in config, notification not sent.");
-    }
+    // NOTE: system.boot notification is emitted from webUiTask() AFTER
+    // setupNotifications() registers channels and routes.
 }
 
 // ============================================================================

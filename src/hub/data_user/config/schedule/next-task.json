@@ -1,1 +1,1 @@
-{"tasks":[],"updatedAt":0}
+{"tasks": [{"mac": "DC:4F:22:65:9A:19", "scheduleId": "test", "taskType": 0, "channel": 1, "actionOn": true, "scheduledTime": 1771844598, "period": "daily"}], "updatedAt": 1771844478}

@@ -659,6 +659,24 @@ img {
 #upcoming-tasks-container::-webkit-scrollbar-thumb:hover {
     background: var(--text-secondary);
 }
+
+/* Activity log scrollbar */
+#activity-log-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+#activity-log-container::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+}
+
+#activity-log-container::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+#activity-log-container::-webkit-scrollbar-thumb:hover {
+    background: var(--text-secondary);
+}
     flex-shrink: 0;
 }
 

@@ -6,7 +6,6 @@ let currentTankId = 1;
 let nodes = {};
 let reconnectInterval = null;
 let uptimeInterval = null;
-let startTime = Date.now();
 
 // Add activity log entry (Console only now)
 function addActivityLog(message, type = 'info') {
@@ -17,12 +16,8 @@ function addActivityLog(message, type = 'info') {
 document.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
     setupEventListeners();
-    updateUptime();
     loadDashboardData();  // Load data from backend
     addActivityLog('System initialized', 'success');
-    
-    // Update uptime every second
-    uptimeInterval = setInterval(updateUptime, 1000);
     
     // Update stats every 5 seconds — only on the dashboard page
     const pathname = window.location.pathname || '/';
@@ -30,7 +25,9 @@ document.addEventListener('DOMContentLoaded', () => {
         setInterval(() => {
             updateSystemStats();
             loadDashboardData();  // Refresh dashboard data
+            fetchActivityLog();   // Refresh activity log
         }, 5000);
+        fetchActivityLog();  // Initial load
     }
 });
 
@@ -251,18 +248,7 @@ function setupEventListeners() {
     // Most functionality is now handled via specific page controls
 }
 
-// Update uptime display
-function updateUptime() {
-    const uptimeEl = document.getElementById('uptime');
-    if (uptimeEl) {
-        const elapsed = Date.now() - startTime;
-        const hours = Math.floor(elapsed / 3600000);
-        const minutes = Math.floor((elapsed % 3600000) / 60000);
-        const seconds = Math.floor((elapsed % 60000) / 1000);
-        uptimeEl.textContent = `${padZero(hours)}:${padZero(minutes)}:${padZero(seconds)}`;
-    }
-}
-
+// padZero kept for any remaining callers
 function padZero(num) {
     return num.toString().padStart(2, '0');
 }
@@ -378,15 +364,17 @@ async function fetchUpcomingTasks() {
         const currentTime = now.getHours() * 60 + now.getMinutes();
 
         const tasksHtml = data.tasks.map(task => {
-            const [hours, minutes] = (task.time || '00:00').split(':').map(Number);
+            const timeStr = task.scheduledTime ? formatTimeFromEpoch(task.scheduledTime) : '--:--';
+            const [hours, minutes] = timeStr.split(':').map(Number);
             const taskMinutes = hours * 60 + minutes;
             const isPending = taskMinutes >= currentTime;
+            const desc = task.taskDesc || task.name || 'Unnamed Task';
             
             return `
                 <div class="task-item">
-                    <div class="task-time">${task.time || '--:--'}</div>
+                    <div class="task-time">${timeStr}</div>
                     <div class="task-info">
-                        <div class="task-name">${task.name || 'Unnamed Task'}</div>
+                        <div class="task-name">${desc}</div>
                         <div class="task-tank">${task.tankName || ('Tank ' + task.tankId)}</div>
                     </div>
                     <div class="task-status">
@@ -400,7 +388,8 @@ async function fetchUpcomingTasks() {
 
         container.innerHTML = tasksHtml;
         const pendingCount = data.tasks.filter(t => {
-            const [h, m] = (t.time || '00:00').split(':').map(Number);
+            const timeStr = t.scheduledTime ? formatTimeFromEpoch(t.scheduledTime) : '00:00';
+            const [h, m] = timeStr.split(':').map(Number);
             return (h * 60 + m) >= currentTime;
         }).length;
         
@@ -408,5 +397,85 @@ async function fetchUpcomingTasks() {
         
     } catch (error) {
         console.error('Error fetching tasks:', error);
+    }
+}
+
+// ============================================================================
+// ACTIVITY LOG
+// ============================================================================
+
+const ACTIVITY_ICONS = {
+    light:     '💡',
+    feeder:    '🐟',
+    wavemaker: '🌊',
+    device:    '📦',
+};
+
+function formatActivityTime(ts) {
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    return `${diffDay}d ago`;
+}
+
+// Convert unix epoch seconds to HH:MM local time string
+function formatTimeFromEpoch(sec) {
+    const d = new Date(sec * 1000);
+    const h = d.getHours().toString().padStart(2, '0');
+    const m = d.getMinutes().toString().padStart(2, '0');
+    return `${h}:${m}`;
+}
+
+async function fetchActivityLog() {
+    const container = document.getElementById('activity-list');
+    const badge = document.getElementById('activity-count');
+    if (!container || !badge) return;
+
+    try {
+        const resp = await fetch('/api/activity-log?limit=30');
+        if (!resp.ok) throw new Error('Activity log not found');
+        const data = await resp.json();
+
+        const entries = data.entries || [];
+        if (entries.length === 0) {
+            container.innerHTML = `
+                <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">📋</div>
+                    <p>No recent activity.</p>
+                </div>`;
+            badge.textContent = '0 events';
+            return;
+        }
+
+        // Show newest first
+        const reversed = [...entries].reverse();
+        badge.textContent = `${entries.length} events`;
+
+        container.innerHTML = reversed.map(e => {
+            const icon = ACTIVITY_ICONS[e.cat] || '📋';
+            const srcBadge = e.src === 'scheduled'
+                ? '<span class="badge badge-info" style="font-size:0.65rem;padding:2px 6px;">scheduled</span>'
+                : '<span class="badge badge-warning" style="font-size:0.65rem;padding:2px 6px;">ad-hoc</span>';
+            return `
+                <div class="task-item">
+                    <div class="task-time" style="font-size:1.1rem;min-width:32px;background:none;">${icon}</div>
+                    <div class="task-info" style="flex:1;">
+                        <div class="task-name">${e.action}</div>
+                        <div class="task-tank">${e.device} · ${e.aquarium}</div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:2px;">${formatActivityTime(e.ts)}</div>
+                        ${srcBadge}
+                    </div>
+                </div>`;
+        }).join('');
+    } catch (err) {
+        console.error('Error fetching activity log:', err);
     }
 }

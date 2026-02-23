@@ -50,6 +50,7 @@ public:
     String getStatusString() const;
     bool isOnline() const { return _status == Status::ONLINE; }
     bool isEnabled() const { return _enabled; }
+    bool isOfflineNotifSent() const { return _offlineNotifSent; }
     
     // Timing info
     uint32_t getLastHeartbeat() const { return _lastHeartbeat; }
@@ -70,6 +71,7 @@ public:
     void setFirmwareVersion(uint8_t version) { _firmwareVersion = version; }
     void setEnabled(bool enabled) { _enabled = enabled; }
     void setStatus(Status status) { _status = status; }
+    void setOfflineNotifSent(bool sent) { _offlineNotifSent = sent; }
     
     // ===== Heartbeat Management =====
     /**
@@ -169,6 +171,9 @@ protected:
     uint8_t _tankId;                // Associated tank ID
     uint8_t _firmwareVersion;       // Firmware version
     bool _enabled;                  // Is device enabled?
+    
+    // Offline notification tracking
+    bool _offlineNotifSent;          // Has offline notification been sent?
     
     // Connection status
     Status _status;                 // Current status

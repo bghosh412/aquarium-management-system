@@ -186,13 +186,14 @@ struct NodeOtaState {
     uint8_t currentTarget;      // Current device index being updated
     uint8_t devicesUpdated;     // Number of devices successfully updated
     uint8_t devicesFailed;      // Number of devices that failed
+    String deviceType;          // Device type name for notifications (e.g., "light")
 } nodeOtaState = {0};
 
 // NTP time tracking
 static bool ntpSynced = false;
 
 // ============================================================================
-// HUB STATUS LED CONFIGURATION
+// HUB STATUS LED CONFIGURATION (PWM-controlled brightness)
 // ============================================================================
 // Four status LEDs indicate different system conditions:
 // LED_WIFI: WiFi connectivity status
@@ -201,6 +202,7 @@ static bool ntpSynced = false;
 // LED_UNMAPPED: Unmapped device availability
 //
 // Safe GPIO pins for ESP32-S3 (avoid strapping pins: GPIO0, 3, 45, 46)
+// Brightness is controlled via PWM (LEDC) and persisted in JSON config.
 // ============================================================================
 
 #define HUB_LED_WIFI       11  // GPIO11 - WiFi status
@@ -208,8 +210,23 @@ static bool ntpSynced = false;
 #define HUB_LED_TASK       13  // GPIO13 - Scheduled task indicator
 #define HUB_LED_UNMAPPED   14  // GPIO14 - Unmapped device indicator
 
+// LEDC PWM channels for each LED
+#define HUB_LED_WIFI_CH      0
+#define HUB_LED_DEVICE_CH    1
+#define HUB_LED_TASK_CH      2
+#define HUB_LED_UNMAPPED_CH  3
+
+#define HUB_LED_PWM_FREQ     5000  // 5 kHz PWM frequency
+#define HUB_LED_PWM_RES      8     // 8-bit resolution (0-255)
+
 #define HUB_LED_BLINK_INTERVAL_MS  300    // Blink rate (300ms on/off)
 #define HUB_LED_TASK_DURATION_MS   30000  // Task indicator blinks for 30 seconds
+
+#define HUB_LED_BRIGHTNESS_FILE "/config/led-brightness.json"
+#define HUB_LED_DEFAULT_BRIGHTNESS 20  // Default brightness: 20%
+
+// Forward declaration
+void saveLedBrightnessConfig();
 
 // Hub LED state tracking
 static bool hubLedWiFiState = false;
@@ -220,20 +237,110 @@ static uint32_t hubLedLastToggle[4] = {0, 0, 0, 0};  // Per-LED toggle timers
 static uint32_t hubLedTaskTriggerTime = 0;  // When task LED was triggered
 static bool hubLedTaskActive = false;  // Task LED blinking active
 
-// Initialize hub status LEDs
+// Brightness percentages (0-100) for each LED
+static uint8_t hubLedBrightness[4] = {
+    HUB_LED_DEFAULT_BRIGHTNESS,
+    HUB_LED_DEFAULT_BRIGHTNESS,
+    HUB_LED_DEFAULT_BRIGHTNESS,
+    HUB_LED_DEFAULT_BRIGHTNESS
+};
+
+// Convert brightness percentage (0-100) to PWM duty (0-255)
+static uint8_t brightnessToduty(uint8_t pct) {
+    if (pct == 0) return 0;
+    if (pct >= 100) return 255;
+    return (uint8_t)((uint16_t)pct * 255 / 100);
+}
+
+// Write PWM value to an LED (ON at configured brightness, or OFF)
+static void hubLedWrite(uint8_t channel, bool on) {
+    if (on) {
+        ledcWrite(channel, brightnessToduty(hubLedBrightness[channel]));
+    } else {
+        ledcWrite(channel, 0);
+    }
+}
+
+// Re-apply brightness to all LEDs that are currently ON
+// Call this after brightness values are changed at runtime.
+static void reapplyLedBrightness() {
+    hubLedWrite(HUB_LED_WIFI_CH,     hubLedWiFiState);
+    hubLedWrite(HUB_LED_DEVICE_CH,   hubLedDeviceState);
+    hubLedWrite(HUB_LED_TASK_CH,     hubLedTaskState);
+    hubLedWrite(HUB_LED_UNMAPPED_CH, hubLedUnmappedState);
+}
+
+// Load LED brightness config from JSON file (creates default if missing)
+void loadLedBrightnessConfig() {
+    if (FS_USER.exists(HUB_LED_BRIGHTNESS_FILE)) {
+        File f = FS_USER.open(HUB_LED_BRIGHTNESS_FILE, "r");
+        if (f) {
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, f);
+            f.close();
+            if (!err) {
+                hubLedBrightness[0] = doc["wifi"] | HUB_LED_DEFAULT_BRIGHTNESS;
+                hubLedBrightness[1] = doc["device"] | HUB_LED_DEFAULT_BRIGHTNESS;
+                hubLedBrightness[2] = doc["task"] | HUB_LED_DEFAULT_BRIGHTNESS;
+                hubLedBrightness[3] = doc["unmapped"] | HUB_LED_DEFAULT_BRIGHTNESS;
+                // Clamp values to 0-100
+                for (int i = 0; i < 4; i++) {
+                    if (hubLedBrightness[i] > 100) hubLedBrightness[i] = 100;
+                }
+                LOG_INFO("LED brightness loaded: wifi=%d%% device=%d%% task=%d%% unmapped=%d%%",
+                         hubLedBrightness[0], hubLedBrightness[1],
+                         hubLedBrightness[2], hubLedBrightness[3]);
+                return;
+            }
+        }
+    }
+    // File doesn't exist or failed to parse — create with defaults
+    LOG_INFO("LED brightness config not found, creating defaults (%d%%)", HUB_LED_DEFAULT_BRIGHTNESS);
+    saveLedBrightnessConfig();
+}
+
+// Save LED brightness config to JSON file
+void saveLedBrightnessConfig() {
+    JsonDocument doc;
+    doc["wifi"]     = hubLedBrightness[0];
+    doc["device"]   = hubLedBrightness[1];
+    doc["task"]     = hubLedBrightness[2];
+    doc["unmapped"] = hubLedBrightness[3];
+
+    File f = FS_USER.open(HUB_LED_BRIGHTNESS_FILE, "w");
+    if (f) {
+        serializeJson(doc, f);
+        f.close();
+        LOG_INFO("LED brightness config saved");
+    } else {
+        LOG_ERROR("Failed to save LED brightness config");
+    }
+}
+
+// Initialize hub status LEDs with PWM
 void setupHubStatusLEDs() {
-    pinMode(HUB_LED_WIFI, OUTPUT);
-    pinMode(HUB_LED_DEVICE, OUTPUT);
-    pinMode(HUB_LED_TASK, OUTPUT);
-    pinMode(HUB_LED_UNMAPPED, OUTPUT);
-    
+    // Setup LEDC PWM channels
+    ledcSetup(HUB_LED_WIFI_CH,     HUB_LED_PWM_FREQ, HUB_LED_PWM_RES);
+    ledcSetup(HUB_LED_DEVICE_CH,   HUB_LED_PWM_FREQ, HUB_LED_PWM_RES);
+    ledcSetup(HUB_LED_TASK_CH,     HUB_LED_PWM_FREQ, HUB_LED_PWM_RES);
+    ledcSetup(HUB_LED_UNMAPPED_CH, HUB_LED_PWM_FREQ, HUB_LED_PWM_RES);
+
+    // Attach GPIO pins to LEDC channels
+    ledcAttachPin(HUB_LED_WIFI,     HUB_LED_WIFI_CH);
+    ledcAttachPin(HUB_LED_DEVICE,   HUB_LED_DEVICE_CH);
+    ledcAttachPin(HUB_LED_TASK,     HUB_LED_TASK_CH);
+    ledcAttachPin(HUB_LED_UNMAPPED, HUB_LED_UNMAPPED_CH);
+
+    // Load brightness from config (creates default file if missing)
+    loadLedBrightnessConfig();
+
     // Start all OFF
-    digitalWrite(HUB_LED_WIFI, LOW);
-    digitalWrite(HUB_LED_DEVICE, LOW);
-    digitalWrite(HUB_LED_TASK, LOW);
-    digitalWrite(HUB_LED_UNMAPPED, LOW);
+    ledcWrite(HUB_LED_WIFI_CH, 0);
+    ledcWrite(HUB_LED_DEVICE_CH, 0);
+    ledcWrite(HUB_LED_TASK_CH, 0);
+    ledcWrite(HUB_LED_UNMAPPED_CH, 0);
     
-    LOG_INFO("Hub Status LEDs initialized (GPIO %d, %d, %d, %d)", 
+    LOG_INFO("Hub Status LEDs initialized with PWM (GPIO %d, %d, %d, %d)", 
              HUB_LED_WIFI, HUB_LED_DEVICE, HUB_LED_TASK, HUB_LED_UNMAPPED);
 }
 
@@ -249,25 +356,25 @@ void updateHubStatusLEDs() {
     uint32_t now = millis();
     
     // === LED 1: WiFi Status ===
-    // Blink if not connected, solid HIGH if connected
+    // Blink if not connected, solid ON if connected
     bool wifiConnected = (WiFi.status() == WL_CONNECTED);
     if (wifiConnected) {
         // Solid ON when connected
         if (!hubLedWiFiState) {
             hubLedWiFiState = true;
-            digitalWrite(HUB_LED_WIFI, HIGH);
+            hubLedWrite(HUB_LED_WIFI_CH, true);
         }
     } else {
         // Blink when not connected
         if (now - hubLedLastToggle[0] >= HUB_LED_BLINK_INTERVAL_MS) {
             hubLedLastToggle[0] = now;
             hubLedWiFiState = !hubLedWiFiState;
-            digitalWrite(HUB_LED_WIFI, hubLedWiFiState ? HIGH : LOW);
+            hubLedWrite(HUB_LED_WIFI_CH, hubLedWiFiState);
         }
     }
     
     // === LED 2: Device Offline Status ===
-    // Blink if any device offline, solid HIGH if all devices online
+    // Blink if any device offline, solid ON if all devices online
     auto& espnow = ESPNowManager::getInstance();
     std::vector<PeerStatus> peers = espnow.getPeers();
     size_t peerCount = peers.size();
@@ -285,20 +392,20 @@ void updateHubStatusLEDs() {
         // Solid ON when all devices online
         if (!hubLedDeviceState) {
             hubLedDeviceState = true;
-            digitalWrite(HUB_LED_DEVICE, HIGH);
+            hubLedWrite(HUB_LED_DEVICE_CH, true);
         }
     } else if (peerCount == 0) {
         // OFF when no devices registered at all
         if (hubLedDeviceState) {
             hubLedDeviceState = false;
-            digitalWrite(HUB_LED_DEVICE, LOW);
+            hubLedWrite(HUB_LED_DEVICE_CH, false);
         }
     } else {
         // Blink when some devices offline
         if (now - hubLedLastToggle[1] >= HUB_LED_BLINK_INTERVAL_MS) {
             hubLedLastToggle[1] = now;
             hubLedDeviceState = !hubLedDeviceState;
-            digitalWrite(HUB_LED_DEVICE, hubLedDeviceState ? HIGH : LOW);
+            hubLedWrite(HUB_LED_DEVICE_CH, hubLedDeviceState);
         }
     }
     
@@ -309,20 +416,20 @@ void updateHubStatusLEDs() {
             // Task indication period over
             hubLedTaskActive = false;
             hubLedTaskState = false;
-            digitalWrite(HUB_LED_TASK, LOW);
+            hubLedWrite(HUB_LED_TASK_CH, false);
         } else {
             // Blink during task indication period
             if (now - hubLedLastToggle[2] >= HUB_LED_BLINK_INTERVAL_MS) {
                 hubLedLastToggle[2] = now;
                 hubLedTaskState = !hubLedTaskState;
-                digitalWrite(HUB_LED_TASK, hubLedTaskState ? HIGH : LOW);
+                hubLedWrite(HUB_LED_TASK_CH, hubLedTaskState);
             }
         }
     } else {
         // OFF when no recent task
         if (hubLedTaskState) {
             hubLedTaskState = false;
-            digitalWrite(HUB_LED_TASK, LOW);
+            hubLedWrite(HUB_LED_TASK_CH, false);
         }
     }
     
@@ -348,13 +455,13 @@ void updateHubStatusLEDs() {
         if (now - hubLedLastToggle[3] >= HUB_LED_BLINK_INTERVAL_MS) {
             hubLedLastToggle[3] = now;
             hubLedUnmappedState = !hubLedUnmappedState;
-            digitalWrite(HUB_LED_UNMAPPED, hubLedUnmappedState ? HIGH : LOW);
+            hubLedWrite(HUB_LED_UNMAPPED_CH, hubLedUnmappedState);
         }
     } else {
         // OFF when no unmapped devices
         if (hubLedUnmappedState) {
             hubLedUnmappedState = false;
-            digitalWrite(HUB_LED_UNMAPPED, LOW);
+            hubLedWrite(HUB_LED_UNMAPPED_CH, false);
         }
     }
 }
@@ -560,8 +667,8 @@ bool fetchRemoteVersion(const String& baseUrl, String& versionOut) {
  */
 bool updateHubConfigValue(const String& key, const String& newValue) {
 #ifdef DUAL_LITTLEFS
-    // hub_config.txt is on static filesystem at root
-    const char* configPath = "/hub_config.txt";
+    // hub_config.txt is on static filesystem inside /config/
+    const char* configPath = "/config/hub_config.txt";
     fs::LittleFSFS& fs = StaticFS;
 #else
     const char* configPath = "/config/hub_config.txt";
@@ -925,11 +1032,11 @@ void loadConfiguration() {
     // NOTE: In dual filesystem mode, hub_config.txt is in static_fs at /hub_config.txt
     // ConfigManager uses LittleFS internally, so we need the file accessible via mounted path
 #ifdef DUAL_LITTLEFS
-    // StaticFS is mounted at /static, so hub_config.txt is at /static/hub_config.txt
-    // But ConfigManager uses default LittleFS, so we manually load for dual mode
-    File cfgFile = StaticFS.open("/hub_config.txt", "r");
+    // In dual filesystem mode, hub_config.txt lives inside /config/ on static_fs
+    // ConfigManager uses default LittleFS, so we manually load for dual mode
+    File cfgFile = StaticFS.open("/config/hub_config.txt", "r");
     if (!cfgFile) {
-        LOG_WARN("Config file /hub_config.txt not found on static_fs, using defaults");
+        LOG_WARN("Config file /config/hub_config.txt not found on static_fs, using defaults");
         return;
     }
     // Read and parse manually for dual filesystem mode
@@ -2007,6 +2114,116 @@ static bool isDeviceInMaintenanceMode(const String& macStr) {
     return false;
 }
 
+// Helper: Lookup device name and aquarium name from a MAC string (using devices.json + aquariums.json)
+static void lookupDeviceAndAquariumNames(const String& macStr, String& deviceName, String& aquariumName, String& deviceType) {
+    deviceName = macStr;   // Fallback
+    aquariumName = "Unknown";
+    deviceType = "Unknown";
+    
+    File devFile = FS_USER.open("/config/devices.json", "r");
+    if (!devFile) return;
+    
+    DynamicJsonDocument devDoc(8192);
+    if (deserializeJson(devDoc, devFile)) { devFile.close(); return; }
+    devFile.close();
+    
+    uint8_t tankId = 0;
+    JsonArray devices = devDoc["devices"].as<JsonArray>();
+    for (JsonObject d : devices) {
+        String dm = d["mac"].as<String>();
+        dm.toUpperCase();
+        String mu = macStr;
+        mu.toUpperCase();
+        if (dm == mu) {
+            deviceName = d["name"].as<String>();
+            deviceType = d["type"].as<String>();
+            tankId = d["tankId"] | 0;
+            break;
+        }
+    }
+    
+    if (tankId == 0) return;
+    
+    Aquarium* aq = AquariumManager::getInstance().getAquarium(tankId);
+    if (aq) {
+        aquariumName = aq->getName();
+    }
+}
+
+// ============================================================================
+// ACTIVITY LOG  — append-only ring stored in /config/activity-log.json
+// Keeps at most 7 days of entries.  Called from scheduled + ad-hoc paths.
+// ============================================================================
+#define ACTIVITY_LOG_PATH "/config/activity-log.json"
+#define ACTIVITY_LOG_MAX_AGE_S (7 * 24 * 3600)   // 7 days in seconds
+#define ACTIVITY_LOG_MAX_ENTRIES 200               // hard cap
+
+/**
+ * Append one activity entry and prune anything older than 7 days.
+ *
+ * @param source    "scheduled" or "adhoc"
+ * @param category  e.g. "light", "feeder", "wavemaker"
+ * @param action    human-readable action, e.g. "CH1 ON", "Feed (PWM 72)"
+ * @param device    device name or MAC
+ * @param aquarium  aquarium name (may be "Unknown")
+ */
+static void appendActivityLog(const char* source,
+                              const char* category,
+                              const char* action,
+                              const char* device,
+                              const char* aquarium)
+{
+    time_t now = getCurrentUnixTime();
+    if (now == 0) return;  // NTP not synced yet
+
+    // --- Read existing log -------------------------------------------------
+    JsonDocument doc;
+    File f = FS_USER.open(ACTIVITY_LOG_PATH, "r");
+    if (f) {
+        deserializeJson(doc, f);
+        f.close();
+    }
+    JsonArray entries = doc["entries"].is<JsonArray>()
+                            ? doc["entries"].as<JsonArray>()
+                            : doc["entries"].to<JsonArray>();
+
+    // --- Prune entries older than 7 days -----------------------------------
+    time_t cutoff = now - ACTIVITY_LOG_MAX_AGE_S;
+    size_t i = 0;
+    while (i < entries.size()) {
+        time_t ts = entries[i]["ts"] | 0;
+        if (ts < cutoff) {
+            entries.remove(i);
+        } else {
+            i++;
+        }
+    }
+
+    // --- Hard-cap to keep flash usage bounded ------------------------------
+    while (entries.size() >= ACTIVITY_LOG_MAX_ENTRIES) {
+        entries.remove(0);   // remove oldest
+    }
+
+    // --- Append new entry --------------------------------------------------
+    JsonObject entry = entries.add<JsonObject>();
+    entry["ts"]       = (long)now;
+    entry["src"]      = source;
+    entry["cat"]      = category;
+    entry["action"]   = action;
+    entry["device"]   = device;
+    entry["aquarium"] = aquarium;
+
+    // --- Write back --------------------------------------------------------
+    File out = FS_USER.open(ACTIVITY_LOG_PATH, "w");
+    if (out) {
+        serializeJson(doc, out);
+        out.close();
+    }
+
+    Serial.printf("[ACTIVITY] %s | %s | %s | %s | %s\n",
+                  source, category, action, device, aquarium);
+}
+
 // Execute a scheduled task
 static bool executeTask(const NextTask& task) {
     // Check maintenance mode before executing
@@ -2036,21 +2253,40 @@ static bool executeTask(const NextTask& task) {
         Serial.printf("[SCHEDULER] Executing FEEDER task: %s PWM=%u duration=%ums\n",
                       task.mac.c_str(), task.pwmValue, task.durationMs);
         sendFeederCommand(mac, task.pwmValue, task.durationMs);
+        
+        // Notify: scheduled task executed
+        String devName, aqName, devType;
+        lookupDeviceAndAquariumNames(task.mac, devName, aqName, devType);
+        notifier.emitf("scheduler.task", NTFY_MSG_TASK_EXECUTED,
+                        aqName.c_str(), devName.c_str(), devType.c_str(), "Feed");
+        char feedDesc[64];
+        snprintf(feedDesc, sizeof(feedDesc), "Feed (PWM %u, %ums)", task.pwmValue, task.durationMs);
+        appendActivityLog("scheduled", "feeder", feedDesc, devName.c_str(), aqName.c_str());
         return true;
     } else if (task.taskType == TaskType::WAVEMAKER) {
         // Execute wavemaker task
         String wmKey = task.mac;
         wmKey.toUpperCase();
+        String actionDesc;
         if (task.actionOn) {
             Serial.printf("[SCHEDULER] Executing WAVEMAKER task: %s duty=%.1f%%\n",
                           task.mac.c_str(), task.dutyPercent);
             sendWaveMakerCommand(mac, task.dutyPercent);
             g_waveMakerStates[wmKey] = {true, task.dutyPercent};
+            actionDesc = "Wavemaker ON (" + String(task.dutyPercent, 0) + "%)";
         } else {
             Serial.printf("[SCHEDULER] Executing WAVEMAKER STOP task: %s\n", task.mac.c_str());
             sendWaveMakerStop(mac);
             g_waveMakerStates[wmKey] = {false, 0.0f};
+            actionDesc = "Wavemaker OFF";
         }
+        
+        // Notify: scheduled task executed
+        String devName, aqName, devType;
+        lookupDeviceAndAquariumNames(task.mac, devName, aqName, devType);
+        notifier.emitf("scheduler.task", NTFY_MSG_TASK_EXECUTED,
+                        aqName.c_str(), devName.c_str(), devType.c_str(), actionDesc.c_str());
+        appendActivityLog("scheduled", "wavemaker", actionDesc.c_str(), devName.c_str(), aqName.c_str());
         return true;
     } else {
         // Execute light task (default)
@@ -2069,6 +2305,14 @@ static bool executeTask(const NextTask& task) {
         if (task.channel == 1) state.ch1_on = task.actionOn;
         else if (task.channel == 2) state.ch2_on = task.actionOn;
         else if (task.channel == 3) state.ch3_on = task.actionOn;
+        
+        // Notify: scheduled task executed
+        String devName, aqName, devType;
+        lookupDeviceAndAquariumNames(task.mac, devName, aqName, devType);
+        String lightAction = "CH" + String(task.channel) + (task.actionOn ? " ON" : " OFF");
+        notifier.emitf("scheduler.task", NTFY_MSG_TASK_EXECUTED,
+                        aqName.c_str(), devName.c_str(), devType.c_str(), lightAction.c_str());
+        appendActivityLog("scheduled", "light", lightAction.c_str(), devName.c_str(), aqName.c_str());
         
         return true;
     }
@@ -2458,6 +2702,8 @@ static bool sendOtaToDevice(uint8_t* targetMac, WiFiClient* client) {
 void nodeOtaTask(void* parameter) {
     Serial.printf("[NodeOTA] Task started on core %d, updating %d device(s)\n", 
                   xPortGetCoreID(), nodeOtaState.targetCount);
+    notifier.emitf("system.ota.node", NTFY_MSG_NODE_OTA_STARTED,
+                    nodeOtaState.deviceType.c_str(), nodeOtaState.targetCount);
     
     // Download files first (only once)
     std::unique_ptr<WiFiClient> client;
@@ -2575,6 +2821,8 @@ void nodeOtaTask(void* parameter) {
     }
     Serial.printf("[NodeOTA] Complete: %d updated, %d failed\n", 
                   nodeOtaState.devicesUpdated, nodeOtaState.devicesFailed);
+    notifier.emitf("system.ota.node", NTFY_MSG_NODE_OTA_COMPLETE,
+                    nodeOtaState.devicesUpdated, nodeOtaState.devicesFailed);
 
 cleanup:
     // Delete downloaded OTA files
@@ -2605,6 +2853,10 @@ void watchdogTask(void* parameter) {
     unsigned long lastMemoryCheck = 0;
     unsigned long lastHealthCheck = 0;
     unsigned long lastWaterCheck = 0;
+    unsigned long lastOfflineNotifCheck = 0;
+    
+    // 6-minute threshold for offline notification (user requirement)
+    static constexpr uint32_t OFFLINE_NOTIF_TIMEOUT_MS = 360000;  // 6 minutes
     
     while (true) {
         unsigned long now = millis();
@@ -2613,6 +2865,44 @@ void watchdogTask(void* parameter) {
         if (now - lastHealthCheck >= 5000) {
             lastHealthCheck = now;
             AquariumManager::getInstance().checkDeviceHealth();
+        }
+        
+        // Device offline notification check (every 30 seconds)
+        // Sends ntfy notification once per device when offline for 6 min
+        if (now - lastOfflineNotifCheck >= 30000) {
+            lastOfflineNotifCheck = now;
+            
+            auto allDevices = AquariumManager::getInstance().getAllDevices();
+            for (Device* dev : allDevices) {
+                if (!dev || !dev->isEnabled()) continue;
+                
+                bool timedOut = dev->hasHeartbeatTimedOut(OFFLINE_NOTIF_TIMEOUT_MS);
+                
+                if (timedOut && !dev->isOfflineNotifSent()) {
+                    // First time detecting this device offline for 6 min — send notification
+                    dev->setOfflineNotifSent(true);
+                    
+                    // Look up aquarium name
+                    String aqName = "Unknown";
+                    Aquarium* aq = AquariumManager::getInstance().getAquarium(dev->getTankId());
+                    if (aq) aqName = aq->getName();
+                    
+                    notifier.emitf("node.offline", NTFY_MSG_DEVICE_OFFLINE,
+                                    dev->getName().c_str(), aqName.c_str());
+                }
+                
+                if (!timedOut && dev->isOfflineNotifSent()) {
+                    // Device came back online — reset flag and notify
+                    dev->setOfflineNotifSent(false);
+                    
+                    String aqName = "Unknown";
+                    Aquarium* aq = AquariumManager::getInstance().getAquarium(dev->getTankId());
+                    if (aq) aqName = aq->getName();
+                    
+                    notifier.emitf("node.online", NTFY_MSG_DEVICE_BACK_ONLINE,
+                                    dev->getName().c_str(), aqName.c_str());
+                }
+            }
         }
         
         // Water parameter monitoring (every 10 seconds)
@@ -2677,10 +2967,10 @@ void setupNotifications() {
         // No config file — set up sensible defaults programmatically
         LOG_INFO("[NTF] No notifications.json found, using default routes");
         if (ntfyTopic.length() > 0) {
-            notifier.route("system.*",    "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Hub",       60000);
+            notifier.route("system.*",    "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Hub",           0);
             notifier.route("safety.*",    "ntfy", NTF_PRIORITY_URGENT,  "AMS - SAFETY ALERT",  0);
-            notifier.route("node.*",      "ntfy", NTF_PRIORITY_HIGH,    "AMS - Node Event",    60000);
-            notifier.route("config.*",    "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Config",    60000);
+            notifier.route("node.*",      "ntfy", NTF_PRIORITY_HIGH,    "AMS - Node Event", 10000);
+            notifier.route("config.*",    "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Config",        0);
             notifier.route("scheduler.*", "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Scheduler", 30000);
         }
         // Always log everything to Serial
@@ -3431,9 +3721,54 @@ void setupWebServer() {
         request->send(200, "application/json", response);
     });
 
-    // GET next tasks for dashboard
+    // GET next tasks for dashboard (augment with human-readable names)
     server.on("/api/next-tasks", HTTP_GET, [](AsyncWebServerRequest *request){
-        request->send(FS_USER, NEXT_TASK_FILE, "application/json");
+        File f = FS_USER.open(NEXT_TASK_FILE, "r");
+        if (!f) {
+            request->send(200, "application/json", "{\"tasks\":[]}");
+            return;
+        }
+        DynamicJsonDocument doc(16384);
+        DeserializationError err = deserializeJson(doc, f);
+        f.close();
+        if (err) {
+            request->send(200, "application/json", "{\"tasks\":[]}");
+            return;
+        }
+        JsonArray arr = doc["tasks"].as<JsonArray>();
+        for (JsonObject task : arr) {
+            String mac = task["mac"].as<String>();
+            if (mac.length() == 0) continue;
+            String devName, aqName, devType;
+            lookupDeviceAndAquariumNames(mac, devName, aqName, devType);
+            task["name"] = devName;
+            task["tankName"] = aqName;
+            // Compute human-readable description
+            String desc = "";
+            int type = task["taskType"] | -1;
+            if (type == (int)TaskType::LIGHT) {
+                int ch = task["channel"] | 0;
+                bool on = task["actionOn"] | false;
+                desc = "CH" + String(ch) + (on ? " ON" : " OFF");
+            } else if (type == (int)TaskType::FEEDER) {
+                desc = "Feed";
+                if (task.containsKey("pwmValue")) {
+                    desc += " PWM " + String(task["pwmValue"].as<int>());
+                }
+            } else if (type == (int)TaskType::WAVEMAKER) {
+                if (task.containsKey("dutyPercent")) {
+                    float dp = task["dutyPercent"].as<float>();
+                    desc = dp > 0.1 ? "Wavemaker " + String(dp,0) + "%" : "Wavemaker OFF";
+                } else {
+                    desc = "Wavemaker";
+                }
+            }
+            if (desc.length() == 0) desc = task["scheduleId"].as<String>();
+            task["taskDesc"] = desc;
+        }
+        String out;
+        serializeJson(doc, out);
+        request->send(200, "application/json", out);
     });
     
     // POST create new aquarium
@@ -3512,6 +3847,7 @@ void setupWebServer() {
         request->send(201, "application/json", response);
         
         Serial.printf(" Created aquarium: %s (ID: %d)\\n", name.c_str(), newId);
+        notifier.emitf("config.aquarium.add", NTFY_MSG_AQUARIUM_CREATED, name.c_str(), newId);
     });
     
     // GET single aquarium
@@ -3648,6 +3984,7 @@ void setupWebServer() {
         
         request->send(200, "text/plain", "Aquarium updated successfully");
         Serial.printf(" Updated aquarium: %s (ID: %d)\\n", aquarium->getName().c_str(), id);
+        notifier.emitf("config.aquarium.edit", NTFY_MSG_AQUARIUM_UPDATED, aquarium->getName().c_str(), id);
     });
     
     // ========================================================================
@@ -4101,6 +4438,7 @@ void setupWebServer() {
 
         request->send(200, "application/json", "{\"success\":true}");
         Serial.printf(" Deleted aquarium ID: %d (cascaded: schedules/devices/next-tasks)\n", id);
+        notifier.emitf("config.aquarium.delete", NTFY_MSG_AQUARIUM_DELETED, (int)id);
     });
     
     // GET unmapped devices
@@ -4636,6 +4974,15 @@ void setupWebServer() {
 
             sendFeederCommand(mac, pwmValue, durationMs);
 
+            // Activity log
+            {
+                String devName, aqName, devType;
+                lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
+                char desc[64];
+                snprintf(desc, sizeof(desc), "Test feed (PWM %u, %ums)", pwmValue, durationMs);
+                appendActivityLog("adhoc", "feeder", desc, devName.c_str(), aqName.c_str());
+            }
+
             DynamicJsonDocument resp(256);
             resp["success"] = true;
             resp["dutyCycle"] = pwmValue;
@@ -4722,6 +5069,15 @@ void setupWebServer() {
 
         sendFeederCommand(mac, pwmValue, durationMs);
 
+        // Activity log
+        {
+            String devName, aqName, devType;
+            lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
+            char desc[64];
+            snprintf(desc, sizeof(desc), "Test feed (PWM %u, %ums)", pwmValue, durationMs);
+            appendActivityLog("adhoc", "feeder", desc, devName.c_str(), aqName.c_str());
+        }
+
         DynamicJsonDocument resp(256);
         resp["success"] = true;
         resp["dutyCycle"] = pwmValue;
@@ -4798,6 +5154,11 @@ void setupWebServer() {
             wmKey.toUpperCase();
             g_waveMakerStates[wmKey] = {false, 0.0f};
 
+            // Activity log
+            String devName, aqName, devType;
+            lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
+            appendActivityLog("adhoc", "wavemaker", "STOP", devName.c_str(), aqName.c_str());
+
             DynamicJsonDocument resp(256);
             resp["success"] = true;
             resp["command"] = "STOP";
@@ -4824,6 +5185,13 @@ void setupWebServer() {
             String wmKey = macStr;
             wmKey.toUpperCase();
             g_waveMakerStates[wmKey] = {true, dutyPercent};
+
+            // Activity log
+            String devName, aqName, devType;
+            lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
+            char wmDesc[48];
+            snprintf(wmDesc, sizeof(wmDesc), "PWM %.0f%%", dutyPercent);
+            appendActivityLog("adhoc", "wavemaker", wmDesc, devName.c_str(), aqName.c_str());
 
             DynamicJsonDocument resp(256);
             resp["success"] = true;
@@ -6451,6 +6819,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         memset(&nodeOtaState, 0, sizeof(nodeOtaState));
         nodeOtaState.active = true;
         nodeOtaState.baseUrl = baseUrl;
+        nodeOtaState.deviceType = deviceTypeId;
         nodeOtaState.targetCount = targetCount;
         memcpy(nodeOtaState.targetMacs, targetMacs, sizeof(targetMacs));
         memcpy(nodeOtaState.targetMac, targetMacs[0], 6);  // First target
@@ -6698,6 +7067,8 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             devicesFile.close();
             
             Serial.printf(" Device provisioned: %s\n", deviceName.c_str());
+            notifier.emitf("config.device.add", NTFY_MSG_DEVICE_PROVISIONED,
+                            deviceName.c_str(), macStr.c_str(), (int)tankId);
             
             // **NOTE**: Device object creation disabled until Device subclass .cpp files exist
             // TEMPORARY WORKAROUND: Devices are tracked via JSON file only
@@ -6941,6 +7312,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         rebuildNextTasks();
 
         Serial.printf(" [OK] Device deleted: %s (cascaded: schedules/calibration/next-tasks)\n", macStr.c_str());
+        notifier.emitf("config.device.delete", NTFY_MSG_DEVICE_DELETED, macStr.c_str());
         request->send(200, "application/json", "{\"success\":true}");
     });
 
@@ -7059,6 +7431,17 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         serializeJson(response, responseStr);
         request->send(200, "application/json", responseStr);
         
+        // Activity log for ad-hoc device command
+        {
+            String devName, aqName, devType;
+            lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
+            // Derive category from command type
+            const char* cat = "device";
+            if (commandType.startsWith("LIGHT") || commandType == "TURN_ON" || commandType == "TURN_OFF" || commandType == "SET_RGB") cat = "light";
+            else if (commandType == "FEED") cat = "feeder";
+            appendActivityLog("adhoc", cat, commandType.c_str(), devName.c_str(), aqName.c_str());
+        }
+
         Serial.printf(" [OK] Command sent to device %s\\n", macStr.c_str());
     });
     
@@ -7315,6 +7698,50 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     // These catch-all handlers should come after all API routes
 
     // ========================================================================
+    // ACTIVITY LOG API
+    // ========================================================================
+
+    // GET /api/activity-log  — returns recent activity entries (last 7 days)
+    // Optional query param: limit (default 50)
+    server.on("/api/activity-log", HTTP_GET, [](AsyncWebServerRequest *request){
+        int limit = 50;
+        if (request->hasParam("limit")) {
+            limit = request->getParam("limit")->value().toInt();
+            if (limit <= 0) limit = 50;
+            if (limit > ACTIVITY_LOG_MAX_ENTRIES) limit = ACTIVITY_LOG_MAX_ENTRIES;
+        }
+
+        File f = FS_USER.open(ACTIVITY_LOG_PATH, "r");
+        if (!f) {
+            request->send(200, "application/json", "{\"entries\":[]}");
+            return;
+        }
+
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, f);
+        f.close();
+        if (err) {
+            request->send(200, "application/json", "{\"entries\":[]}");
+            return;
+        }
+
+        JsonArray all = doc["entries"].as<JsonArray>();
+
+        // Return the most recent `limit` entries (array is chronological)
+        JsonDocument resp;
+        JsonArray out = resp["entries"].to<JsonArray>();
+        int startIdx = (int)all.size() - limit;
+        if (startIdx < 0) startIdx = 0;
+        for (int i = startIdx; i < (int)all.size(); i++) {
+            out.add(all[i]);
+        }
+
+        String json;
+        serializeJson(resp, json);
+        request->send(200, "application/json", json);
+    });
+
+    // ========================================================================
     // DIAGNOSTICS API
     // ========================================================================
     server.on("/api/diagnostics", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -7359,10 +7786,80 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         // Uptime
         doc["uptime"] = millis() / 1000;
 
+        // LED Brightness
+        doc["ledBrightness"]["wifi"]     = hubLedBrightness[0];
+        doc["ledBrightness"]["device"]   = hubLedBrightness[1];
+        doc["ledBrightness"]["task"]     = hubLedBrightness[2];
+        doc["ledBrightness"]["unmapped"] = hubLedBrightness[3];
+
         String resp;
         serializeJson(doc, resp);
         request->send(200, "application/json", resp);
     });
+
+    // ========================================================================
+    // LED BRIGHTNESS API
+    // ========================================================================
+
+    // GET /api/led-brightness — returns current brightness for all 4 LEDs
+    server.on("/api/led-brightness", HTTP_GET, [](AsyncWebServerRequest *request){
+        JsonDocument doc;
+        doc["wifi"]     = hubLedBrightness[0];
+        doc["device"]   = hubLedBrightness[1];
+        doc["task"]     = hubLedBrightness[2];
+        doc["unmapped"] = hubLedBrightness[3];
+
+        String resp;
+        serializeJson(doc, resp);
+        request->send(200, "application/json", resp);
+    });
+
+    // POST /api/led-brightness — save brightness for all 4 LEDs
+    // Body: {"wifi":20,"device":20,"task":20,"unmapped":20}
+    server.on("/api/led-brightness", HTTP_POST,
+        // Request handler (no body here, body is in onBody)
+        [](AsyncWebServerRequest *request){},
+        // Upload handler (unused)
+        NULL,
+        // Body handler
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+            // Only process when we have the full body
+            if (index + len != total) return;
+
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, (const char*)data, total);
+            if (err) {
+                request->send(400, "application/json",
+                    "{\"success\":false,\"message\":\"Invalid JSON\"}");
+                return;
+            }
+
+            // Update brightness values (clamp to 0-100)
+            auto clamp = [](int v) -> uint8_t {
+                if (v < 0) return 0;
+                if (v > 100) return 100;
+                return (uint8_t)v;
+            };
+
+            if (doc.containsKey("wifi"))     hubLedBrightness[0] = clamp(doc["wifi"].as<int>());
+            if (doc.containsKey("device"))   hubLedBrightness[1] = clamp(doc["device"].as<int>());
+            if (doc.containsKey("task"))     hubLedBrightness[2] = clamp(doc["task"].as<int>());
+            if (doc.containsKey("unmapped")) hubLedBrightness[3] = clamp(doc["unmapped"].as<int>());
+
+            // Save to file
+            saveLedBrightnessConfig();
+
+            // Immediately apply new brightness to currently-lit LEDs
+            reapplyLedBrightness();
+
+            LOG_INFO("LED brightness updated: wifi=%d%% device=%d%% task=%d%% unmapped=%d%%",
+                     hubLedBrightness[0], hubLedBrightness[1],
+                     hubLedBrightness[2], hubLedBrightness[3]);
+
+            request->send(200, "application/json",
+                "{\"success\":true,\"message\":\"LED brightness saved\"}");
+        }
+    );
 
     // ========================================================================
     // WIFI RESET API
@@ -7478,6 +7975,25 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
         Serial.println("[HUB] ✓ Peer registered - unicast ready");
     } else {
         Serial.println("[HUB] ✗ Peer registration FAILED - unicast will NOT work!");
+    }
+    
+    // Notify: new device discovery (only for unmapped/new devices)
+    if (msg.header.tankId == 0 && peerAdded) {
+        char macBuf[18];
+        snprintf(macBuf, sizeof(macBuf), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        const char* typeStr = "UNKNOWN";
+        switch(msg.header.nodeType) {
+            case NodeType::LIGHT: typeStr = "LIGHT"; break;
+            case NodeType::CO2: typeStr = "CO2"; break;
+            case NodeType::HEATER: typeStr = "HEATER"; break;
+            case NodeType::FISH_FEEDER: typeStr = "FISH_FEEDER"; break;
+            case NodeType::SENSOR: typeStr = "SENSOR"; break;
+            case NodeType::REPEATER: typeStr = "REPEATER"; break;
+            case NodeType::WAVE_MAKER: typeStr = "WAVE_MAKER"; break;
+            default: break;
+        }
+        notifier.emitf("node.discovered", NTFY_MSG_DEVICE_DISCOVERED, macBuf, typeStr);
     }
     
     // Determine tankId to include in ACK. Prefer the hub's devices.json record
@@ -8004,6 +8520,8 @@ void loop() {
             firmwareUrl += "firmware.bin";
             
             Serial.printf("[OTA] Processing FIRMWARE update to version %s\n", otaPendingFirmwareVersion.c_str());
+            notifier.emitf("system.ota.start", NTFY_MSG_HUB_OTA_STARTED,
+                            "Firmware", config.hubFirmwareVersion.c_str(), otaPendingFirmwareVersion.c_str());
             
             String error;
             bool ok = performOtaUpdate(firmwareUrl, false, error);
@@ -8013,10 +8531,14 @@ void loop() {
                 updateHubConfigValue("HUB_FIRMWARE_VERSION", otaPendingFirmwareVersion);
                 config.hubFirmwareVersion = otaPendingFirmwareVersion;
                 Serial.println("[OTA] Firmware update successful!");
+                notifier.emitf("system.ota.success", NTFY_MSG_HUB_OTA_SUCCESS,
+                                "Firmware", otaPendingFirmwareVersion.c_str());
             } else {
                 Serial.printf("[OTA] Firmware update FAILED: %s\n", error.c_str());
                 allSuccess = false;
                 lastError = "Firmware: " + error;
+                notifier.emitf("system.ota.fail", NTFY_MSG_HUB_OTA_FAILED,
+                                "Firmware", error.c_str());
             }
         }
         
@@ -8027,6 +8549,8 @@ void loop() {
             littlefsUrl += "littlefs.bin";
             
             Serial.printf("[OTA] Processing LITTLEFS update to version %s\n", otaPendingLittlefsVersion.c_str());
+            notifier.emitf("system.ota.start", NTFY_MSG_HUB_OTA_STARTED,
+                            "LittleFS", config.hubLittlefsVersion.c_str(), otaPendingLittlefsVersion.c_str());
             
             String error;
             bool ok = performOtaUpdate(littlefsUrl, true, error);
@@ -8036,10 +8560,14 @@ void loop() {
                 updateHubConfigValue("HUB_LITTLEFS_VERSION", otaPendingLittlefsVersion);
                 config.hubLittlefsVersion = otaPendingLittlefsVersion;
                 Serial.println("[OTA] LittleFS update successful!");
+                notifier.emitf("system.ota.success", NTFY_MSG_HUB_OTA_SUCCESS,
+                                "LittleFS", otaPendingLittlefsVersion.c_str());
             } else {
                 Serial.printf("[OTA] LittleFS update FAILED: %s\n", error.c_str());
                 allSuccess = false;
                 lastError = "LittleFS: " + error;
+                notifier.emitf("system.ota.fail", NTFY_MSG_HUB_OTA_FAILED,
+                                "LittleFS", error.c_str());
             }
         }
         

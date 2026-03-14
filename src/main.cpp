@@ -7873,6 +7873,64 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         ESP.restart();
     });
 
+    // ========================================================================
+    // FACTORY RESET API — wipe all user data files back to empty defaults
+    // ========================================================================
+    server.on("/api/factory-reset", HTTP_POST, [](AsyncWebServerRequest *request){
+        Serial.println("[FACTORY RESET] ⚠️  Factory reset requested!");
+
+        // Files to wipe (paths relative to /config/ on FS_USER)
+        struct ResetFile {
+            const char* path;
+            const char* emptyContent;
+        };
+
+        static const ResetFile filesToReset[] = {
+            { "/config/aquariums.json",                   "{\"aquariums\":[]}" },
+            { "/config/devices.json",                     "{\"devices\":[]}" },
+            { "/config/unmapped-devices.json",            "{\"metadata\":{\"lastCleanup\":0,\"totalDiscovered\":0,\"autoCleanupAfterDays\":7},\"unmappedDevices\":[]}" },
+            { "/config/light-devices.json",               "{\"devices\":[]}" },
+            { "/config/schedule/light-schedule.json",     "{\"schedules\":[]}" },
+            { "/config/schedule/feeder-schedule.json",    "{\"schedules\":[]}" },
+            { "/config/schedule/wm-schedule.json",        "{\"schedules\":[]}" },
+            { "/config/schedule/next-task.json",          "{}" },
+            { "/config/feeder-calibration.json",          "{\"feeders\":[]}" },
+            { "/config/activity-log.json",                "{\"entries\":[]}" },
+            { "/config/notifications.json",               "{}" },
+        };
+
+        int ok = 0, fail = 0;
+        for (const auto& f : filesToReset) {
+            File file = FS_USER.open(f.path, "w");
+            if (file) {
+                file.print(f.emptyContent);
+                file.close();
+                ok++;
+                Serial.printf("[FACTORY RESET]   ✓ %s\n", f.path);
+            } else {
+                fail++;
+                Serial.printf("[FACTORY RESET]   ✗ Failed: %s\n", f.path);
+            }
+        }
+
+        Serial.printf("[FACTORY RESET] Done: %d files reset, %d failures\n", ok, fail);
+
+        if (fail == 0) {
+            request->send(200, "application/json",
+                "{\"success\":true,\"message\":\"Factory reset complete. Hub will restart now.\"}");
+        } else {
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                "{\"success\":true,\"message\":\"Reset with %d warnings. Hub will restart now.\",\"failures\":%d}",
+                fail, fail);
+            request->send(200, "application/json", buf);
+        }
+
+        // Restart after a short delay to let the response reach the client
+        delay(500);
+        ESP.restart();
+    });
+
     // WebSocket setup
     ws.onEvent(onWebSocketEvent);
     server.addHandler(&ws);
@@ -7977,27 +8035,13 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
         Serial.println("[HUB] ✗ Peer registration FAILED - unicast will NOT work!");
     }
     
-    // Notify: new device discovery (only for unmapped/new devices)
-    if (msg.header.tankId == 0 && peerAdded) {
-        char macBuf[18];
-        snprintf(macBuf, sizeof(macBuf), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        const char* typeStr = "UNKNOWN";
-        switch(msg.header.nodeType) {
-            case NodeType::LIGHT: typeStr = "LIGHT"; break;
-            case NodeType::CO2: typeStr = "CO2"; break;
-            case NodeType::HEATER: typeStr = "HEATER"; break;
-            case NodeType::FISH_FEEDER: typeStr = "FISH_FEEDER"; break;
-            case NodeType::SENSOR: typeStr = "SENSOR"; break;
-            case NodeType::REPEATER: typeStr = "REPEATER"; break;
-            case NodeType::WAVE_MAKER: typeStr = "WAVE_MAKER"; break;
-            default: break;
-        }
-        notifier.emitf("node.discovered", NTFY_MSG_DEVICE_DISCOVERED, macBuf, typeStr);
-    }
-    
-    // Determine tankId to include in ACK. Prefer the hub's devices.json record
+    // Check devices.json FIRST — this is the source of truth for provisioned state.
+    // Nodes always send tankId=0 in their ANNOUNCE on every boot (they don't know
+    // their assigned tank until they receive the ACK). Using the node's self-reported
+    // tankId to decide "new vs known" causes false "new device discovered" notifications
+    // on every reconnect of a provisioned device.
     int ackTankId = msg.header.tankId;
+    bool isProvisioned = false;
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -8014,11 +8058,30 @@ void onAnnounceReceived(const uint8_t* mac, const AnnounceMessage& msg) {
                 const char* listedMac = d["mac"];
                 if (listedMac && strcasecmp(listedMac, macStr) == 0) {
                     ackTankId = d["tankId"] | 0;
+                    isProvisioned = true;
                     Serial.printf(" [HUB] ANNOUNCE: device found in devices.json (tank %d), using that for ACK\n", ackTankId);
                     break;
                 }
             }
         }
+    }
+
+    // Notify: new device discovery — only when the device is NOT in devices.json.
+    // Do NOT rely on msg.header.tankId == 0 here: provisioned nodes still send
+    // tankId=0 on every reboot before they receive the ACK with their assigned tank.
+    if (!isProvisioned && peerAdded) {
+        const char* typeStr = "UNKNOWN";
+        switch(msg.header.nodeType) {
+            case NodeType::LIGHT: typeStr = "LIGHT"; break;
+            case NodeType::CO2: typeStr = "CO2"; break;
+            case NodeType::HEATER: typeStr = "HEATER"; break;
+            case NodeType::FISH_FEEDER: typeStr = "FISH_FEEDER"; break;
+            case NodeType::SENSOR: typeStr = "SENSOR"; break;
+            case NodeType::REPEATER: typeStr = "REPEATER"; break;
+            case NodeType::WAVE_MAKER: typeStr = "WAVE_MAKER"; break;
+            default: break;
+        }
+        notifier.emitf("node.discovered", NTFY_MSG_DEVICE_DISCOVERED, macStr, typeStr);
     }
 
     AckMessage ack = {};

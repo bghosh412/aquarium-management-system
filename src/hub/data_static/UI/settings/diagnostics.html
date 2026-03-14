@@ -307,6 +307,37 @@
                     </div>
                 </div>
 
+                <!-- Factory Reset -->
+                <div class="card diag-card collapsed" data-key="factoryreset">
+                    <div class="card-header" onclick="toggleCard(this)">
+                        <h3>🗑️ Factory Reset</h3>
+                        <span class="chevron">▼</span>
+                    </div>
+                    <div class="card-body">
+                        <p style="color:var(--text-secondary); margin-bottom:1rem; font-size:0.9rem;">
+                            Wipe all user data and return the hub to a clean state. This will delete:
+                        </p>
+                        <ul style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 1.25rem; line-height:1.8;">
+                            <li>Aquariums &amp; tank configuration</li>
+                            <li>All provisioned device mappings</li>
+                            <li>Light, feeder &amp; wave-maker schedules</li>
+                            <li>Feeder calibration data</li>
+                            <li>Unmapped device list</li>
+                            <li>Activity log</li>
+                            <li>Notification settings</li>
+                        </ul>
+                        <div style="padding:1rem; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); border-radius:10px; margin-bottom:1rem;">
+                            <p style="color:#ef4444; font-weight:600; margin:0; font-size:0.85rem;">
+                                ⚠️ This action is irreversible. All aquariums, devices, schedules and calibration data will be permanently deleted. The hub will restart after the reset.
+                            </p>
+                        </div>
+                        <div id="factoryResetStatus" style="margin-bottom:0.75rem; font-size:0.85rem;"></div>
+                        <button id="factoryResetBtn" class="btn btn-primary" onclick="factoryReset()" style="background:#ef4444; border-color:#ef4444;">
+                            🗑️ Factory Reset
+                        </button>
+                    </div>
+                </div>
+
                 <!-- LED Brightness Control -->
                 <div class="card diag-card collapsed" data-key="led">
                     <div class="card-header" onclick="toggleCard(this)">
@@ -508,6 +539,37 @@
                     setSlider('ledUnmapped', d.unmapped);
                 })
                 .catch(function() {});
+        }
+
+        /* ── Factory Reset ── */
+        function factoryReset() {
+            if (!confirm('Are you sure you want to factory reset?\n\nThis will DELETE all aquariums, devices, schedules, calibration data and activity logs.')) return;
+            if (!confirm('This is your LAST chance to cancel.\n\nAll data will be permanently erased and the hub will restart.')) return;
+
+            var btn    = document.getElementById('factoryResetBtn');
+            var status = document.getElementById('factoryResetStatus');
+            btn.disabled = true;
+            btn.textContent = '⏳ Resetting…';
+            status.innerHTML = '<span style="color:var(--text-secondary);">Wiping data…</span>';
+            stopAutoRefresh();
+
+            fetch('/api/factory-reset', { method: 'POST' })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.success) {
+                        status.innerHTML = '<span style="color:#10b981;">✅ ' + (d.message || 'Factory reset complete. Hub is restarting…') + '</span>';
+                    } else {
+                        status.innerHTML = '<span style="color:#ef4444;">❌ ' + (d.error || 'Reset failed') + '</span>';
+                        btn.disabled = false;
+                        btn.textContent = '🗑️ Factory Reset';
+                    }
+                })
+                .catch(function() {
+                    status.innerHTML = '<span style="color:#10b981;">Hub is restarting after factory reset…</span>';
+                })
+                .finally(function() {
+                    btn.textContent = '🗑️ Factory Reset';
+                });
         }
 
         function saveLedBrightness() {

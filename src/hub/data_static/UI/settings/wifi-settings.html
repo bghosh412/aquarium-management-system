@@ -8,6 +8,39 @@
     <meta name="theme-color" content="#0c4a6e">
     <title>WiFi Settings - Aquarium Hub</title>
     <link rel="stylesheet" href="/styles/styles.css?v=20260116">
+    <style>
+        /* ── Data table (matches diagnostics) ── */
+        .data-table { width: 100%; border-collapse: collapse; }
+        .data-table td { padding: 0.6rem 0; vertical-align: middle; }
+        .data-table tr:not(:last-child) td { border-bottom: 1px solid var(--border-color); }
+        .data-table .dt-label {
+            color: var(--text-secondary); font-size: 0.85rem;
+            font-weight: 500; width: 40%; white-space: nowrap; padding-right: 1rem;
+        }
+        .data-table .dt-value {
+            color: var(--text-primary); font-size: 0.9rem;
+            font-weight: 600; text-align: right;
+        }
+        /* ── Badges ── */
+        .badge {
+            display: inline-flex; align-items: center; gap: 0.3rem;
+            padding: 0.2rem 0.6rem; border-radius: 999px;
+            font-size: 0.78rem; font-weight: 600; line-height: 1.4;
+        }
+        .badge-green  { background: #d1fae5; color: #065f46; }
+        .badge-yellow { background: #fef3c7; color: #92400e; }
+        .badge-red    { background: #fee2e2; color: #991b1b; }
+        .badge-blue   { background: #dbeafe; color: #1e40af; }
+        /* ── Signal meter ── */
+        .signal-meter { display: flex; align-items: flex-end; gap: 2px; height: 16px; }
+        .signal-meter .bar {
+            width: 4px; border-radius: 1px;
+            background: var(--border-color); transition: background 0.3s;
+        }
+        .signal-meter .bar.active { background: var(--success-color); }
+        .signal-meter .bar.warn   { background: var(--warning-color); }
+        .signal-meter .bar.bad    { background: var(--danger-color); }
+    </style>
 </head>
 <body>
     <nav class="navbar">
@@ -57,45 +90,35 @@
                         <h3>📶 WiFi Connection</h3>
                     </div>
                     <div class="card-body">
-                        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
-                            <div class="stat-card">
-                                <div class="stat-icon blue">📡</div>
-                                <div class="stat-info">
-                                    <span class="stat-label">Network (SSID)</span>
-                                    <span class="stat-value" id="wifiSsid">—</span>
-                                </div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-icon" id="rssiIcon">📶</div>
-                                <div class="stat-info">
-                                    <span class="stat-label">Signal Strength</span>
-                                    <span class="stat-value" id="wifiRssi">—</span>
-                                </div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-icon blue">🌐</div>
-                                <div class="stat-info">
-                                    <span class="stat-label">IP Address</span>
-                                    <span class="stat-value" id="wifiIp">—</span>
-                                </div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-icon blue">📻</div>
-                                <div class="stat-info">
-                                    <span class="stat-label">Channel</span>
-                                    <span class="stat-value" id="wifiChannel">—</span>
-                                </div>
-                            </div>
-                        </div>
-                        <!-- Signal bar -->
-                        <div style="margin-top:1rem;">
-                            <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:var(--color-text-secondary); margin-bottom:0.25rem;">
-                                <span>Weak (-90 dBm)</span><span>Excellent (-30 dBm)</span>
-                            </div>
-                            <div style="background:var(--color-border); border-radius:8px; height:12px; overflow:hidden;">
-                                <div id="rssiBarFill" style="height:100%; width:0%; transition:width 0.5s; border-radius:8px;"></div>
-                            </div>
-                        </div>
+                        <table class="data-table">
+                            <tr>
+                                <td class="dt-label">SSID</td>
+                                <td class="dt-value" id="wifiSsid">—</td>
+                            </tr>
+                            <tr>
+                                <td class="dt-label">IP Address</td>
+                                <td class="dt-value" id="wifiIp">—</td>
+                            </tr>
+                            <tr>
+                                <td class="dt-label">Channel</td>
+                                <td class="dt-value" id="wifiChannel">—</td>
+                            </tr>
+                            <tr>
+                                <td class="dt-label">Signal Strength</td>
+                                <td class="dt-value">
+                                    <span style="display:inline-flex;align-items:center;gap:0.5rem;">
+                                        <span id="wifiRssi">—</span>
+                                        <span class="signal-meter" id="signalMeter">
+                                            <span class="bar" style="height:4px"></span>
+                                            <span class="bar" style="height:7px"></span>
+                                            <span class="bar" style="height:10px"></span>
+                                            <span class="bar" style="height:13px"></span>
+                                            <span class="bar" style="height:16px"></span>
+                                        </span>
+                                    </span>
+                                </td>
+                            </tr>
+                        </table>
                     </div>
                 </div>
 
@@ -144,16 +167,18 @@
                     document.getElementById('wifiChannel').textContent = d.wifi.channel;
 
                     const rssi = d.wifi.rssi;
-                    const label = rssi >= -50 ? 'Excellent' : rssi >= -60 ? 'Good' : rssi >= -70 ? 'Fair' : 'Weak';
-                    document.getElementById('wifiRssi').textContent = `${rssi} dBm (${label})`;
+                    const rssiLabel = rssi >= -50 ? 'Excellent' : rssi >= -60 ? 'Good' : rssi >= -70 ? 'Fair' : 'Weak';
+                    const rssiBadge = rssi >= -50 ? 'badge-green' : rssi >= -60 ? 'badge-blue' : rssi >= -70 ? 'badge-yellow' : 'badge-red';
+                    document.getElementById('wifiRssi').innerHTML =
+                        '<span class="badge ' + rssiBadge + '">' + rssi + ' dBm &middot; ' + rssiLabel + '</span>';
 
-                    // RSSI bar: map -90...-30 → 0...100%
-                    const pct = Math.min(100, Math.max(0, ((rssi + 90) / 60) * 100));
-                    const bar = document.getElementById('rssiBarFill');
-                    bar.style.width = pct + '%';
-                    bar.style.background = pct > 66 ? '#10b981' : pct > 33 ? '#f59e0b' : '#ef4444';
-
-                    document.getElementById('rssiIcon').className = 'stat-icon ' + (pct > 66 ? 'green' : pct > 33 ? 'orange' : 'red');
+                    // Signal meter bars
+                    const bars = document.querySelectorAll('#signalMeter .bar');
+                    const strength = rssi >= -50 ? 5 : rssi >= -60 ? 4 : rssi >= -70 ? 3 : rssi >= -80 ? 2 : 1;
+                    const barClass = strength >= 4 ? 'active' : strength >= 3 ? 'warn' : 'bad';
+                    bars.forEach(function(b, i) {
+                        b.className = 'bar' + (i < strength ? ' ' + barClass : '');
+                    });
                 })
                 .catch(() => {});
         }

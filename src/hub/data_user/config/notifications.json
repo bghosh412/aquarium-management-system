@@ -1,13 +1,4 @@
 {
-    "channels": {
-        "ntfy": {
-            "type": "ntfy",
-            "url": "https://ntfy.sh/YOUR_TOPIC_HERE"
-        },
-        "log": {
-            "type": "serial"
-        }
-    },
     "routes": [
         {
             "event": "system.boot",

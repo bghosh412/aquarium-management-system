@@ -2930,21 +2930,9 @@ void watchdogTask(void* parameter) {
 // ============================================================================
 
 void setupNotifications() {
-    // Read NTFY_TOPIC from hub_config.txt
-    String ntfyTopic = "";
-    File configFile = FS_USER.open("/config/hub_config.txt", "r");
-    if (configFile) {
-        while (configFile.available()) {
-            String line = configFile.readStringUntil('\n');
-            line.trim();
-            if (line.startsWith("NTFY_TOPIC=")) {
-                ntfyTopic = line.substring(String("NTFY_TOPIC=").length());
-                ntfyTopic.trim();
-                break;
-            }
-        }
-        configFile.close();
-    }
+    // Read NTFY_TOPIC from hub_config.txt (already loaded into hubConfigManager from StaticFS)
+    String ntfyTopic = hubConfigManager.getString("NTFY_TOPIC", "");
+    ntfyTopic.trim();
 
     // Register ntfy channel if topic is configured
     if (ntfyTopic.length() > 0) {
@@ -2960,12 +2948,29 @@ void setupNotifications() {
 
     // Load routing rules from JSON config (AOP-style)
     // Use FS_USER explicitly — dual-LittleFS means default LittleFS won't find user files
+    bool routesLoaded = false;
     if (FS_USER.exists("/config/notifications.json")) {
         notifier.loadConfig(FS_USER, "/config/notifications.json");
-        LOG_INFO("[NTF] Loaded notification routes from /config/notifications.json");
-    } else {
-        // No config file — set up sensible defaults programmatically
-        LOG_INFO("[NTF] No notifications.json found, using default routes");
+        // loadConfig may overwrite the ntfy channel URL from the JSON file's "channels"
+        // section (which could contain a placeholder). Re-apply the correct URL from hub_config.
+        if (ntfyTopic.length() > 0) {
+            String correctUrl = "https://ntfy.sh/" + ntfyTopic;
+            NotifChannel* ch = notifier.getChannel("ntfy");
+            if (ch && strcmp(ch->typeName(), "ntfy") == 0) {
+                static_cast<NtfyChannel*>(ch)->setUrl(correctUrl.c_str());
+                LOG_INFO("[NTF] Ensured ntfy URL from hub_config: %s", correctUrl.c_str());
+            }
+        }
+        if (notifier.getRouteCount() > 0) {
+            routesLoaded = true;
+            LOG_INFO("[NTF] Loaded %d notification routes from /config/notifications.json", notifier.getRouteCount());
+        } else {
+            LOG_WARN("[NTF] notifications.json exists but contains no routes, using defaults");
+        }
+    }
+    if (!routesLoaded) {
+        // No config file or empty config — set up sensible defaults programmatically
+        LOG_INFO("[NTF] Setting up default notification routes");
         if (ntfyTopic.length() > 0) {
             notifier.route("system.*",    "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Hub",           0);
             notifier.route("safety.*",    "ntfy", NTF_PRIORITY_URGENT,  "AMS - SAFETY ALERT",  0);
@@ -7896,7 +7901,7 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
             { "/config/schedule/next-task.json",          "{}" },
             { "/config/feeder-calibration.json",          "{\"feeders\":[]}" },
             { "/config/activity-log.json",                "{\"entries\":[]}" },
-            { "/config/notifications.json",               "{}" },
+            { "/config/deleted-devices.json",             "{\"metadata\":{\"totalDeleted\":0},\"deletedDevices\":[]}" },
         };
 
         int ok = 0, fail = 0;

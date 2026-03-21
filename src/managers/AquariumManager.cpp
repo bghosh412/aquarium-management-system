@@ -325,9 +325,13 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
         return;
     }
     
-    // Check if device is unmapped (tankId == 0)
-    if (msg.header.tankId == 0) {
-        Serial.println("   -   Unmapped device (tankId=0), storing for provisioning");
+    // Device is NOT in devices.json and NOT in the in-memory registry.
+    // Treat it as unmapped regardless of its self-reported tankId.
+    // Nodes may remember a stale tankId from before a factory reset,
+    // but since the device isn't provisioned on the hub, it must go
+    // through the discovery/provision flow.
+    {
+        Serial.printf("   -   Unprovisioned device (claimed tankId=%d), storing for provisioning\n", msg.header.tankId);
         
         // Load unmapped devices JSON
         File file = FS_USER.open("/config/unmapped-devices.json", "r");
@@ -407,54 +411,6 @@ void AquariumManager::handleAnnounce(const uint8_t* mac, const AnnounceMessage& 
         _stats.totalMessagesReceived++;
         return;
     }
-    
-    // Check if aquarium exists
-    Aquarium* aquarium = getAquarium(msg.header.tankId);
-    if (!aquarium) {
-        Serial.printf("   -   Aquarium ID %d not found, rejecting device\n", msg.header.tankId);
-        _sendAck(mac, msg.header.tankId, false);
-        _stats.totalMessagesReceived++;
-        _stats.totalErrors++;
-        return;
-    }
-    
-    // Create device (name will be from devices.json or default)
-    const char* deviceName = "UnknownDevice";  // TODO: Load from devices.json by MAC
-    Device* device = _createDevice(mac, msg.header.nodeType, deviceName);
-    if (!device) {
-        Serial.println("   -  Failed to create device");
-        _sendAck(mac, msg.header.tankId, false);
-        _stats.totalMessagesReceived++;
-        _stats.totalErrors++;
-        return;
-    }
-    
-    // Set tank ID and firmware version
-    device->setFirmwareVersion(msg.firmwareVersion);
-    
-    // Add to aquarium
-    if (!aquarium->addDevice(device)) {
-        Serial.println("   -  Failed to add device to aquarium");
-        delete device;
-        _sendAck(mac, msg.header.tankId, false);
-        _stats.totalMessagesReceived++;
-        _stats.totalErrors++;
-        return;
-    }
-    
-    // Add to global registry
-    _globalDeviceRegistry[macKey] = device;
-    
-    // Send ACK
-    _sendAck(mac, msg.header.tankId, true);
-    
-    // Broadcast update
-    if (_wsCallback) {
-        _wsCallback("deviceDiscovered", device->toJson());
-    }
-    
-    Serial.printf("   -  Device registered successfully\n");
-    _stats.totalMessagesReceived++;
 }
 
 void AquariumManager::handleHeartbeat(const uint8_t* mac, const HeartbeatMessage& msg) {

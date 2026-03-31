@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../../../../Desktop/MicroCore"
+		},
+		{
+			"path": "../../../../Desktop/deploy"
 		}
 	],
 	"settings": {}

@@ -483,6 +483,8 @@ void setupNotifications();
 
 // Scheduler function declarations
 void rebuildNextTasks();
+// Flag to signal scheduler task to reload next-task.json
+static volatile bool g_nextTasksDirty = false;
 
 // Web server
 AsyncWebServer server(80);
@@ -1831,6 +1833,23 @@ static void saveNextTasks(const std::vector<NextTask>& tasks) {
         obj["channel"] = t.channel;
         obj["actionOn"] = t.actionOn;
         obj["scheduledTime"] = (long)t.scheduledTime;
+        // Add human-readable timestamps for troubleshooting (local + UTC)
+        if (t.scheduledTime > 0) {
+            struct tm localInfo;
+            struct tm utcInfo;
+            localtime_r(&t.scheduledTime, &localInfo);
+            gmtime_r(&t.scheduledTime, &utcInfo);
+            char localBuf[24];
+            char utcBuf[24];
+            snprintf(localBuf, sizeof(localBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+                     localInfo.tm_year + 1900, localInfo.tm_mon + 1, localInfo.tm_mday,
+                     localInfo.tm_hour, localInfo.tm_min, localInfo.tm_sec);
+            snprintf(utcBuf, sizeof(utcBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+                     utcInfo.tm_year + 1900, utcInfo.tm_mon + 1, utcInfo.tm_mday,
+                     utcInfo.tm_hour, utcInfo.tm_min, utcInfo.tm_sec);
+            obj["scheduledLocal"] = localBuf;
+            obj["scheduledUtc"] = utcBuf;
+        }
         obj["period"] = t.period;
         // Include feeder-specific fields
         if (t.taskType == TaskType::FEEDER) {
@@ -2173,6 +2192,7 @@ void rebuildNextTasks() {
     }
     
     saveNextTasks(allTasks);
+    g_nextTasksDirty = true;  // Notify scheduler task to reload
 }
 
 // Helper: Check if a device MAC belongs to an aquarium in maintenance mode
@@ -2556,6 +2576,13 @@ void schedulerTask(void* parameter) {
     
     while (true) {
         time_t now = getCurrentUnixTime();
+
+        // Reload tasks if schedule was updated externally
+        if (g_nextTasksDirty) {
+            g_nextTasksDirty = false;
+            loadNextTasks(tasks);
+            debugLog("[SCHEDULER] Reloaded tasks from next-task.json (dirty flag)");
+        }
         
         // Refresh task list once per day (handle day rollover)
         if (now - lastRebuildTime > 12 * 60 * 60) {  // Every 12 hours
@@ -3325,10 +3352,10 @@ void setupWiFi() {
     Serial.printf("   - Hostname: %s\n", WiFi.getHostname());
     
     // Configure NTP time synchronization
+    // Use timezone-aware config to ensure epoch timestamps align to local time (IST)
     Serial.println(" Configuring NTP time sync...");
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");  // GMT offset 0, daylight offset 0
-    setenv("TZ", "IST-5:30", 1);  // India Standard Time (UTC+5:30)
-    tzset();
+    const char* tzSpec = "IST-5:30";  // India Standard Time (UTC+5:30)
+    configTzTime(tzSpec, "pool.ntp.org", "time.nist.gov");
     
     // Wait for NTP sync (max 10 seconds)
     struct tm timeinfo;
@@ -3340,9 +3367,9 @@ void setupWiFi() {
     }
     if (ntpRetry < 20) {
         ntpSynced = true;
-        Serial.printf("\n   - NTP synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+        Serial.printf("\n   - NTP synced: %04d-%02d-%02d %02d:%02d:%02d (%s)\n",
                       timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, tzSpec);
     } else {
         Serial.println("\n   - NTP sync failed (will retry in scheduler)");
     }
@@ -3773,6 +3800,9 @@ void setupWebServer() {
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
         struct tm timeinfo;
         bool hasTime = getLocalTime(&timeinfo);
+        time_t now = time(nullptr);
+        struct tm utcinfo;
+        gmtime_r(&now, &utcinfo);
         
         // Get memory info
         uint32_t heapFree = ESP.getFreeHeap();
@@ -3805,6 +3835,15 @@ void setupWebServer() {
         } else {
             json += "\"time\":null";
         }
+        // Epoch + UTC time for remote verification (no serial needed)
+        json += ",\"unixTime\":" + String((long)now);
+        char utcBuf[32];
+        snprintf(utcBuf, sizeof(utcBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+                 utcinfo.tm_year + 1900, utcinfo.tm_mon + 1, utcinfo.tm_mday,
+                 utcinfo.tm_hour, utcinfo.tm_min, utcinfo.tm_sec);
+        json += ",\"timeUtc\":\"" + String(utcBuf) + "\"";
+        const char* tz = getenv("TZ");
+        json += ",\"tz\":\"" + String(tz ? tz : "") + "\"";
         json += "}";
         request->send(200, "application/json", json);
     });

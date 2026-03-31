@@ -1,21 +1,130 @@
 # CO2 Regulator Node Configuration
 # Format: KEY=VALUE (no spaces around =)
+# Hub will update NODE_TANK_ID and NODE_NAME during provisioning
 
+# ============================================================================
+# NODE IDENTITY (0 = unmapped, waiting for hub provisioning)
+# ============================================================================
 NODE_TANK_ID=0
 NODE_NAME=UnmappedCO2
 FIRMWARE_VERSION=1
 
-# ESP-NOW Settings
+# ============================================================================
+# ESP-NOW SETTINGS
+# ============================================================================
 ESPNOW_CHANNEL=11
 
-# Debug Settings
+# ============================================================================
+# HARDWARE PIN CONFIGURATION (ESP8266 D1 Mini)
+# ============================================================================
+# RELAY_PIN: GPIO connected to CO2 solenoid relay module
+#   D7/GPIO13 = default. HIGH = CO2 ON, LOW = CO2 OFF
+RELAY_PIN=13
+
+# PH_SENSOR_PIN: Analog input for DFRobot pH sensor board
+#   A0 (GPIO17) = ONLY analog input on ESP8266. Do not change unless using
+#   an external ADC or I2C-based pH sensor board.
+PH_SENSOR_PIN=17
+
+# STATUS_LED_PIN: Status indicator LED
+#   D5/GPIO14 = used instead of default D7/GPIO13 (which is the relay pin)
+STATUS_LED_PIN=14
+
+# ============================================================================
+# pH READING CONFIGURATION
+# ============================================================================
+# PH_READ_INTERVAL_MS: How often to read and report pH to hub (milliseconds)
+#   Default: 300000 (5 minutes). Hub analyzes trend over time.
+#   Minimum recommended: 60000 (1 min). Maximum: 3600000 (1 hour)
+PH_READ_INTERVAL_MS=300000
+
+# PH_SAMPLE_COUNT: Number of ADC samples per pH reading (for noise filtering)
+#   Samples are sorted and outliers discarded. Range: 3-50
+PH_SAMPLE_COUNT=10
+
+# PH_DISCARD_COUNT: Number of samples to discard from EACH end (high+low outliers)
+#   Must be < PH_SAMPLE_COUNT/2. Set 0 to disable outlier removal.
+PH_DISCARD_COUNT=2
+
+# ============================================================================
+# pH CALIBRATION
+# ============================================================================
+# DFRobot Gravity Analog pH Sensor V2 calibration
+# Formula: pH = PH_CALIB_SLOPE * voltage + PH_CALIB_OFFSET
+#
+# Default values are approximate for DFRobot sensor:
+#   At pH 7.0: output ~2.50V -> slope*2.50 + offset = 7.0
+#   At pH 4.0: output ~3.04V -> slope*3.04 + offset = 4.0
+#
+# To calibrate:
+#   1. Place probe in pH 7.0 buffer solution
+#   2. Read voltage (from serial debug output)
+#   3. Place probe in pH 4.0 buffer solution
+#   4. Read voltage
+#   5. Calculate: slope = (pH2-pH1)/(V2-V1), offset = pH1 - slope*V1
+PH_CALIB_OFFSET=21.34
+PH_CALIB_SLOPE=-5.70
+
+# ADC reference voltage and resolution
+# D1 Mini has voltage divider on A0: 0-3.3V input range
+ADC_VOLTAGE_REF=3.3
+ADC_MAX_VALUE=1024
+
+# ============================================================================
+# LOCAL SAFETY LIMITS (Emergency protection independent of hub)
+# ============================================================================
+# PH_SAFETY_LOW: If pH drops below this, CO2 is FORCED OFF immediately
+#   This is a local emergency cutoff. Hub handles trend-based control.
+#   Set lower than your normal operating range to avoid false triggers.
+PH_SAFETY_LOW=5.0
+
+# PH_SAFETY_HIGH: High pH warning threshold (informational only, logged)
+PH_SAFETY_HIGH=8.5
+
+# ============================================================================
+# DEBUG SETTINGS
+# ============================================================================
 DEBUG_SERIAL=true
 DEBUG_ESPNOW=true
 DEBUG_HARDWARE=false
 
-# Timing Settings
+# ============================================================================
+# TIMING SETTINGS
+# ============================================================================
 ANNOUNCE_INTERVAL_MS=5000
 HEARTBEAT_INTERVAL_MS=30000
 CONNECTION_TIMEOUT_MS=90000
-# Hub heartbeat timeout (ms) - if node does not receive hub heartbeat for this long, enter fail-safe
+
+# Hub heartbeat timeout (ms) - if node does not receive hub heartbeat for this
+# long, enter fail-safe mode (CO2 OFF). Default: 600000 ms (10 minutes)
 HUB_HEARTBEAT_TIMEOUT_MS=600000
+
+# ============================================================================
+# CO2 REGULATOR HARDWARE NOTES
+# ============================================================================
+# Platform: ESP8266 D1 Mini (Wemos)
+#
+# pH Sensor: DFRobot Gravity Analog pH Sensor V2
+#   - BNC connector: pH probe -> sensor board
+#   - Sensor board signal -> A0 (analog output 0-3V)
+#   - VCC: 3.3V or 5V, GND
+#
+# CO2 Relay: Standard relay module
+#   - D7/GPIO13 -> relay IN (HIGH = energized = CO2 flows)
+#   - Relay controls CO2 solenoid valve
+#
+# Safety: CO2 is ALWAYS OFF at boot and on any error/disconnect
+#
+# Pin Map (D1 Mini):
+#   A0  (GPIO17) = pH sensor analog input
+#   D7  (GPIO13) = CO2 relay output
+#   D5  (GPIO14) = Status LED
+#   D1  (GPIO5)  = Available (I2C SCL)
+#   D2  (GPIO4)  = Available (I2C SDA)
+#
+# Command Types from Hub:
+#   0  = Emergency stop (CO2 OFF)
+#   1  = CO2 ON (relay HIGH)
+#   2  = CO2 OFF (relay LOW)
+#   40 = Status request (read pH now)
+#   0xFF = Force fail-safe (test)

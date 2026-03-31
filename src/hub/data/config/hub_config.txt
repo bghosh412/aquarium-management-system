@@ -55,8 +55,8 @@ HUB_LITTLEFS_OTA_URL=https://raw.githubusercontent.com/bghosh412/OTA/main/AMS/Hu
 
 # Current installed versions (updated automatically after successful OTA)
 # Format: major.minor.patch (e.g., 1.0.0)
-HUB_FIRMWARE_VERSION=1.0.5
-HUB_LITTLEFS_VERSION=1.0.5
+HUB_FIRMWARE_VERSION=1.1.0
+HUB_LITTLEFS_VERSION=1.1.0
 
 # ============================================================================
 # Node OTA Update Configuration

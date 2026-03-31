@@ -1218,8 +1218,13 @@ static void sendFeederCommand(const uint8_t* mac, uint16_t pwmValue, uint32_t du
 // WAVE MAKER COMMAND HELPERS
 // ============================================================================
 
+// Forward-declare debugLog (defined later near scheduler section)
+static void debugLog(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
 // Helper: Send wave maker PWM command via ESP-NOW (duty cycle % as float)
 static void sendWaveMakerCommand(const uint8_t* mac, float dutyPercent) {
+    debugLog("sendWaveMakerCommand: dutyPercent=%.2f mac=%02X:%02X:%02X:%02X:%02X:%02X",
+             dutyPercent, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     CommandMessage cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.header.type = MessageType::COMMAND;
@@ -1235,7 +1240,12 @@ static void sendWaveMakerCommand(const uint8_t* mac, float dutyPercent) {
     cmd.commandData[0] = 0x01;  // CMD_PWM
     memcpy(&cmd.commandData[1], &dutyPercent, sizeof(float));
 
+    // Log raw bytes being sent
+    debugLog("sendWaveMakerCommand: cmdData[0]=0x%02X cmdData[1..4]=%02X %02X %02X %02X (float bytes)",
+             cmd.commandData[0], cmd.commandData[1], cmd.commandData[2], cmd.commandData[3], cmd.commandData[4]);
+
     bool result = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+    debugLog("sendWaveMakerCommand: send result=%s", result ? "OK" : "FAILED");
     Serial.printf("[WAVEMAKER] Sent PWM command duty=%.1f%% to %02X:%02X:%02X:%02X:%02X:%02X - %s\n",
                   dutyPercent, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
                   result ? "OK" : "FAILED");
@@ -1243,6 +1253,8 @@ static void sendWaveMakerCommand(const uint8_t* mac, float dutyPercent) {
 
 // Helper: Send wave maker STOP command via ESP-NOW
 static void sendWaveMakerStop(const uint8_t* mac) {
+    debugLog("sendWaveMakerStop: mac=%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     CommandMessage cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.header.type = MessageType::COMMAND;
@@ -1257,6 +1269,7 @@ static void sendWaveMakerStop(const uint8_t* mac) {
     cmd.commandData[0] = 0x00;  // CMD_STOP
 
     bool result = ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+    debugLog("sendWaveMakerStop: send result=%s", result ? "OK" : "FAILED");
     Serial.printf("[WAVEMAKER] Sent STOP command to %02X:%02X:%02X:%02X:%02X:%02X - %s\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
                   result ? "OK" : "FAILED");
@@ -1429,6 +1442,48 @@ static std::map<String, WaveMakerState> g_waveMakerStates;
 
 // Maintenance mode device state persistence
 static const char* MAINTENANCE_STATES_FILE = "/config/maintenance-states.json";
+
+// ============================================================================
+// SCHEDULER DEBUG LOG — writes to FS_USER so it appears in download page
+// ============================================================================
+static const char* SCHEDULER_DEBUG_LOG = "/config/scheduler-debug.log";
+static const size_t SCHEDULER_LOG_MAX_SIZE = 64 * 1024;  // 64 KB max, then truncate
+
+static void debugLog(const char* fmt, ...) {
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (len <= 0) return;
+
+    // Get timestamp string
+    struct tm timeinfo;
+    char timeBuf[32] = "??:??:??";
+    if (getLocalTime(&timeinfo)) {
+        strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    }
+
+    // Check file size, truncate if too large
+    if (FS_USER.exists(SCHEDULER_DEBUG_LOG)) {
+        File check = FS_USER.open(SCHEDULER_DEBUG_LOG, "r");
+        if (check) {
+            size_t sz = check.size();
+            check.close();
+            if (sz > SCHEDULER_LOG_MAX_SIZE) {
+                FS_USER.remove(SCHEDULER_DEBUG_LOG);
+            }
+        }
+    }
+
+    File f = FS_USER.open(SCHEDULER_DEBUG_LOG, "a");
+    if (f) {
+        f.printf("[%s] %s\n", timeBuf, buf);
+        f.close();
+    }
+    // Also print to serial
+    Serial.printf("[DBGLOG][%s] %s\n", timeBuf, buf);
+}
 
 // Structure for next-task.json persistence
 enum class TaskType : uint8_t {
@@ -1649,22 +1704,35 @@ static void calculateFeederNextTasks(const char* macStr, JsonObject schedule,
 // Helper: Calculate all upcoming tasks from a wavemaker device schedule
 static void calculateWaveMakerNextTasks(const char* macStr, JsonObject schedule,
                                          std::vector<NextTask>& tasks) {
-    // Get the days configuration
-    JsonObject days = schedule["days"].as<JsonObject>();
-    if (days.isNull()) return;
-
     // Get current time info
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)) return;
 
     const char* dayNames[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     int todayDow = timeinfo.tm_wday;
-    bool todayEnabled = days[dayNames[todayDow]] | false;
+
+    // Get the days configuration
+    // WaveMaker UI has no day picker — default ALL days to enabled when missing
+    JsonObject days = schedule["days"].as<JsonObject>();
+    bool hasDaysConfig = !days.isNull();
+
+    // Helper: check if a day-of-week is enabled (defaults to true for wavemaker)
+    auto isDayEnabled = [&](int dow) -> bool {
+        if (!hasDaysConfig) return true;              // No days object → all enabled
+        if (!days.containsKey(dayNames[dow])) return true; // Key missing → enabled
+        return days[dayNames[dow]].as<bool>();         // Explicit bool read
+    };
+
+    bool todayEnabled = isDayEnabled(todayDow);
 
     JsonArray entries = schedule["entries"].as<JsonArray>();
     if (entries.isNull()) return;
 
     int currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+
+    Serial.printf("[SCHEDULER] WM calc for %s: today=%s(dow=%d) enabled=%s curMin=%d hasDays=%s\n",
+                  macStr, dayNames[todayDow], todayDow, todayEnabled ? "Y" : "N",
+                  currentMinutes, hasDaysConfig ? "Y" : "N");
 
     int timeIndex = 0;
     for (JsonObject entry : entries) {
@@ -1700,13 +1768,20 @@ static void calculateWaveMakerNextTasks(const char* macStr, JsonObject schedule,
         task.dutyPercent = dutyPct;
 
         if (todayEnabled && wmMinutes > currentMinutes) {
+            // Today, future time — schedule for today
             task.scheduledTime = minutesToUnixTime(wmMinutes, true);
+            Serial.printf("[SCHEDULER] WM entry%d: %02d:%02d -> TODAY at %ld\n",
+                          timeIndex, hour, minute, (long)task.scheduledTime);
         } else {
+            // Find next enabled day
             for (int offset = 1; offset <= 7; offset++) {
                 int nextDow = (todayDow + offset) % 7;
-                if (days[dayNames[nextDow]] | false) {
+                if (isDayEnabled(nextDow)) {
                     task.scheduledTime = minutesToUnixTime(wmMinutes, true);
                     task.scheduledTime += offset * 24 * 60 * 60;
+                    Serial.printf("[SCHEDULER] WM entry%d: %02d:%02d -> +%d days at %ld (todayEn=%d wmMin=%d curMin=%d)\n",
+                                  timeIndex, hour, minute, offset, (long)task.scheduledTime,
+                                  todayEnabled, wmMinutes, currentMinutes);
                     break;
                 }
             }
@@ -1745,7 +1820,7 @@ static bool findNextTask(const std::vector<NextTask>& tasks, NextTask& next) {
 
 // Save next-task.json with all upcoming tasks
 static void saveNextTasks(const std::vector<NextTask>& tasks) {
-    DynamicJsonDocument doc(8192);
+    DynamicJsonDocument doc(16384);
     JsonArray arr = doc.createNestedArray("tasks");
     
     for (const NextTask& t : tasks) {
@@ -1770,11 +1845,17 @@ static void saveNextTasks(const std::vector<NextTask>& tasks) {
     
     doc["updatedAt"] = (long)getCurrentUnixTime();
     
+    if (doc.overflowed()) {
+        Serial.printf("[SCHEDULER] WARNING: next-task doc overflowed! %d tasks, %u bytes used\n",
+                      tasks.size(), (unsigned)doc.memoryUsage());
+    }
+    
     File file = FS_USER.open(NEXT_TASK_FILE, "w");
     if (file) {
         serializeJson(doc, file);
         file.close();
-        Serial.printf("[SCHEDULER] Saved %d tasks to next-task.json\n", tasks.size());
+        Serial.printf("[SCHEDULER] Saved %d tasks to next-task.json (%u bytes used)\n",
+                      tasks.size(), (unsigned)doc.memoryUsage());
     } else {
         Serial.println("[SCHEDULER] Failed to write next-task.json");
     }
@@ -1790,7 +1871,7 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
         return false;
     }
     
-    DynamicJsonDocument doc(8192);
+    DynamicJsonDocument doc(16384);
     DeserializationError error = deserializeJson(doc, file);
     file.close();
     
@@ -1800,10 +1881,19 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
     }
     
     JsonArray arr = doc["tasks"].as<JsonArray>();
+    debugLog("--- loadNextTasks: parsing %d entries from JSON ---", arr.size());
+    int idx = 0;
     for (JsonObject obj : arr) {
         NextTask t;
         t.mac = obj["mac"].as<String>();
         t.scheduleId = obj["scheduleId"].as<String>();
+
+        // Log raw JSON values BEFORE conversion
+        int rawTaskType = obj["taskType"] | -999;
+        bool rawActionOn = obj["actionOn"] | false;
+        long rawSchedTime = obj["scheduledTime"] | 0;
+        float rawDutyPct = obj["dutyPercent"] | -1.0f;
+
         t.taskType = (TaskType)(obj["taskType"] | 0);  // Default to LIGHT
         t.channel = obj["channel"] | 1;
         t.actionOn = obj["actionOn"] | true;
@@ -1812,9 +1902,16 @@ static bool loadNextTasks(std::vector<NextTask>& tasks) {
         t.pwmValue = obj["pwmValue"] | 0;
         t.durationMs = obj["durationMs"] | 0;
         t.dutyPercent = obj["dutyPercent"] | 0.0f;
+
+        debugLog("  task[%d] mac=%s rawTaskType=%d taskType=%d actionOn=%d(raw=%d) schedTime=%ld dutyPct=%.2f(raw=%.2f) period=%s",
+                 idx, t.mac.c_str(), rawTaskType, (int)t.taskType, t.actionOn, rawActionOn,
+                 (long)t.scheduledTime, t.dutyPercent, rawDutyPct, t.period.c_str());
+
         tasks.push_back(t);
+        idx++;
     }
     
+    debugLog("--- loadNextTasks: loaded %d tasks total ---", tasks.size());
     Serial.printf("[SCHEDULER] Loaded %d tasks from next-task.json\n", tasks.size());
     return true;
 }
@@ -2226,27 +2323,39 @@ static void appendActivityLog(const char* source,
 
 // Execute a scheduled task
 static bool executeTask(const NextTask& task) {
+    debugLog(">>> executeTask ENTER: mac=%s taskType=%d actionOn=%d dutyPercent=%.2f channel=%d period=%s schedTime=%ld",
+             task.mac.c_str(), (int)task.taskType, task.actionOn, task.dutyPercent,
+             task.channel, task.period.c_str(), (long)task.scheduledTime);
+
     // Check maintenance mode before executing
     if (isDeviceInMaintenanceMode(task.mac)) {
+        debugLog(">>> executeTask: MAINTENANCE MODE for %s — returning false", task.mac.c_str());
         Serial.printf("[SCHEDULER] Skipping task for %s (maintenance mode active)\n", task.mac.c_str());
         return false;
     }
+    debugLog(">>> executeTask: maintenance check PASSED for %s", task.mac.c_str());
     
     uint8_t mac[6];
     if (!parseMacAddress(task.mac.c_str(), mac)) {
+        debugLog(">>> executeTask: parseMacAddress FAILED for '%s' — returning false", task.mac.c_str());
         Serial.printf("[SCHEDULER] Invalid MAC in task: %s\n", task.mac.c_str());
         return false;
     }
+    debugLog(">>> executeTask: parseMacAddress OK -> %02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     
     // Check if node is online
     bool isOnline = ESPNowManager::getInstance().isPeerOnline(mac);
+    debugLog(">>> executeTask: isPeerOnline(%s) = %s", task.mac.c_str(), isOnline ? "TRUE" : "FALSE");
     if (!isOnline) {
+        debugLog(">>> executeTask: node OFFLINE — returning false");
         Serial.printf("[SCHEDULER] Node %s is OFFLINE, task deferred\n", task.mac.c_str());
         return false;  // Will retry later
     }
     
     // Trigger Hub Task LED to blink for 30 seconds
     triggerHubTaskLED();
+    debugLog(">>> executeTask: checking taskType=%d (LIGHT=0, FEEDER=1, WAVEMAKER=2)", (int)task.taskType);
     
     if (task.taskType == TaskType::FEEDER) {
         // Execute feeder task
@@ -2265,28 +2374,36 @@ static bool executeTask(const NextTask& task) {
         return true;
     } else if (task.taskType == TaskType::WAVEMAKER) {
         // Execute wavemaker task
+        debugLog(">>> executeTask: ENTERED WAVEMAKER branch for %s", task.mac.c_str());
         String wmKey = task.mac;
         wmKey.toUpperCase();
         String actionDesc;
         if (task.actionOn) {
+            debugLog(">>> executeTask: WAVEMAKER ON — calling sendWaveMakerCommand(duty=%.2f)", task.dutyPercent);
             Serial.printf("[SCHEDULER] Executing WAVEMAKER task: %s duty=%.1f%%\n",
                           task.mac.c_str(), task.dutyPercent);
             sendWaveMakerCommand(mac, task.dutyPercent);
             g_waveMakerStates[wmKey] = {true, task.dutyPercent};
             actionDesc = "Wavemaker ON (" + String(task.dutyPercent, 0) + "%)";
+            debugLog(">>> executeTask: g_waveMakerStates[%s] set to running=true duty=%.1f", wmKey.c_str(), task.dutyPercent);
         } else {
+            debugLog(">>> executeTask: WAVEMAKER STOP — calling sendWaveMakerStop()");
             Serial.printf("[SCHEDULER] Executing WAVEMAKER STOP task: %s\n", task.mac.c_str());
             sendWaveMakerStop(mac);
             g_waveMakerStates[wmKey] = {false, 0.0f};
             actionDesc = "Wavemaker OFF";
+            debugLog(">>> executeTask: g_waveMakerStates[%s] set to running=false", wmKey.c_str());
         }
         
         // Notify: scheduled task executed
         String devName, aqName, devType;
         lookupDeviceAndAquariumNames(task.mac, devName, aqName, devType);
+        debugLog(">>> executeTask: notifying — dev=%s aq=%s type=%s action=%s",
+                 devName.c_str(), aqName.c_str(), devType.c_str(), actionDesc.c_str());
         notifier.emitf("scheduler.task", NTFY_MSG_TASK_EXECUTED,
                         aqName.c_str(), devName.c_str(), devType.c_str(), actionDesc.c_str());
         appendActivityLog("scheduled", "wavemaker", actionDesc.c_str(), devName.c_str(), aqName.c_str());
+        debugLog(">>> executeTask: WAVEMAKER task complete — returning true");
         return true;
     } else {
         // Execute light task (default)
@@ -2321,13 +2438,27 @@ static bool executeTask(const NextTask& task) {
 // Find and execute any past-due tasks, with retry logic for offline nodes
 static void processPastDueTasks(std::vector<NextTask>& tasks, bool& needsRebuild) {
     time_t now = getCurrentUnixTime();
-    if (now == 0) return;  // NTP not ready
+    if (now == 0) {
+        debugLog("processPastDueTasks: NTP not ready (now=0), RETURNING");
+        return;  // NTP not ready
+    }
+    
+    debugLog("=== processPastDueTasks: now=%ld, %d tasks in list ===", (long)now, tasks.size());
+    for (size_t i = 0; i < tasks.size(); i++) {
+        long diff = (long)(tasks[i].scheduledTime - now);
+        debugLog("  [%d] mac=%s type=%d actionOn=%d schedTime=%ld diff=%lds duty=%.1f%% period=%s",
+                 (int)i, tasks[i].mac.c_str(), (int)tasks[i].taskType, tasks[i].actionOn,
+                 (long)tasks[i].scheduledTime, diff, tasks[i].dutyPercent, tasks[i].period.c_str());
+    }
     
     std::vector<NextTask> pendingRetry;
     bool anyExecuted = false;
     
     for (auto it = tasks.begin(); it != tasks.end(); ) {
         if (it->scheduledTime <= now) {
+            debugLog("  PAST-DUE found: mac=%s type=%d actionOn=%d duty=%.1f%% schedTime=%ld (now=%ld)",
+                     it->mac.c_str(), (int)it->taskType, it->actionOn, it->dutyPercent,
+                     (long)it->scheduledTime, (long)now);
             // Check if device is in maintenance mode - skip but keep task for later
             if (isDeviceInMaintenanceMode(it->mac)) {
                 Serial.printf("[SCHEDULER] SKIPPED (maintenance mode): %s task for %s\n",
@@ -2352,10 +2483,14 @@ static void processPastDueTasks(std::vector<NextTask>& tasks, bool& needsRebuild
                              (long)it->scheduledTime, (long)now);
             }
             
+            debugLog("  Calling executeTask for mac=%s type=%d actionOn=%d duty=%.1f%%",
+                     it->mac.c_str(), (int)it->taskType, it->actionOn, it->dutyPercent);
             if (executeTask(*it)) {
+                debugLog("  executeTask RETURNED TRUE (success) for mac=%s type=%d", it->mac.c_str(), (int)it->taskType);
                 anyExecuted = true;
                 it = tasks.erase(it);  // Remove executed task
             } else {
+                debugLog("  executeTask RETURNED FALSE (failed/offline) for mac=%s type=%d", it->mac.c_str(), (int)it->taskType);
                 // Node offline - keep for retry but update scheduled time to future
                 it->scheduledTime = now + 60;  // Retry in 60 seconds
                 pendingRetry.push_back(*it);
@@ -2371,6 +2506,8 @@ static void processPastDueTasks(std::vector<NextTask>& tasks, bool& needsRebuild
         tasks.push_back(t);
     }
     
+    debugLog("=== processPastDueTasks done: anyExecuted=%d retryCount=%d needsRebuild=%d ===",
+             anyExecuted, pendingRetry.size(), anyExecuted || !pendingRetry.empty());
     if (anyExecuted || !pendingRetry.empty()) {
         needsRebuild = true;  // Tasks changed, need to save
     }
@@ -2428,32 +2565,52 @@ void schedulerTask(void* parameter) {
             lastRebuildTime = now;
         }
         
-        // Find next task
+        // FIRST: Process any past-due tasks that became due during sleep.
+        // This MUST run before findNextTask/rebuild, because findNextTask
+        // only finds future tasks (scheduledTime > now) and a rebuild would
+        // overwrite past-due entries with next-day occurrences, losing them.
+        debugLog("--- schedulerLoop iteration: now=%ld, tasks.size=%d ---", (long)now, tasks.size());
+        needsSave = false;
+        processPastDueTasks(tasks, needsSave);
+        if (needsSave) {
+            debugLog("--- schedulerLoop: needsSave=true after processPastDueTasks, rebuilding ---");
+            rebuildNextTasks();
+            loadNextTasks(tasks);
+        }
+        
+        // Find next future task
         NextTask nextTask;
         if (findNextTask(tasks, nextTask)) {
             time_t waitSeconds = nextTask.scheduledTime - now;
+            debugLog("--- schedulerLoop: findNextTask found mac=%s type=%d duty=%.1f%% in %lds ---",
+                     nextTask.mac.c_str(), (int)nextTask.taskType, nextTask.dutyPercent, (long)waitSeconds);
             
             if (waitSeconds <= 0) {
-                // Task is due now
+                // Task is due now (edge case: time advanced between calls)
+                debugLog("--- schedulerLoop: waitSeconds<=0, executing NOW: mac=%s type=%d duty=%.1f%% ---",
+                         nextTask.mac.c_str(), (int)nextTask.taskType, nextTask.dutyPercent);
                 Serial.printf("[SCHEDULER] Executing: %s CH%d %s\n",
                              nextTask.mac.c_str(), nextTask.channel, 
                              nextTask.actionOn ? "ON" : "OFF");
                 
                 if (executeTask(nextTask)) {
+                    debugLog("--- schedulerLoop: direct executeTask returned true, rebuilding ---");
                     // Remove executed task and recalculate next occurrence
                     rebuildNextTasks();
                     loadNextTasks(tasks);
                 } else if (isDeviceInMaintenanceMode(nextTask.mac)) {
                     // Maintenance mode - don't retry aggressively, sleep normally
+                    debugLog("--- schedulerLoop: direct executeTask failed (maintenance), sleeping 60s ---");
                     Serial.println("[SCHEDULER] Task skipped (maintenance mode), checking again in 60s");
                     vTaskDelay(pdMS_TO_TICKS(60000));
                 } else {
                     // Node offline - wait 60 seconds and retry
+                    debugLog("--- schedulerLoop: direct executeTask failed (offline?), sleeping 60s ---");
                     Serial.println("[SCHEDULER] Node offline, retrying in 60s");
                     vTaskDelay(pdMS_TO_TICKS(60000));
                 }
             } else {
-                // Sleep until next task, capped to 5 minutes
+                // Sleep until next task, capped to max sleep
                 uint32_t waitMs = (uint32_t)(waitSeconds * 1000);
                 if (waitMs < minSleepMs) {
                     waitMs = minSleepMs;
@@ -2465,19 +2622,12 @@ void schedulerTask(void* parameter) {
                 vTaskDelay(pdMS_TO_TICKS(waitMs));
             }
         } else {
+            debugLog("--- schedulerLoop: NO upcoming tasks found, sleeping %lu ms ---", maxSleepMs);
             // No upcoming tasks, sleep for 5 minutes before rechecking
             Serial.printf("[SCHEDULER] No upcoming tasks, sleeping %lu ms\n", maxSleepMs);
             vTaskDelay(pdMS_TO_TICKS(maxSleepMs));
             
             // Rebuild in case schedule was updated
-            rebuildNextTasks();
-            loadNextTasks(tasks);
-        }
-        
-        // Process any past-due tasks (handles multi-task scenarios)
-        needsSave = false;
-        processPastDueTasks(tasks, needsSave);
-        if (needsSave) {
             rebuildNextTasks();
             loadNextTasks(tasks);
         }
@@ -6212,6 +6362,20 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     serializeJson(doc, resp);
     request->send(200, "application/json", resp);
 });
+
+    // DELETE scheduler debug log — clears the file for a fresh test run
+    server.on("/api/scheduler-debug-log", HTTP_DELETE, [](AsyncWebServerRequest *request){
+        if (FS_USER.exists(SCHEDULER_DEBUG_LOG)) {
+            FS_USER.remove(SCHEDULER_DEBUG_LOG);
+        }
+        // Write a fresh header
+        File f = FS_USER.open(SCHEDULER_DEBUG_LOG, "w");
+        if (f) {
+            f.println("=== Scheduler debug log cleared ===");
+            f.close();
+        }
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Debug log cleared\"}");
+    });
 
     // GET settings file list — list ALL files on FS_USER recursively
     server.on("/api/settings/files", HTTP_GET, [](AsyncWebServerRequest *request){

@@ -67,6 +67,24 @@
                         <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--border-color);">
 
                         <div>
+                            <h4 style="margin-bottom: 0.75rem;">🔍 Scheduler Debug Log</h4>
+                            <p style="font-size: 0.875rem; color: var(--color-text-secondary); margin-bottom: 0.75rem;">
+                                Clear the log before testing, then download it after the scheduled task fires.
+                            </p>
+                            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                                <button id="btnClearDebugLog" class="btn btn-secondary" onclick="clearDebugLog()">
+                                    🗑️ Clear Debug Log
+                                </button>
+                                <a class="btn btn-primary" href="/api/settings/download?name=%2Fconfig%2Fscheduler-debug.log">
+                                    ⬇️ Download Debug Log
+                                </a>
+                            </div>
+                            <div id="debugLogStatus" style="margin-top: 0.75rem;"></div>
+                        </div>
+
+                        <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                        <div>
                             <h4 style="margin-bottom: 0.75rem;">Upload JSON File</h4>
                             <form id="uploadForm">
                                 <div class="form-group">
@@ -93,5 +111,23 @@
     <script src="/scripts/app.js?v=20260116"></script>
     <script src="/scripts/sidebar-inject.js?v=20260116"></script>
     <script src="/settings/settings-download-upload.js?v=20260116"></script>
+    <script>
+    function clearDebugLog() {
+        const status = document.getElementById('debugLogStatus');
+        status.innerHTML = '<span style="color: var(--color-primary);">Clearing...</span>';
+        fetch('/api/scheduler-debug-log', { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    status.innerHTML = '<span style="color: var(--color-accent);">✅ Debug log cleared. Ready for testing.</span>';
+                } else {
+                    status.innerHTML = '<span style="color: var(--color-accent-danger);">❌ ' + (data.error || 'Failed') + '</span>';
+                }
+            })
+            .catch(err => {
+                status.innerHTML = '<span style="color: var(--color-accent-danger);">❌ Error: ' + err.message + '</span>';
+            });
+    }
+    </script>
 </body>
 </html>

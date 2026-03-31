@@ -374,34 +374,66 @@ void updateHubStatusLEDs() {
     }
     
     // === LED 2: Device Offline Status ===
-    // Blink if any device offline, solid ON if all devices online
+    // Blink if any mapped device offline, solid ON if all mapped devices online
     auto& espnow = ESPNowManager::getInstance();
     std::vector<PeerStatus> peers = espnow.getPeers();
-    size_t peerCount = peers.size();
-    
-    // Check if any peer is offline
-    bool anyDeviceOffline = false;
-    for (const PeerStatus& p : peers) {
-        if (!p.online) {
-            anyDeviceOffline = true;
-            break;
+
+    static std::vector<String> cachedValidMacs;
+    static uint32_t lastMacsLoadMs = 0;
+    if (now - lastMacsLoadMs > 10000 || cachedValidMacs.empty()) {
+        cachedValidMacs.clear();
+        lastMacsLoadMs = now;
+        File devFile = FS_USER.open("/config/devices.json", "r");
+        if (devFile) {
+            DynamicJsonDocument devDoc(8192);
+            DeserializationError devErr = deserializeJson(devDoc, devFile);
+            devFile.close();
+            if (!devErr) {
+                JsonArray devices = devDoc["devices"].as<JsonArray>();
+                for (JsonObject dev : devices) {
+                    String mac = dev["mac"].as<String>();
+                    mac.toUpperCase();
+                    if (mac.length() > 0) {
+                        cachedValidMacs.push_back(mac);
+                    }
+                }
+            }
         }
     }
-    
-    if (!anyDeviceOffline && peerCount > 0) {
-        // Solid ON when all devices online
+
+    std::map<String, bool> peerOnline;
+    for (const PeerStatus& p : peers) {
+        String mac = macToString(p.mac);
+        mac.toUpperCase();
+        peerOnline[mac] = p.online;
+    }
+
+    bool anyDeviceOffline = false;
+    size_t mappedCount = cachedValidMacs.size();
+    if (mappedCount > 0) {
+        for (const String& mac : cachedValidMacs) {
+            auto it = peerOnline.find(mac);
+            if (it == peerOnline.end() || !it->second) {
+                anyDeviceOffline = true;
+                break;
+            }
+        }
+    }
+
+    if (!anyDeviceOffline && mappedCount > 0) {
+        // Solid ON when all mapped devices online
         if (!hubLedDeviceState) {
             hubLedDeviceState = true;
             hubLedWrite(HUB_LED_DEVICE_CH, true);
         }
-    } else if (peerCount == 0) {
-        // OFF when no devices registered at all
+    } else if (mappedCount == 0) {
+        // OFF when no mapped devices exist
         if (hubLedDeviceState) {
             hubLedDeviceState = false;
             hubLedWrite(HUB_LED_DEVICE_CH, false);
         }
     } else {
-        // Blink when some devices offline
+        // Blink when any mapped device offline
         if (now - hubLedLastToggle[1] >= HUB_LED_BLINK_INTERVAL_MS) {
             hubLedLastToggle[1] = now;
             hubLedDeviceState = !hubLedDeviceState;
@@ -1446,45 +1478,10 @@ static std::map<String, WaveMakerState> g_waveMakerStates;
 static const char* MAINTENANCE_STATES_FILE = "/config/maintenance-states.json";
 
 // ============================================================================
-// SCHEDULER DEBUG LOG — writes to FS_USER so it appears in download page
+// SCHEDULER DEBUG (disabled)
 // ============================================================================
-static const char* SCHEDULER_DEBUG_LOG = "/config/scheduler-debug.log";
-static const size_t SCHEDULER_LOG_MAX_SIZE = 64 * 1024;  // 64 KB max, then truncate
-
 static void debugLog(const char* fmt, ...) {
-    char buf[512];
-    va_list args;
-    va_start(args, fmt);
-    int len = vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-    if (len <= 0) return;
-
-    // Get timestamp string
-    struct tm timeinfo;
-    char timeBuf[32] = "??:??:??";
-    if (getLocalTime(&timeinfo)) {
-        strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &timeinfo);
-    }
-
-    // Check file size, truncate if too large
-    if (FS_USER.exists(SCHEDULER_DEBUG_LOG)) {
-        File check = FS_USER.open(SCHEDULER_DEBUG_LOG, "r");
-        if (check) {
-            size_t sz = check.size();
-            check.close();
-            if (sz > SCHEDULER_LOG_MAX_SIZE) {
-                FS_USER.remove(SCHEDULER_DEBUG_LOG);
-            }
-        }
-    }
-
-    File f = FS_USER.open(SCHEDULER_DEBUG_LOG, "a");
-    if (f) {
-        f.printf("[%s] %s\n", timeBuf, buf);
-        f.close();
-    }
-    // Also print to serial
-    Serial.printf("[DBGLOG][%s] %s\n", timeBuf, buf);
+    (void)fmt;
 }
 
 // Structure for next-task.json persistence
@@ -2339,6 +2336,22 @@ static void appendActivityLog(const char* source,
 
     Serial.printf("[ACTIVITY] %s | %s | %s | %s | %s\n",
                   source, category, action, device, aquarium);
+}
+
+/**
+ * Clear all activity entries from persistent storage.
+ */
+static bool clearActivityLogEntries()
+{
+    JsonDocument doc;
+    doc["entries"].to<JsonArray>();
+
+    File out = FS_USER.open(ACTIVITY_LOG_PATH, "w");
+    if (!out) return false;
+
+    serializeJson(doc, out);
+    out.close();
+    return true;
 }
 
 // Execute a scheduled task
@@ -6402,20 +6415,6 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(200, "application/json", resp);
 });
 
-    // DELETE scheduler debug log — clears the file for a fresh test run
-    server.on("/api/scheduler-debug-log", HTTP_DELETE, [](AsyncWebServerRequest *request){
-        if (FS_USER.exists(SCHEDULER_DEBUG_LOG)) {
-            FS_USER.remove(SCHEDULER_DEBUG_LOG);
-        }
-        // Write a fresh header
-        File f = FS_USER.open(SCHEDULER_DEBUG_LOG, "w");
-        if (f) {
-            f.println("=== Scheduler debug log cleared ===");
-            f.close();
-        }
-        request->send(200, "application/json", "{\"success\":true,\"message\":\"Debug log cleared\"}");
-    });
-
     // GET settings file list — list ALL files on FS_USER recursively
     server.on("/api/settings/files", HTTP_GET, [](AsyncWebServerRequest *request){
         DynamicJsonDocument doc(4096);
@@ -7947,6 +7946,16 @@ server.on("/api/hub-macs", HTTP_GET, [](AsyncWebServerRequest *request){
         String json;
         serializeJson(resp, json);
         request->send(200, "application/json", json);
+    });
+
+    // DELETE /api/activity-log  — clears all activity entries
+    server.on("/api/activity-log", HTTP_DELETE, [](AsyncWebServerRequest *request){
+        if (!clearActivityLogEntries()) {
+            request->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to clear activity log\"}");
+            return;
+        }
+
+        request->send(200, "application/json", "{\"success\":true,\"entries\":[]}");
     });
 
     // ========================================================================

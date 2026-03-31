@@ -17,9 +17,9 @@
   <nav class="navbar">
     <div class="navbar-content">
       <div class="navbar-brand">
-        <img src="/images/logo.png" alt="AMS Logo" class="navbar-logo">
+        <img src="/images/new-header.PNG" alt="AquaSense" class="navbar-logo">
         <div class="brand-info">
-          <h1 class="brand-title">Aquarium Management System</h1>
+          <h1 class="brand-title">AquaSense</h1>
           <span class="brand-subtitle">Smart Control & Monitoring</span>
         </div>
       </div>
@@ -140,7 +140,10 @@
       <div class="card" style="margin-bottom: 2rem;">
         <div class="card-header">
           <h3 class="card-title">Recent Activity</h3>
-          <span class="badge badge-info" id="activity-count">0 events</span>
+          <div style="display:flex;gap:0.5rem;align-items:center;">
+            <button id="clear-activity-btn" type="button" class="btn btn-secondary" style="padding:0.35rem 0.7rem;font-size:0.8rem;">Clear</button>
+            <span class="badge badge-info" id="activity-count">0 events</span>
+          </div>
         </div>
         <div class="card-content">
           <div id="activity-log-container" style="max-height: 320px; overflow-y: auto;">

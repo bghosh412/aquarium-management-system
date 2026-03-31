@@ -244,8 +244,10 @@ function logMessage(message, type = 'info') {
 
 // Setup event listeners for UI controls
 function setupEventListeners() {
-    // Add any dynamic event listeners here
-    // Most functionality is now handled via specific page controls
+    const clearBtn = document.getElementById('clear-activity-btn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearActivityLog);
+    }
 }
 
 // padZero kept for any remaining callers
@@ -444,12 +446,7 @@ async function fetchActivityLog() {
 
         const entries = data.entries || [];
         if (entries.length === 0) {
-            container.innerHTML = `
-                <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
-                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">📋</div>
-                    <p>No recent activity.</p>
-                </div>`;
-            badge.textContent = '0 events';
+            renderEmptyActivityState(container, badge);
             return;
         }
 
@@ -477,5 +474,44 @@ async function fetchActivityLog() {
         }).join('');
     } catch (err) {
         console.error('Error fetching activity log:', err);
+    }
+}
+
+function renderEmptyActivityState(container, badge) {
+    container.innerHTML = `
+        <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📋</div>
+            <p>No recent activity.</p>
+        </div>`;
+    badge.textContent = '0 events';
+}
+
+async function clearActivityLog() {
+    const clearBtn = document.getElementById('clear-activity-btn');
+    const container = document.getElementById('activity-list');
+    const badge = document.getElementById('activity-count');
+    if (!clearBtn || !container || !badge) return;
+
+    if (!confirm('Clear all recent activity entries?')) {
+        return;
+    }
+
+    const originalText = clearBtn.textContent;
+    clearBtn.disabled = true;
+    clearBtn.textContent = 'Clearing...';
+
+    try {
+        const resp = await fetch('/api/activity-log', { method: 'DELETE' });
+        if (!resp.ok) throw new Error('Failed to clear activity log');
+
+        renderEmptyActivityState(container, badge);
+        addActivityLog('Recent activity cleared', 'success');
+        await fetchActivityLog();
+    } catch (err) {
+        console.error('Error clearing activity log:', err);
+        alert('Unable to clear activity log. Please try again.');
+    } finally {
+        clearBtn.disabled = false;
+        clearBtn.textContent = originalText;
     }
 }

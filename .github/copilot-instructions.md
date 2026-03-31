@@ -121,6 +121,16 @@ vim include/protocol/messages.h
 - **Test compilation**: Run `platformio run` before committing
 - **No documentation files**: Do NOT create markdown (.md) documentation files unless explicitly requested by the user
 
+### Required Pipeline for Any Code Change
+When the user asks for a change that requires code updates (single-item or multi-item), follow this exact pipeline:
+1. Initialize eval framework for each line item.
+2. Detail requirements and acceptance criteria and update the respective story.md. Also create an implementation plan that details out the required changes (file name, method name, and what to update). Name the implementation plan as per eval framework nomenclature.
+3. Generate code.
+4. Build and check for build errors.
+5. Run eval and show output JSON files in chat.
+
+See [eval_instruction.md](eval_instruction.md) for story/plan formats and artifact conventions.
+
 ---
 
 **Last Updated**: January 15, 2026  

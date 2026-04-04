@@ -134,6 +134,290 @@ struct WaveMakerStatus {
 static std::map<String, WaveMakerStatus> g_waveMakerStatus;
 static std::map<String, uint32_t> g_waveMakerStatusPending;
 
+struct CO2Status {
+    bool relayOn;
+    float pH;
+    uint16_t rawADC;
+    uint8_t errorFlags;
+    uint32_t updatedAt;
+};
+
+static std::map<String, CO2Status> g_co2Status;
+static std::map<String, uint32_t> g_co2StatusPending;
+
+// CO2 delta control: tracks whether relay was turned OFF by pH delta logic (not by schedule)
+static std::map<String, bool> g_co2DeltaOff;
+
+// CO2 baseline pH file path
+static const char* CO2_BASELINE_FILE = "/data/co2-baseline-ph.json";
+
+// pH history: stores timestamped pH readings per MAC in LittleFS JSON files
+// File path: /data/ph-history/<MAC_DASHED>.json  (colons replaced with dashes)
+// Each file contains a JSON array of {"t":<epoch_seconds>,"pH":<float>} objects.
+// "t" is Unix epoch seconds (from NTP) so data survives reboots.
+static const char* PH_HISTORY_DIR = "/data/ph-history";
+static std::map<String, uint32_t> g_phHistoryLastStore;  // millis() of last store per MAC (rate-limit only, in-memory)
+
+static const uint32_t PH_HISTORY_INTERVAL_MS  = 300000;   // 5 minutes (rate-limit uses millis())
+static const time_t   PH_HISTORY_MAX_AGE_SEC  = 86400;    // 24 hours in seconds
+static const size_t   PH_HISTORY_MAX_ENTRIES  = 288;      // 24h / 5min = 288 max entries
+
+// Build the LittleFS file path for a given MAC address
+static String phHistoryPath(const String& macKey) {
+    String safe = macKey;
+    safe.replace(':', '-');
+    return String(PH_HISTORY_DIR) + "/" + safe + ".json";
+}
+
+// Store a pH reading to a LittleFS JSON file, pruning entries older than 24 hours.
+// Uses Unix epoch seconds for timestamps so data survives hub reboots.
+static void storePHReading(const String& macKey, float pH) {
+    // Need valid wall-clock time — skip if NTP hasn't synced yet
+    time_t epochNow = time(nullptr);
+    if (epochNow < 1600000000) return;  // before ~Sep 2020 means NTP not synced
+
+    uint32_t nowMs = millis();
+
+    // Rate-limit: only store once every 5 minutes per MAC (uses millis for in-session throttling)
+    auto lastIt = g_phHistoryLastStore.find(macKey);
+    if (lastIt != g_phHistoryLastStore.end()) {
+        if (nowMs - lastIt->second < PH_HISTORY_INTERVAL_MS) return;
+    }
+    g_phHistoryLastStore[macKey] = nowMs;
+
+    String filePath = phHistoryPath(macKey);
+
+    // Ensure directory exists
+    if (!FS_USER.exists(PH_HISTORY_DIR)) {
+        FS_USER.mkdir("/data");
+        FS_USER.mkdir(PH_HISTORY_DIR);
+    }
+
+    // Read existing history from file
+    DynamicJsonDocument doc(12288);  // ~288 entries × ~40 bytes each
+    JsonArray arr;
+
+    if (FS_USER.exists(filePath)) {
+        File f = FS_USER.open(filePath, "r");
+        if (f) {
+            DeserializationError err = deserializeJson(doc, f);
+            f.close();
+            if (err || !doc.is<JsonArray>()) {
+                // Corrupted file — log warning and start fresh
+                Serial.printf("[CO2] pH history file corrupted for %s, resetting\n", macKey.c_str());
+                doc.clear();
+            }
+        }
+    }
+
+    if (doc.is<JsonArray>()) {
+        arr = doc.as<JsonArray>();
+    } else {
+        arr = doc.to<JsonArray>();
+    }
+
+    // Prune entries older than 24 hours (compare epoch seconds)
+    while (arr.size() > 0) {
+        time_t entryT = (time_t)(arr[0]["t"].as<unsigned long>());
+        if ((epochNow - entryT) > PH_HISTORY_MAX_AGE_SEC) {
+            arr.remove(0);
+        } else {
+            break;
+        }
+    }
+
+    // Cap at max entries (remove oldest if needed)
+    while (arr.size() >= PH_HISTORY_MAX_ENTRIES) {
+        arr.remove(0);
+    }
+
+    // Append new entry (store pH as a 2-decimal float, t as epoch seconds)
+    JsonObject entry = arr.createNestedObject();
+    entry["t"] = (unsigned long)epochNow;
+    entry["pH"] = (float)((int)(pH * 100.0f + 0.5f)) / 100.0f;
+
+    // Write back to file
+    File f = FS_USER.open(filePath, "w");
+    if (f) {
+        serializeJson(arr, f);
+        f.close();
+    } else {
+        Serial.printf("[CO2] Failed to write pH history file: %s\n", filePath.c_str());
+    }
+}
+
+// Store CO2 baseline pH to LittleFS (called when scheduler executes a CO2 START)
+static void storeCO2BaselinePH(const String& macKey, float baselinePH) {
+    // Ensure /data directory exists
+    if (!FS_USER.exists("/data")) {
+        FS_USER.mkdir("/data");
+    }
+
+    // Read existing file (may contain baselines for multiple MACs)
+    DynamicJsonDocument doc(2048);
+
+    if (FS_USER.exists(CO2_BASELINE_FILE)) {
+        File f = FS_USER.open(CO2_BASELINE_FILE, "r");
+        if (f) {
+            DeserializationError err = deserializeJson(doc, f);
+            f.close();
+            if (err) doc.clear();
+        }
+    }
+
+    if (!doc.is<JsonObject>()) {
+        doc.clear();
+        doc.to<JsonObject>();
+    }
+
+    // Store/overwrite baseline for this MAC
+    JsonObject entry;
+    if (doc.containsKey(macKey)) {
+        entry = doc[macKey].as<JsonObject>();
+    } else {
+        entry = doc.createNestedObject(macKey);
+    }
+
+    entry["baselinePH"] = (float)((int)(baselinePH * 100.0f + 0.5f)) / 100.0f;
+
+    // Store date and time strings
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        char dateBuf[12], timeBuf[6];
+        strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d", &timeinfo);
+        strftime(timeBuf, sizeof(timeBuf), "%H:%M", &timeinfo);
+        entry["date"] = dateBuf;
+        entry["time"] = timeBuf;
+    }
+    entry["epoch"] = (unsigned long)time(nullptr);
+
+    File f = FS_USER.open(CO2_BASELINE_FILE, "w");
+    if (f) {
+        serializeJson(doc, f);
+        f.close();
+        Serial.printf("[CO2] Stored baseline pH=%.2f for %s\n", baselinePH, macKey.c_str());
+    } else {
+        Serial.printf("[CO2] Failed to write baseline file\n");
+    }
+}
+
+// Load CO2 baseline pH from LittleFS for a specific MAC
+static float loadCO2BaselinePH(const String& macKey) {
+    if (!FS_USER.exists(CO2_BASELINE_FILE)) return -1.0f;
+
+    File f = FS_USER.open(CO2_BASELINE_FILE, "r");
+    if (!f) return -1.0f;
+
+    DynamicJsonDocument doc(2048);
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    if (err) return -1.0f;
+
+    String macUpper = macKey;
+    macUpper.toUpperCase();
+
+    if (doc.containsKey(macUpper)) {
+        return doc[macUpper]["baselinePH"] | -1.0f;
+    }
+
+    // Also try original case
+    if (doc.containsKey(macKey)) {
+        return doc[macKey]["baselinePH"] | -1.0f;
+    }
+
+    return -1.0f;
+}
+
+// Load CO2 delta thresholds from co2-schedule.json for a specific MAC
+static bool loadCO2Thresholds(const String& macKey, float& offThreshold, float& onThreshold) {
+    offThreshold = 0.8f;  // defaults
+    onThreshold = 0.6f;
+
+    File file = FS_USER.open("/config/schedule/co2-schedule.json", "r");
+    if (!file) return false;
+
+    DynamicJsonDocument doc(4096);
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    if (err) return false;
+
+    JsonArray schedules = doc["schedules"].as<JsonArray>();
+    String macUpper = macKey;
+    macUpper.toUpperCase();
+
+    for (JsonObject sched : schedules) {
+        String schedMac = sched["mac"] | "";
+        schedMac.toUpperCase();
+        if (schedMac == macUpper) {
+            offThreshold = sched["deltaOffThreshold"] | 0.8f;
+            onThreshold = sched["deltaOnThreshold"] | 0.6f;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Check if current time is within a CO2 scheduled ON window for a given MAC
+static bool isCO2ScheduleActive(const String& macKey) {
+    File file = FS_USER.open("/config/schedule/co2-schedule.json", "r");
+    if (!file) return false;
+
+    DynamicJsonDocument doc(4096);
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    if (err) return false;
+
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) return false;
+
+    int currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+
+    JsonArray schedules = doc["schedules"].as<JsonArray>();
+    String macUpper = macKey;
+    macUpper.toUpperCase();
+
+    for (JsonObject sched : schedules) {
+        String schedMac = sched["mac"] | "";
+        schedMac.toUpperCase();
+        if (schedMac != macUpper) continue;
+
+        JsonObject schedule = sched["schedule"];
+        JsonArray entries = schedule["entries"].as<JsonArray>();
+        if (entries.isNull()) return false;
+
+        // Collect start/stop times and sort by minute-of-day
+        int lastStartMin = -1;
+        int lastStopMin = -1;
+
+        for (JsonObject entry : entries) {
+            int hour = entry["hour"] | 8;
+            int minute = entry["minute"] | 0;
+            String ampm = entry["ampm"] | "AM";
+            String action = entry["action"] | "start";
+
+            if (ampm == "PM" && hour != 12) hour += 12;
+            else if (ampm == "AM" && hour == 12) hour = 0;
+
+            int entryMin = hour * 60 + minute;
+
+            if (action == "start" && entryMin <= currentMinutes) {
+                if (entryMin > lastStartMin) lastStartMin = entryMin;
+            }
+            if (action == "stop" && entryMin > currentMinutes) {
+                if (lastStopMin < 0 || entryMin < lastStopMin) lastStopMin = entryMin;
+            }
+        }
+
+        // We're in a schedule window if there's a START before now and a STOP after now
+        if (lastStartMin >= 0 && lastStopMin > 0) {
+            return true;
+        }
+
+        return false;
+    }
+    return false;
+}
+
 static String macToString(const uint8_t* mac) {
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -475,9 +759,10 @@ void updateHubStatusLEDs() {
             JsonDocument doc;
             DeserializationError err = deserializeJson(doc, f);
             f.close();
-            if (!err && doc.is<JsonArray>()) {
-                JsonArray arr = doc.as<JsonArray>();
-                hasUnmappedDevices = (arr.size() > 0);
+            if (!err) {
+                // File format: {"metadata":{...},"unmappedDevices":[...]}
+                JsonArray arr = doc["unmappedDevices"].as<JsonArray>();
+                hasUnmappedDevices = (!arr.isNull() && arr.size() > 0);
             }
         }
     }
@@ -1488,15 +1773,16 @@ static void debugLog(const char* fmt, ...) {
 enum class TaskType : uint8_t {
     LIGHT = 0,
     FEEDER = 1,
-    WAVEMAKER = 2
+    WAVEMAKER = 2,
+    CO2 = 3
 };
 
 struct NextTask {
     String mac;
     String scheduleId;       // Unique identifier for this schedule entry
-    TaskType taskType;       // LIGHT, FEEDER, or WAVEMAKER
+    TaskType taskType;       // LIGHT, FEEDER, WAVEMAKER, or CO2
     int channel;             // For LIGHT: 1, 2, or 3
-    bool actionOn;           // For LIGHT: true = turn ON, false = turn OFF
+    bool actionOn;           // For LIGHT/CO2: true = turn ON, false = turn OFF
     time_t scheduledTime;    // Unix timestamp
     String period;           // For LIGHT: "morning" or "evening"
     // For FEEDER:
@@ -1521,6 +1807,9 @@ static String generateScheduleId(const char* mac, const char* period, int channe
     } else if (type == TaskType::WAVEMAKER) {
         id += "_WM";
         id += String(feedIndex + 1);  // reuse feedIndex as time index
+    } else if (type == TaskType::CO2) {
+        id += "_CO2";
+        id += String(feedIndex + 1);  // reuse feedIndex as entry index
     } else {
         id += "_";
         id += String(period);
@@ -1788,6 +2077,59 @@ static void calculateWaveMakerNextTasks(const char* macStr, JsonObject schedule,
 
         if (task.scheduledTime > 0) {
             tasks.push_back(task);
+        }
+
+        timeIndex++;
+    }
+}
+
+// Helper: Calculate all upcoming tasks from a CO2 device schedule
+static void calculateCO2NextTasks(const char* macStr, JsonArray entries,
+                                   std::vector<NextTask>& tasks) {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) return;
+
+    int currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+
+    int timeIndex = 0;
+    for (JsonObject entry : entries) {
+        int hour = entry["hour"] | 8;
+        int minute = entry["minute"] | 0;
+        String ampm = entry["ampm"] | "AM";
+        String action = entry["action"] | "start";
+
+        // Convert to 24-hour format
+        if (ampm == "PM" && hour != 12) hour += 12;
+        else if (ampm == "AM" && hour == 12) hour = 0;
+
+        int co2Minutes = hour * 60 + minute;
+
+        String schedId = generateScheduleId(macStr, "", 0, timeIndex, TaskType::CO2);
+
+        NextTask task;
+        task.mac = macStr;
+        task.scheduleId = schedId;
+        task.taskType = TaskType::CO2;
+        task.channel = 0;
+        task.actionOn = (action == "start");
+        task.period = String("co2") + String(timeIndex + 1);
+        task.pwmValue = 0;
+        task.durationMs = 0;
+        task.dutyPercent = 0.0f;
+
+        if (co2Minutes > currentMinutes) {
+            // Today, future time
+            task.scheduledTime = minutesToUnixTime(co2Minutes, true);
+        } else {
+            // Tomorrow
+            task.scheduledTime = minutesToUnixTime(co2Minutes, true);
+            task.scheduledTime += 24 * 60 * 60;
+        }
+
+        if (task.scheduledTime > 0) {
+            tasks.push_back(task);
+            Serial.printf("[SCHEDULER] CO2 entry%d: %02d:%02d %s -> %ld\n",
+                          timeIndex, hour, minute, action.c_str(), (long)task.scheduledTime);
         }
 
         timeIndex++;
@@ -2188,6 +2530,45 @@ void rebuildNextTasks() {
         Serial.println("[SCHEDULER] No wm-schedule.json found");
     }
     
+    // === Process CO2 schedules ===
+    file = FS_USER.open("/config/schedule/co2-schedule.json", "r");
+    if (file) {
+        DynamicJsonDocument co2Doc(4096);
+        DeserializationError error = deserializeJson(co2Doc, file);
+        file.close();
+        
+        if (!error) {
+            JsonArray schedules = co2Doc["schedules"].as<JsonArray>();
+            for (JsonObject sched : schedules) {
+                const char* macStr = sched["mac"];
+                if (!macStr) continue;
+                
+                // Skip if device is deleted/unmapped
+                String macUpper = String(macStr);
+                macUpper.toUpperCase();
+                bool found = false;
+                for (const String& vm : validMacs) {
+                    if (vm == macUpper) { found = true; break; }
+                }
+                if (!found) {
+                    Serial.printf("[SCHEDULER] Skipping CO2 schedule for deleted/unmapped device: %s\n", macStr);
+                    continue;
+                }
+                
+                JsonObject schedule = sched["schedule"];
+                JsonArray entries = schedule["entries"].as<JsonArray>();
+                if (!entries.isNull()) {
+                    calculateCO2NextTasks(macStr, entries, allTasks);
+                }
+            }
+            Serial.printf("[SCHEDULER] Processed CO2 schedules, %d total tasks\n", allTasks.size());
+        } else {
+            Serial.printf("[SCHEDULER] Failed to parse co2-schedule.json: %s\n", error.c_str());
+        }
+    } else {
+        Serial.println("[SCHEDULER] No co2-schedule.json found");
+    }
+    
     saveNextTasks(allTasks);
     g_nextTasksDirty = true;  // Notify scheduler task to reload
 }
@@ -2388,9 +2769,77 @@ static bool executeTask(const NextTask& task) {
     
     // Trigger Hub Task LED to blink for 30 seconds
     triggerHubTaskLED();
-    debugLog(">>> executeTask: checking taskType=%d (LIGHT=0, FEEDER=1, WAVEMAKER=2)", (int)task.taskType);
+    debugLog(">>> executeTask: checking taskType=%d (LIGHT=0, FEEDER=1, WAVEMAKER=2, CO2=3)", (int)task.taskType);
     
-    if (task.taskType == TaskType::FEEDER) {
+    if (task.taskType == TaskType::CO2) {
+        // Execute CO2 task (START or STOP)
+        debugLog(">>> executeTask: ENTERED CO2 branch for %s actionOn=%d", task.mac.c_str(), task.actionOn);
+        String co2Key = task.mac;
+        co2Key.toUpperCase();
+
+        // Build and send ESP-NOW command
+        CommandMessage cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.header.type = MessageType::COMMAND;
+        cmd.header.tankId = 0;
+        cmd.header.nodeType = NodeType::HUB;
+        cmd.header.timestamp = millis();
+        cmd.commandId = generateCommandId();
+        cmd.commandSeqID = 0;
+        cmd.finalCommand = true;
+
+        String actionDesc;
+        if (task.actionOn) {
+            // CO2 START: send relay ON + capture baseline pH
+            cmd.commandData[0] = 1;  // CO2 ON
+#ifdef ESP32
+            ESPNowManager::getInstance().addPeer(mac, WIFI_IF_AP);
+#else
+            ESPNowManager::getInstance().addPeer(mac);
+#endif
+            ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd));
+
+            // Capture current pH as baseline (from last cached status)
+            if (g_co2Status.find(co2Key) != g_co2Status.end()) {
+                float currentPH = g_co2Status[co2Key].pH;
+                if (currentPH > 0.0f && currentPH < 14.0f) {
+                    storeCO2BaselinePH(co2Key, currentPH);
+                    Serial.printf("[CO2] Baseline pH=%.2f captured for %s\n", currentPH, co2Key.c_str());
+                } else {
+                    Serial.printf("[CO2] WARNING: Invalid pH=%.2f, baseline not stored for %s\n", currentPH, co2Key.c_str());
+                }
+            } else {
+                Serial.printf("[CO2] WARNING: No cached pH status for %s, baseline not stored\n", co2Key.c_str());
+            }
+
+            g_co2DeltaOff[co2Key] = false;  // Reset delta-off flag on new START
+            actionDesc = "CO2 ON";
+        } else {
+            // CO2 STOP: send relay OFF
+            cmd.commandData[0] = 2;  // CO2 OFF
+#ifdef ESP32
+            ESPNowManager::getInstance().addPeer(mac, WIFI_IF_AP);
+#else
+            ESPNowManager::getInstance().addPeer(mac);
+#endif
+            ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd));
+
+            g_co2DeltaOff.erase(co2Key);  // Clear delta-off tracking
+            actionDesc = "CO2 OFF";
+        }
+
+        Serial.printf("[SCHEDULER] Executing CO2 task: %s %s\n",
+                      task.mac.c_str(), actionDesc.c_str());
+
+        // Notify: scheduled task executed
+        String devName, aqName, devType;
+        lookupDeviceAndAquariumNames(task.mac, devName, aqName, devType);
+        notifier.emitf("scheduler.task", NTFY_MSG_TASK_EXECUTED,
+                        aqName.c_str(), devName.c_str(), devType.c_str(), actionDesc.c_str());
+        appendActivityLog("scheduled", "co2", actionDesc.c_str(), devName.c_str(), aqName.c_str());
+        debugLog(">>> executeTask: CO2 task complete — returning true");
+        return true;
+    } else if (task.taskType == TaskType::FEEDER) {
         // Execute feeder task
         Serial.printf("[SCHEDULER] Executing FEEDER task: %s PWM=%u duration=%ums\n",
                       task.mac.c_str(), task.pwmValue, task.durationMs);
@@ -3265,6 +3714,15 @@ bool setupFilesystem() {
     // Ensure schedule directory exists
     if (!FS_USER.exists("/config/schedule")) {
         FS_USER.mkdir("/config/schedule");
+    }
+
+    // Ensure pH history directory exists
+    if (!FS_USER.exists("/data")) {
+        FS_USER.mkdir("/data");
+    }
+    if (!FS_USER.exists("/data/ph-history")) {
+        FS_USER.mkdir("/data/ph-history");
+        Serial.println("   - pH history directory created");
     }
 
     // Initialize light-schedule.json if it doesn't exist
@@ -5292,6 +5750,554 @@ void setupWebServer() {
         String response;
         serializeJson(resp, response);
         request->send(200, "application/json", response);
+    });
+
+    // ========================================================================
+    // CO2 CALIBRATION API
+    // ========================================================================
+    // POST /api/co2/calibrate
+    // Body: { "mac": "xx:xx:xx:xx:xx:xx", "actual_ph": 7.0 }
+    //
+    // Sends command 41 to the specified CO2 node. The node extracts the
+    // actual_ph float, computes the voltage trim that corrects the current
+    // reading to that value, and persists it to /node_config.txt in LittleFS.
+    //
+    // Use while probe is submerged in a known reference buffer solution.
+
+    server.on("/api/co2/calibrate", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(256);
+        DeserializationError parseErr = deserializeJson(body, data, len);
+        if (parseErr) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        if (!body.containsKey("actual_ph")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing actual_ph\"}");
+            return;
+        }
+        float actualPH = body["actual_ph"].as<float>();
+        if (actualPH < 0.0f || actualPH > 14.0f) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"actual_ph out of range (0-14)\"}");
+            return;
+        }
+
+        uint8_t mac[6];
+        if (!parseMacAddress(macStr.c_str(), mac)) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+            return;
+        }
+
+        if (!ESPNowManager::getInstance().isPeerOnline(mac)) {
+            request->send(503, "application/json", "{\"success\":false,\"error\":\"Device is offline\"}");
+            return;
+        }
+
+        // Build command 41: data[0]=41, data[1..4]=actual_ph (IEEE-754 float, LE)
+        CommandMessage cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.header.type      = MessageType::COMMAND;
+        cmd.header.nodeType  = NodeType::HUB;
+        cmd.header.timestamp = millis();
+        cmd.commandId        = (uint8_t)(millis() & 0xFF);
+        cmd.commandSeqID     = 0;
+        cmd.finalCommand     = true;
+        cmd.commandData[0]   = 41;  // CMD_PH_CALIBRATE
+        memcpy(&cmd.commandData[1], &actualPH, sizeof(float));
+
+        ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd), false);
+
+        Serial.printf("[CO2-CAL] Sent calibration cmd 41 to %s: actual_ph=%.2f\n",
+                      macStr.c_str(), actualPH);
+
+        DynamicJsonDocument resp(256);
+        resp["success"]   = true;
+        resp["mac"]       = macStr;
+        resp["actual_ph"] = actualPH;
+        String response;
+        serializeJson(resp, response);
+        request->send(200, "application/json", response);
+    });
+
+    // ========================================================================
+    // CO2 STATUS / COMMAND / SCHEDULE / PH-HISTORY API
+    // ========================================================================
+
+    // GET CO2 status (request fresh status from node, return cached)
+    server.on("/api/co2-status", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        String macKey = macStr;
+        macKey.toUpperCase();
+
+        uint8_t mac[6];
+        if (sscanf(macStr.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+            return;
+        }
+
+        // Send status request command (40) to the CO2 node
+        CommandMessage cmd = {};
+        cmd.header.type = MessageType::COMMAND;
+        cmd.header.tankId = 0;
+        cmd.header.nodeType = NodeType::HUB;
+        cmd.header.timestamp = millis();
+        cmd.header.sequenceNum = 0;
+        cmd.commandId = generateCommandId();
+        cmd.commandSeqID = 0;
+        cmd.finalCommand = true;
+        cmd.commandData[0] = 40;  // STATUS_REQUEST for CO2
+
+        uint8_t apMac[6] = {0};
+#ifdef ESP32
+        esp_read_mac(apMac, ESP_MAC_WIFI_SOFTAP);
+#endif
+        memcpy(cmd.returnMac, apMac, 6);
+
+#ifdef ESP32
+        ESPNowManager::getInstance().addPeer(mac, WIFI_IF_AP);
+#else
+        ESPNowManager::getInstance().addPeer(mac);
+#endif
+        ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd));
+
+        g_co2StatusPending[macKey] = millis();
+
+        // Return cached status if available
+        auto it = g_co2Status.find(macKey);
+        if (it != g_co2Status.end()) {
+            CO2Status st = it->second;
+
+            DynamicJsonDocument responseDoc(256);
+            responseDoc["success"] = true;
+            JsonObject statusObj = responseDoc.createNestedObject("status");
+            statusObj["relayOn"] = st.relayOn;
+            statusObj["pH"] = serialized(String(st.pH, 2));
+            statusObj["rawADC"] = st.rawADC;
+            statusObj["errorFlags"] = st.errorFlags;
+            responseDoc["updatedAt"] = st.updatedAt;
+
+            String response;
+            serializeJson(responseDoc, response);
+            request->send(200, "application/json", response);
+            return;
+        }
+
+        request->send(200, "application/json", "{\"success\":false,\"pending\":true}");
+    });
+
+    // POST CO2 command (TURN_ON or TURN_OFF)
+    // Body JSON: {"mac":"AA:BB:CC:DD:EE:FF", "command":"TURN_ON"}
+    //        or: {"mac":"AA:BB:CC:DD:EE:FF", "command":"TURN_OFF"}
+    server.on("/api/co2-command", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(512);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        String command = body["command"] | "";
+        if (macStr.length() == 0 || command.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac or command\"}");
+            return;
+        }
+
+        uint8_t mac[6];
+        if (!parseMacAddress(macStr.c_str(), mac)) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid MAC address\"}");
+            return;
+        }
+
+        uint8_t cmdByte = 0;
+        if (command.equalsIgnoreCase("TURN_ON")) {
+            cmdByte = 1;   // CO2 ON
+        } else if (command.equalsIgnoreCase("TURN_OFF")) {
+            cmdByte = 2;   // CO2 OFF
+        } else {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Unknown command. Use TURN_ON or TURN_OFF\"}");
+            return;
+        }
+
+        CommandMessage cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.header.type = MessageType::COMMAND;
+        cmd.header.tankId = 0;
+        cmd.header.nodeType = NodeType::HUB;
+        cmd.header.timestamp = millis();
+        cmd.commandId = generateCommandId();
+        cmd.commandSeqID = 0;
+        cmd.finalCommand = true;
+        cmd.commandData[0] = cmdByte;
+
+#ifdef ESP32
+        ESPNowManager::getInstance().addPeer(mac, WIFI_IF_AP);
+#else
+        ESPNowManager::getInstance().addPeer(mac);
+#endif
+        ESPNowManager::getInstance().send(mac, (uint8_t*)&cmd, sizeof(cmd));
+
+        // Activity log
+        String devName, aqName, devType;
+        lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
+        const char* actionStr = (cmdByte == 1) ? "ON" : "OFF";
+        appendActivityLog("adhoc", "co2", actionStr, devName.c_str(), aqName.c_str());
+
+        Serial.printf("[CO2] Sent command %d (%s) to %s\n", cmdByte, actionStr, macStr.c_str());
+
+        DynamicJsonDocument resp(256);
+        resp["success"] = true;
+        resp["command"] = command;
+        resp["mac"] = macStr;
+        String response;
+        serializeJson(resp, response);
+        request->send(200, "application/json", response);
+    });
+
+    // GET CO2 pH history for 24-hour trend graph (reads from LittleFS file)
+    // Query param: mac
+    // File stores epoch seconds in "t" field — data survives reboots.
+    server.on("/api/co2/ph-history", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        String macKey = macStr;
+        macKey.toUpperCase();
+
+        time_t epochNow = time(nullptr);
+        String filePath = phHistoryPath(macKey);
+
+        DynamicJsonDocument responseDoc(12288);
+        responseDoc["success"] = true;
+        responseDoc["mac"] = macStr;
+        responseDoc["nowEpoch"] = (unsigned long)epochNow;
+        JsonArray histArr = responseDoc.createNestedArray("history");
+
+        // Read pH history from LittleFS file
+        if (FS_USER.exists(filePath)) {
+            DynamicJsonDocument fileDoc(12288);
+            File f = FS_USER.open(filePath, "r");
+            if (f) {
+                DeserializationError err = deserializeJson(fileDoc, f);
+                f.close();
+
+                if (!err && fileDoc.is<JsonArray>()) {
+                    JsonArray fileArr = fileDoc.as<JsonArray>();
+                    for (JsonObject entry : fileArr) {
+                        time_t entryT = (time_t)(entry["t"].as<unsigned long>());
+                        // Only return entries from the last 24 hours
+                        if ((epochNow - entryT) <= PH_HISTORY_MAX_AGE_SEC) {
+                            JsonObject obj = histArr.createNestedObject();
+                            obj["t"] = (unsigned long)entryT;
+                            obj["pH"] = entry["pH"];
+
+                            // Derive wall-clock label directly from the stored epoch timestamp
+                            struct tm entryTm;
+                            localtime_r(&entryT, &entryTm);
+                            char timeBuf[8];
+                            snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", entryTm.tm_hour, entryTm.tm_min);
+                            obj["time"] = timeBuf;
+                        }
+                    }
+                }
+            }
+        }
+
+        String response;
+        serializeJson(responseDoc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // GET CO2 schedule for a specific MAC
+    server.on("/api/co2-schedule", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!request->hasParam("mac")) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macStr = request->getParam("mac")->value();
+        File file = FS_USER.open("/config/schedule/co2-schedule.json", "r");
+        if (!file) {
+            request->send(200, "application/json", "{\"success\":true,\"schedule\":null}");
+            return;
+        }
+
+        DynamicJsonDocument doc(4096);
+        DeserializationError parseErr = deserializeJson(doc, file);
+        file.close();
+        if (parseErr) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse co2-schedule.json\"}");
+            return;
+        }
+
+        JsonArray schedules = doc["schedules"].as<JsonArray>();
+        JsonObject found;
+        for (JsonObject entry : schedules) {
+            String entryMac = entry["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                found = entry;
+                break;
+            }
+        }
+
+        DynamicJsonDocument responseDoc(2048);
+        responseDoc["success"] = true;
+
+        if (!found.isNull()) {
+            JsonObject sched = responseDoc.createNestedObject("schedule");
+            sched["mac"] = found["mac"] | "";
+            sched["tankId"] = found["tankId"] | 0;
+            sched["deviceName"] = found["deviceName"] | "";
+
+            JsonObject storedSchedule = found["schedule"].as<JsonObject>();
+            if (!storedSchedule.isNull()) {
+                JsonArray ent = sched.createNestedArray("entries");
+                JsonArray storedEntries = storedSchedule["entries"].as<JsonArray>();
+                for (JsonObject e : storedEntries) {
+                    JsonObject ne = ent.createNestedObject();
+                    ne["enabled"] = e["enabled"] | true;
+                    ne["hour"] = e["hour"] | 8;
+                    ne["minute"] = e["minute"] | 0;
+                    ne["ampm"] = e["ampm"] | "AM";
+                    ne["action"] = e["action"] | "start";
+                    ne["phDrop"] = e["phDrop"] | 1.0f;
+                }
+
+                JsonObject days = sched.createNestedObject("days");
+                JsonObject storedDays = storedSchedule["days"].as<JsonObject>();
+                days["Sunday"] = storedDays["Sunday"] | true;
+                days["Monday"] = storedDays["Monday"] | true;
+                days["Tuesday"] = storedDays["Tuesday"] | true;
+                days["Wednesday"] = storedDays["Wednesday"] | true;
+                days["Thursday"] = storedDays["Thursday"] | true;
+                days["Friday"] = storedDays["Friday"] | true;
+                days["Saturday"] = storedDays["Saturday"] | true;
+            }
+
+            // Include pH delta thresholds
+            sched["deltaOffThreshold"] = found["deltaOffThreshold"] | 0.8f;
+            sched["deltaOnThreshold"] = found["deltaOnThreshold"] | 0.6f;
+        } else {
+            responseDoc["schedule"] = nullptr;
+        }
+
+        String response;
+        serializeJson(responseDoc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST save CO2 schedule
+    server.on("/api/co2-schedule", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(2048);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        // Backwards-compatible delete-in-post support: { mac, action: "delete" }
+        if (body.containsKey("action") && String(body["action"] | "") == "delete") {
+            File file = FS_USER.open("/config/schedule/co2-schedule.json", "r");
+            DynamicJsonDocument doc(4096);
+            bool changed = false;
+
+            if (file) {
+                DeserializationError err2 = deserializeJson(doc, file);
+                file.close();
+                if (!err2) {
+                    JsonArray schedules = doc["schedules"].as<JsonArray>();
+                    if (!schedules.isNull()) {
+                        for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                            String entryMac = schedules[i]["mac"] | "";
+                            if (entryMac.equalsIgnoreCase(macStr)) {
+                                schedules.remove(i);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (changed) {
+                File out = FS_USER.open("/config/schedule/co2-schedule.json", "w");
+                if (!out) {
+                    request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write co2-schedule.json\"}");
+                    return;
+                }
+                serializeJson(doc, out);
+                out.close();
+            }
+
+            rebuildNextTasks();
+            request->send(200, "application/json", "{\"success\":true}");
+            return;
+        }
+
+        JsonVariant schedule = body["schedule"];
+
+        File file = FS_USER.open("/config/schedule/co2-schedule.json", "r");
+        DynamicJsonDocument doc(4096);
+        if (file) {
+            deserializeJson(doc, file);
+            file.close();
+        }
+
+        JsonArray schedules = doc["schedules"];
+        if (schedules.isNull()) {
+            schedules = doc.createNestedArray("schedules");
+        }
+
+        // Remove existing entry for this MAC
+        for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+            String entryMac = schedules[i]["mac"] | "";
+            if (entryMac.equalsIgnoreCase(macStr)) {
+                schedules.remove(i);
+            }
+        }
+
+        JsonObject newEntry = schedules.createNestedObject();
+        newEntry["mac"] = macStr;
+        newEntry["tankId"] = body["tankId"] | 0;
+        newEntry["deviceName"] = body["deviceName"] | "";
+
+        JsonObject newSched = newEntry.createNestedObject("schedule");
+
+        // Copy entries
+        JsonArray ent = newSched.createNestedArray("entries");
+        JsonArray srcEnt = schedule["entries"].as<JsonArray>();
+        for (JsonObject e : srcEnt) {
+            JsonObject ne = ent.createNestedObject();
+            ne["enabled"] = e["enabled"] | true;
+            ne["hour"] = e["hour"] | 8;
+            ne["minute"] = e["minute"] | 0;
+            ne["ampm"] = e["ampm"] | "AM";
+            ne["action"] = e["action"] | "start";
+            ne["phDrop"] = e["phDrop"] | 1.0f;
+        }
+
+        // Copy days
+        JsonObject days = newSched.createNestedObject("days");
+        JsonObject srcDays = schedule["days"].as<JsonObject>();
+        days["Sunday"] = srcDays["Sunday"] | true;
+        days["Monday"] = srcDays["Monday"] | true;
+        days["Tuesday"] = srcDays["Tuesday"] | true;
+        days["Wednesday"] = srcDays["Wednesday"] | true;
+        days["Thursday"] = srcDays["Thursday"] | true;
+        days["Friday"] = srcDays["Friday"] | true;
+        days["Saturday"] = srcDays["Saturday"] | true;
+
+        // Persist pH delta thresholds
+        if (body.containsKey("deltaOffThreshold")) {
+            newEntry["deltaOffThreshold"] = body["deltaOffThreshold"] | 0.8f;
+        } else {
+            newEntry["deltaOffThreshold"] = 0.8f;
+        }
+        if (body.containsKey("deltaOnThreshold")) {
+            newEntry["deltaOnThreshold"] = body["deltaOnThreshold"] | 0.6f;
+        } else {
+            newEntry["deltaOnThreshold"] = 0.6f;
+        }
+
+        newEntry["updatedAt"] = millis();
+
+        file = FS_USER.open("/config/schedule/co2-schedule.json", "w");
+        if (!file) {
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write co2-schedule.json\"}");
+            return;
+        }
+        serializeJson(doc, file);
+        file.close();
+
+        rebuildNextTasks();
+
+        request->send(200, "application/json", "{\"success\":true}");
+    });
+
+    // POST delete CO2 schedule for a device (dedicated endpoint)
+    server.on("/api/co2-schedule/delete", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index + len != total) return;
+
+        DynamicJsonDocument body(512);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        File file = FS_USER.open("/config/schedule/co2-schedule.json", "r");
+        DynamicJsonDocument doc(4096);
+        bool changed = false;
+
+        if (file) {
+            DeserializationError err2 = deserializeJson(doc, file);
+            file.close();
+            if (err2) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to parse co2-schedule.json\"}");
+                return;
+            }
+
+            JsonArray schedules = doc["schedules"].as<JsonArray>();
+            if (!schedules.isNull()) {
+                for (int i = (int)schedules.size() - 1; i >= 0; i--) {
+                    String entryMac = schedules[i]["mac"] | "";
+                    if (entryMac.equalsIgnoreCase(macStr)) {
+                        schedules.remove(i);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (changed) {
+            File out = FS_USER.open("/config/schedule/co2-schedule.json", "w");
+            if (!out) {
+                request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to write co2-schedule.json\"}");
+                return;
+            }
+            serializeJson(doc, out);
+            out.close();
+        }
+
+        rebuildNextTasks();
+
+        request->send(200, "application/json", "{\"success\":true}");
     });
 
     // ========================================================================
@@ -8526,6 +9532,116 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
             Serial.printf("[WAVEMAKER] STATUS update %s -> active=%d duty=%.1f%% pwm=%u (pending=%s)\n",
                           macStr.c_str(), wmStatus.pumpActive ? 1 : 0, wmStatus.dutyPercent,
                           wmStatus.pwmRaw, pendingWmStatus ? "yes" : "no");
+        }
+    }
+
+    // Update CO2 status cache
+    bool pendingCO2Status = (g_co2StatusPending.find(macStr) != g_co2StatusPending.end());
+    if (msg.header.nodeType == NodeType::CO2 || pendingCO2Status) {
+        CO2Status co2St;
+        // statusData layout: [0]=relay(u8), [1-4]=pH(float LE), [5-6]=rawADC(u16 LE), [7]=errorFlags(u8)
+        co2St.relayOn = (msg.statusData[0] != 0);
+        memcpy(&co2St.pH, &msg.statusData[1], sizeof(float));
+        memcpy(&co2St.rawADC, &msg.statusData[5], sizeof(uint16_t));
+        co2St.errorFlags = msg.statusData[7];
+        co2St.updatedAt = millis();
+        g_co2Status[macStr] = co2St;
+
+        if (pendingCO2Status) {
+            g_co2StatusPending.erase(macStr);
+        }
+
+        // Store pH reading for 24-hour trend graph
+        if (co2St.pH >= 0.0f && co2St.pH <= 14.0f) {
+            storePHReading(macStr, co2St.pH);
+        }
+
+        // ---- Async pH delta auto-control ----
+        // If CO2 relay is on and the pH drop exceeds the off-threshold, turn off.
+        // If relay was turned off by delta logic and pH recovered above on-threshold,
+        // re-enable relay only if still within the scheduled window.
+        if (co2St.pH > 0.0f && co2St.pH < 14.0f) {
+            float baselinePH = loadCO2BaselinePH(macStr);
+            if (baselinePH > 0.0f) {
+                float delta = baselinePH - co2St.pH;
+                float offThreshold, onThreshold;
+                loadCO2Thresholds(macStr, offThreshold, onThreshold);
+
+                if (co2St.relayOn && delta >= offThreshold) {
+                    // pH has dropped enough — turn CO2 OFF
+                    Serial.printf("[CO2-DELTA] pH delta=%.2f >= offThreshold=%.2f for %s — sending CO2 OFF\n",
+                                  delta, offThreshold, macStr.c_str());
+                    uint8_t macArr[6];
+                    if (parseMacAddress(macStr.c_str(), macArr)) {
+                        CommandMessage dcmd;
+                        memset(&dcmd, 0, sizeof(dcmd));
+                        dcmd.header.type = MessageType::COMMAND;
+                        dcmd.header.tankId = 0;
+                        dcmd.header.nodeType = NodeType::HUB;
+                        dcmd.header.timestamp = millis();
+                        dcmd.commandId = generateCommandId();
+                        dcmd.commandSeqID = 0;
+                        dcmd.finalCommand = true;
+                        dcmd.commandData[0] = 2;  // CO2 OFF
+#ifdef ESP32
+                        ESPNowManager::getInstance().addPeer(macArr, WIFI_IF_AP);
+#else
+                        ESPNowManager::getInstance().addPeer(macArr);
+#endif
+                        ESPNowManager::getInstance().send(macArr, (uint8_t*)&dcmd, sizeof(dcmd));
+                        g_co2DeltaOff[macStr] = true;  // Mark as turned off by delta logic
+
+                        String devName, aqName, devType;
+                        lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
+                        appendActivityLog("auto", "co2", "CO2 OFF (pH delta)", devName.c_str(), aqName.c_str());
+                        notifier.emitf("co2.delta", "CO2 auto-OFF: pH drop %.2f in %s (%s)",
+                                       delta, devName.c_str(), aqName.c_str());
+                    }
+                } else if (!co2St.relayOn &&
+                           g_co2DeltaOff.count(macStr) && g_co2DeltaOff[macStr] &&
+                           delta <= onThreshold) {
+                    // pH has recovered — check if still within scheduled window before re-enabling
+                    if (isCO2ScheduleActive(macStr)) {
+                        Serial.printf("[CO2-DELTA] pH delta=%.2f <= onThreshold=%.2f for %s — sending CO2 ON (re-enable)\n",
+                                      delta, onThreshold, macStr.c_str());
+                        uint8_t macArr[6];
+                        if (parseMacAddress(macStr.c_str(), macArr)) {
+                            CommandMessage dcmd;
+                            memset(&dcmd, 0, sizeof(dcmd));
+                            dcmd.header.type = MessageType::COMMAND;
+                            dcmd.header.tankId = 0;
+                            dcmd.header.nodeType = NodeType::HUB;
+                            dcmd.header.timestamp = millis();
+                            dcmd.commandId = generateCommandId();
+                            dcmd.commandSeqID = 0;
+                            dcmd.finalCommand = true;
+                            dcmd.commandData[0] = 1;  // CO2 ON
+#ifdef ESP32
+                            ESPNowManager::getInstance().addPeer(macArr, WIFI_IF_AP);
+#else
+                            ESPNowManager::getInstance().addPeer(macArr);
+#endif
+                            ESPNowManager::getInstance().send(macArr, (uint8_t*)&dcmd, sizeof(dcmd));
+                            g_co2DeltaOff[macStr] = false;
+
+                            String devName, aqName, devType;
+                            lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
+                            appendActivityLog("auto", "co2", "CO2 ON (pH recovered)", devName.c_str(), aqName.c_str());
+                            notifier.emitf("co2.delta", "CO2 auto-ON: pH recovered to delta %.2f in %s (%s)",
+                                           delta, devName.c_str(), aqName.c_str());
+                        }
+                    } else {
+                        Serial.printf("[CO2-DELTA] pH recovered for %s but outside schedule window — not re-enabling\n",
+                                      macStr.c_str());
+                    }
+                }
+            }
+        }
+
+        if (config.debugESPNOW) {
+            Serial.printf("[CO2] STATUS update %s -> relay=%s pH=%.2f adc=%u err=0x%02X (pending=%s)\n",
+                          macStr.c_str(), co2St.relayOn ? "ON" : "OFF", co2St.pH,
+                          co2St.rawADC, co2St.errorFlags, pendingCO2Status ? "yes" : "no");
         }
     }
 

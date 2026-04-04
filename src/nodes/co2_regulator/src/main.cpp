@@ -25,8 +25,8 @@
 //
 // Pin Configuration (configurable via /node_config.txt):
 //   A0    = pH sensor analog input (ESP8266 only has A0 for ADC)
-//   D7/13 = CO2 relay output (HIGH = ON, LOW = OFF)
-//   D5/14 = Status LED (moved from default D7 to avoid relay conflict)
+//   D0/16 = CO2 relay output (HIGH = ON, LOW = OFF)
+//   D5/14 = Status LED
 //
 // Command Format from Hub:
 //   data[0] = command type:
@@ -34,6 +34,8 @@
 //     1  = CO2 ON (relay HIGH)
 //     2  = CO2 OFF (relay LOW)
 //     40 = Status request (read pH and report)
+//     41 = Calibrate: data[1..4] = actual pH (float); node computes voltage
+//          trim and persists PH_CALIB_VOLT_TRIM to /node_config.txt
 //     0xFF = Force fail-safe (test)
 //
 // Status Data Format (sent to hub):
@@ -51,29 +53,42 @@
 struct CO2Config {
     uint8_t  phSensorPin;          // Analog pin for pH probe (A0 on ESP8266)
     uint8_t  relayPin;             // Digital pin for CO2 relay
-    uint32_t phReadIntervalMs;     // How often to read pH (default 5 min)
-    uint8_t  phSampleCount;        // Number of ADC samples per reading
+    uint32_t phReadIntervalMs;     // How often to do burst-read pH (command 40 fallback)
+    uint8_t  phSampleCount;        // Number of ADC samples per burst reading
     uint8_t  phDiscardCount;       // Samples to discard from each end (outliers)
     float    phCalibOffset;        // pH calibration offset (pH = slope * V + offset)
     float    phCalibSlope;         // pH calibration slope
+    float    phCalibVoltTrim;      // Voltage trim: applied as V_corr = V_raw + trim
+                                   // Set by hub cmd 41 (calibrate with known actual pH)
     float    phSafetyLow;          // Emergency low pH limit (force CO2 OFF below this)
     float    phSafetyHigh;         // Warning high pH limit (informational)
     float    adcVoltageRef;        // ADC reference voltage (3.3V for D1 Mini)
     uint16_t adcMaxValue;          // ADC max reading (1024 for ESP8266)
+
+    // Pipeline config: continuous median-filtered pH reading
+    uint32_t phADCReadIntervalMs;  // How often to read A0 (default 200ms)
+    uint8_t  phSamplesPerMedian;   // Readings per short-term median (default 20)
+    uint32_t phTrendWindowSec;     // Trend window in seconds (default 300s)
 };
 
 static CO2Config co2Cfg = {
     .phSensorPin      = A0,       // Only ADC pin on ESP8266
-    .relayPin         = 13,       // D7 on D1 Mini
-    .phReadIntervalMs = 300000,   // 5 minutes
-    .phSampleCount    = 10,       // 10 samples per reading
+    .relayPin         = 16,       // D0 on D1 Mini (GPIO16)
+    .phReadIntervalMs = 300000,   // 5 minutes (burst-read fallback for cmd 40)
+    .phSampleCount    = 10,       // 10 samples per burst reading
     .phDiscardCount   = 2,        // Discard 2 highest + 2 lowest
-    .phCalibOffset    = 21.34f,   // Default DFRobot calibration
-    .phCalibSlope     = -5.70f,   // Default DFRobot calibration
-    .phSafetyLow      = 5.0f,    // Emergency: force CO2 OFF below pH 5.0
-    .phSafetyHigh     = 8.5f,    // Warning above pH 8.5
-    .adcVoltageRef    = 3.3f,    // D1 Mini voltage divider gives 0-3.3V range
-    .adcMaxValue      = 1024      // ESP8266 10-bit ADC
+    .phCalibOffset    = -5.0f,    // Regulator board: pH = 6.0 * V - 5.0
+    .phCalibSlope     = 6.0f,     // Regulator board: pH4=1.5V, pH7=2.0V, pH9=2.5V
+    .phCalibVoltTrim  = 0.0f,     // Voltage trim (updated by hub cmd 41 / node_config.txt)
+    .phSafetyLow      = 5.0f,     // Emergency: force CO2 OFF below pH 5.0
+    .phSafetyHigh     = 8.5f,     // Warning above pH 8.5
+    .adcVoltageRef    = 3.3f,     // D1 Mini voltage divider gives 0-3.3V range
+    .adcMaxValue      = 1024,     // ESP8266 10-bit ADC
+
+    // Pipeline defaults
+    .phADCReadIntervalMs = 200,   // Read A0 every 200ms
+    .phSamplesPerMedian  = 20,    // 20 readings per short-term median
+    .phTrendWindowSec    = 300    // Trend window: 300 seconds (5 min)
 };
 
 // ============================================================================
@@ -107,6 +122,47 @@ static CO2StateData co2State = {
     .errorFlags      = 0,
     .sensorError     = false,
     .lastCommandId   = 0
+};
+
+// ============================================================================
+// pH PIPELINE - Continuous median-filtered reading
+// ============================================================================
+// Pipeline: A0 read every 200ms → buffer 20 → short-term median → buffer
+//           medians over 300s → trend median (for hub reporting)
+//
+// Max medians in 300s window: 300s / (20 * 0.2s) = 75 medians. Buffer = 80.
+// ============================================================================
+
+#define PH_PIPELINE_MAX_SAMPLES   20   // Max samples per median batch
+#define PH_PIPELINE_MAX_MEDIANS   80   // Max medians in trend window
+
+struct PHPipeline {
+    // --- Raw reading buffer (filled every phADCReadIntervalMs) ---
+    float    rawReadings[PH_PIPELINE_MAX_SAMPLES];
+    uint8_t  rawCount;              // Readings collected in current batch (0..samplesPerMedian)
+    uint32_t lastADCReadTime;       // millis() of last ADC read
+
+    // --- Short-term median buffer (accumulates over trend window) ---
+    float    medianValues[PH_PIPELINE_MAX_MEDIANS];
+    uint8_t  medianCount;           // Medians collected in current trend window
+    uint32_t trendStartTime;        // millis() when current trend window started
+
+    // --- Results ---
+    float    lastShortMedian;       // Latest short-term median (20 readings)
+    float    lastTrendMedian;       // Latest trend median (300s of medians)
+    bool     hasTrendMedian;        // True when at least one trend median computed
+};
+
+static PHPipeline phPipeline = {
+    .rawReadings     = {0},
+    .rawCount        = 0,
+    .lastADCReadTime = 0,
+    .medianValues    = {0},
+    .medianCount     = 0,
+    .trendStartTime  = 0,
+    .lastShortMedian = 0.0f,
+    .lastTrendMedian = 0.0f,
+    .hasTrendMedian  = false
 };
 
 // ============================================================================
@@ -148,6 +204,8 @@ static void loadCO2Config() {
             co2Cfg.phCalibOffset = value.toFloat();
         } else if (key == "PH_CALIB_SLOPE") {
             co2Cfg.phCalibSlope = value.toFloat();
+        } else if (key == "PH_CALIB_VOLT_TRIM") {
+            co2Cfg.phCalibVoltTrim = value.toFloat();
         } else if (key == "PH_SAFETY_LOW") {
             co2Cfg.phSafetyLow = value.toFloat();
         } else if (key == "PH_SAFETY_HIGH") {
@@ -156,6 +214,15 @@ static void loadCO2Config() {
             co2Cfg.adcVoltageRef = value.toFloat();
         } else if (key == "ADC_MAX_VALUE") {
             co2Cfg.adcMaxValue = (uint16_t)value.toInt();
+        } else if (key == "PH_ADC_READ_INTERVAL_MS") {
+            uint32_t val = (uint32_t)value.toInt();
+            if (val >= 50 && val <= 10000) co2Cfg.phADCReadIntervalMs = val;
+        } else if (key == "PH_SAMPLES_PER_MEDIAN") {
+            uint8_t val = (uint8_t)value.toInt();
+            if (val >= 3 && val <= PH_PIPELINE_MAX_SAMPLES) co2Cfg.phSamplesPerMedian = val;
+        } else if (key == "PH_TREND_WINDOW_SEC") {
+            uint32_t val = (uint32_t)value.toInt();
+            if (val >= 10 && val <= 3600) co2Cfg.phTrendWindowSec = val;
         }
     }
     file.close();
@@ -173,11 +240,89 @@ static void loadCO2Config() {
                       co2Cfg.phReadIntervalMs, co2Cfg.phReadIntervalMs / 60000);
         Serial.printf("   Samples: %d (discard %d from each end)\n",
                       co2Cfg.phSampleCount, co2Cfg.phDiscardCount);
-        Serial.printf("   Calibration: pH = %.2f * V + %.2f\n",
-                      co2Cfg.phCalibSlope, co2Cfg.phCalibOffset);
+        Serial.printf("   Calibration: pH = %.2f * (V + %.4f) + (%.2f)\n",
+                      co2Cfg.phCalibSlope, co2Cfg.phCalibVoltTrim, co2Cfg.phCalibOffset);
         Serial.printf("   Safety: LOW=%.1f  HIGH=%.1f\n",
                       co2Cfg.phSafetyLow, co2Cfg.phSafetyHigh);
+        Serial.printf("   Pipeline: read every %ums, %d samples/median, %us trend window\n",
+                      co2Cfg.phADCReadIntervalMs, co2Cfg.phSamplesPerMedian,
+                      co2Cfg.phTrendWindowSec);
     }
+}
+
+// ============================================================================
+// CO2 CALIBRATION TRIM PERSISTENCE
+// ============================================================================
+
+/**
+ * @brief Persist the current phCalibVoltTrim to /node_config.txt in LittleFS.
+ *
+ * Reads the entire config file line by line. Replaces the
+ * PH_CALIB_VOLT_TRIM=... line in-place, or appends it if the key is not
+ * yet present. Writes the modified content back to the same file.
+ *
+ * @return true on success, false on any file I/O error.
+ */
+static bool saveCO2CalibTrim() {
+    const char* configPath = "/node_config.txt";
+
+    if (!LittleFS.exists(configPath)) {
+        Serial.println("[CALIB] Cannot save trim: /node_config.txt not found");
+        return false;
+    }
+
+    File readFile = LittleFS.open(configPath, "r");
+    if (!readFile) {
+        Serial.println("[CALIB] Cannot open config for reading");
+        return false;
+    }
+
+    String newContent;
+    newContent.reserve(readFile.size() + 40);
+    bool trimLineFound = false;
+
+    while (readFile.available()) {
+        String line = readFile.readStringUntil('\n');
+        // Strip trailing CR (Windows line endings)
+        if (line.endsWith("\r")) line.remove(line.length() - 1);
+
+        if (line.startsWith("PH_CALIB_VOLT_TRIM=")) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "PH_CALIB_VOLT_TRIM=%.4f", co2Cfg.phCalibVoltTrim);
+            newContent += buf;
+            trimLineFound = true;
+        } else {
+            newContent += line;
+        }
+        newContent += '\n';
+    }
+    readFile.close();
+
+    // Key not present in file yet - append it
+    if (!trimLineFound) {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "PH_CALIB_VOLT_TRIM=%.4f\n", co2Cfg.phCalibVoltTrim);
+        newContent += buf;
+    }
+
+    File writeFile = LittleFS.open(configPath, "w");
+    if (!writeFile) {
+        Serial.println("[CALIB] Cannot open config for writing");
+        return false;
+    }
+
+    size_t written = writeFile.print(newContent);
+    writeFile.close();
+
+    bool ok = (written == newContent.length());
+    if (ok) {
+        Serial.printf("[CALIB] Trim saved: PH_CALIB_VOLT_TRIM=%.4f\n",
+                      co2Cfg.phCalibVoltTrim);
+    } else {
+        Serial.printf("[CALIB] Warning: partial write (%zu of %u bytes)\n",
+                      written, newContent.length());
+    }
+    return ok;
 }
 
 // ============================================================================
@@ -196,6 +341,168 @@ static void sortArray(int* arr, uint8_t len) {
                 arr[j + 1] = temp;
             }
         }
+    }
+}
+
+/**
+ * @brief Sort a float array in-place (bubble sort, fine for small arrays)
+ */
+static void sortFloatArray(float* arr, uint8_t len) {
+    for (uint8_t i = 0; i < len - 1; i++) {
+        for (uint8_t j = 0; j < len - i - 1; j++) {
+            if (arr[j] > arr[j + 1]) {
+                float temp = arr[j];
+                arr[j]     = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Compute median of a float array (non-destructive - copies first)
+ * @param arr Source array
+ * @param len Number of elements (must be > 0)
+ * @return Median value
+ */
+static float computeMedianFloat(const float* arr, uint8_t len) {
+    if (len == 0) return 0.0f;
+    if (len == 1) return arr[0];
+
+    // Copy to temp buffer so we don't modify the original
+    float temp[PH_PIPELINE_MAX_MEDIANS];  // Max size we ever need
+    uint8_t copyLen = (len <= PH_PIPELINE_MAX_MEDIANS) ? len : PH_PIPELINE_MAX_MEDIANS;
+    memcpy(temp, arr, copyLen * sizeof(float));
+
+    sortFloatArray(temp, copyLen);
+
+    if (copyLen % 2 == 1) {
+        return temp[copyLen / 2];
+    } else {
+        return (temp[copyLen / 2 - 1] + temp[copyLen / 2]) / 2.0f;
+    }
+}
+
+/**
+ * @brief Convert raw ADC value to pH using calibration constants
+ * @param adcValue Raw ADC reading (0-1024)
+ * @return pH value, or -1.0 if implausible
+ */
+static float adcToPH(int adcValue) {
+    float voltage = (float)adcValue * co2Cfg.adcVoltageRef / (float)co2Cfg.adcMaxValue;
+    float correctedVoltage = voltage + co2Cfg.phCalibVoltTrim;  // Apply calibration trim
+    float pH = co2Cfg.phCalibSlope * correctedVoltage + co2Cfg.phCalibOffset;
+
+    // Plausibility check
+    if (pH < 0.0f || pH > 14.0f) {
+        return -1.0f;
+    }
+    return pH;
+}
+
+// ============================================================================
+// pH PIPELINE TICK - Called every loop iteration (non-blocking)
+// ============================================================================
+
+// Forward declarations (defined later in file)
+static void checkLocalSafety();
+static void sendPeriodicStatus();
+
+/**
+ * @brief Continuous pH reading pipeline
+ *
+ * Called from updateHardware() every loop(). Uses millis() for non-blocking
+ * timing. Reads A0 every phADCReadIntervalMs, computes short-term median
+ * every phSamplesPerMedian readings, and trend median every phTrendWindowSec.
+ */
+static void phPipelineTick() {
+    uint32_t now = millis();
+
+    // --- Initialize trend window on first call ---
+    if (phPipeline.trendStartTime == 0) {
+        phPipeline.trendStartTime = now;
+    }
+
+    // --- Step 1: Read A0 at configured interval (default 200ms) ---
+    if (now - phPipeline.lastADCReadTime < co2Cfg.phADCReadIntervalMs) {
+        return;  // Not time yet
+    }
+    phPipeline.lastADCReadTime = now;
+
+    // Read raw ADC and convert to pH
+    int rawADC = analogRead(co2Cfg.phSensorPin);
+    float pH = adcToPH(rawADC);
+
+    if (pH < 0.0f) {
+        // Implausible reading - skip this sample
+        co2State.sensorError = true;
+        co2State.errorFlags  = 1;
+        if (nodeConfig.debugHardware) {
+            Serial.printf("[PH] Pipeline: implausible ADC=%d, skipping\n", rawADC);
+        }
+        return;
+    }
+
+    co2State.sensorError = false;
+    if (co2State.errorFlags == 1) co2State.errorFlags = 0;
+
+    // Store the latest raw ADC for status reporting
+    co2State.lastRawADC = (uint16_t)rawADC;
+
+    // --- Step 2: Store in raw buffer ---
+    if (phPipeline.rawCount < co2Cfg.phSamplesPerMedian) {
+        phPipeline.rawReadings[phPipeline.rawCount] = pH;
+        phPipeline.rawCount++;
+    }
+
+    // --- Step 3: When batch complete, compute short-term median ---
+    if (phPipeline.rawCount >= co2Cfg.phSamplesPerMedian) {
+        float shortMedian = computeMedianFloat(phPipeline.rawReadings, phPipeline.rawCount);
+        phPipeline.lastShortMedian = shortMedian;
+
+        // Update co2State with latest short-term median
+        co2State.lastPH         = shortMedian;
+        co2State.lastPHReadTime = now;
+
+        // Print short-term median (trim shows the active calibration voltage offset)
+        float batchTimeSec = (float)(co2Cfg.phADCReadIntervalMs * co2Cfg.phSamplesPerMedian) / 1000.0f;
+        Serial.printf("[PH] Short-term median: %.2f (trim=%.4f, %d samples over %.1fs)\n",
+                      shortMedian, co2Cfg.phCalibVoltTrim, phPipeline.rawCount, batchTimeSec);
+
+        // Check local safety limits against short-term median
+        checkLocalSafety();
+
+        // --- Step 4: Store median in trend buffer ---
+        if (phPipeline.medianCount < PH_PIPELINE_MAX_MEDIANS) {
+            phPipeline.medianValues[phPipeline.medianCount] = shortMedian;
+            phPipeline.medianCount++;
+        }
+
+        // Reset raw buffer for next batch
+        phPipeline.rawCount = 0;
+    }
+
+    // --- Step 5: When trend window elapsed, compute trend median ---
+    uint32_t trendWindowMs = co2Cfg.phTrendWindowSec * 1000UL;
+    if (now - phPipeline.trendStartTime >= trendWindowMs && phPipeline.medianCount > 0) {
+        float trendMedian = computeMedianFloat(phPipeline.medianValues, phPipeline.medianCount);
+        phPipeline.lastTrendMedian = trendMedian;
+        phPipeline.hasTrendMedian  = true;
+
+        // Update co2State with trend median (this is the value for hub reporting)
+        co2State.lastPH = trendMedian;
+
+        Serial.printf("[PH] Trend median: %.2f (%d medians over %us)\n",
+                      trendMedian, phPipeline.medianCount, co2Cfg.phTrendWindowSec);
+
+        // Send periodic status to hub if connected
+        if (isConnectedToHub) {
+            sendPeriodicStatus();
+        }
+
+        // Reset trend window
+        phPipeline.medianCount     = 0;
+        phPipeline.trendStartTime  = now;
     }
 }
 
@@ -243,11 +550,12 @@ static float readPH() {
     // Store raw ADC value
     co2State.lastRawADC = (uint16_t)(avgADC + 0.5f);
 
-    // Convert ADC to voltage
+    // Convert ADC to voltage and apply trim
     float voltage = avgADC * co2Cfg.adcVoltageRef / (float)co2Cfg.adcMaxValue;
+    float correctedVoltage = voltage + co2Cfg.phCalibVoltTrim;  // Apply calibration trim
 
-    // Convert voltage to pH using calibration: pH = slope * voltage + offset
-    float pH = co2Cfg.phCalibSlope * voltage + co2Cfg.phCalibOffset;
+    // Convert corrected voltage to pH using calibration: pH = slope * (V + trim) + offset
+    float pH = co2Cfg.phCalibSlope * correctedVoltage + co2Cfg.phCalibOffset;
 
     // Plausibility check (pH must be 0-14)
     if (pH < 0.0f || pH > 14.0f) {
@@ -495,6 +803,57 @@ void handleCommand(const uint8_t* mac, const uint8_t* data, size_t len) {
             break;
         }
 
+        case 41: {  // pH Calibration: hub sends known actual pH, node computes trim
+            // Payload: data[1..4] = actual pH as IEEE-754 float (little-endian)
+            if (len < 5) {
+                success = false;
+                if (nodeConfig.debugESPNOW) {
+                    Serial.println("| [ERROR] Calibration cmd: need at least 5 bytes");
+                }
+                break;
+            }
+
+            float actualPH;
+            memcpy(&actualPH, &data[1], sizeof(float));
+
+            if (actualPH < 0.0f || actualPH > 14.0f) {
+                success = false;
+                if (nodeConfig.debugESPNOW) {
+                    Serial.printf("| [ERROR] Calibration: invalid pH=%.2f (must be 0-14)\n",
+                                  actualPH);
+                }
+                break;
+            }
+
+            // Sanity-check slope before dividing
+            if (co2Cfg.phCalibSlope == 0.0f) {
+                success = false;
+                Serial.println("[CALIB] ERROR: phCalibSlope is 0 - cannot compute trim");
+                break;
+            }
+
+            // Compute voltage trim:
+            //   pH = slope * (rawV + trim) + offset
+            //   => trim = (actualPH - offset) / slope - rawV
+            //
+            // Both ESP8266 and ESP32 are little-endian; float is transmitted as
+            // native IEEE-754 LE bytes, which is correct between these platforms.
+            float rawVoltage    = (float)co2State.lastRawADC * co2Cfg.adcVoltageRef
+                                  / (float)co2Cfg.adcMaxValue;
+            float targetVoltage = (actualPH - co2Cfg.phCalibOffset) / co2Cfg.phCalibSlope;
+            co2Cfg.phCalibVoltTrim = targetVoltage - rawVoltage;
+
+            Serial.printf("[CALIB] Hub calibration: actual pH=%.2f, raw V=%.4fV, "
+                          "target V=%.4fV, new trim=%.4fV\n",
+                          actualPH, rawVoltage, targetVoltage, co2Cfg.phCalibVoltTrim);
+
+            if (!saveCO2CalibTrim()) {
+                success = false;  // Config write failed; trim is updated in RAM only
+                Serial.println("[CALIB] WARNING: trim not persisted to config");
+            }
+            break;
+        }
+
         case 0xFF: {  // TEST: Force fail-safe
             if (nodeConfig.debugSerial) {
                 Serial.println("[TEST] Force-failsafe command received");
@@ -533,31 +892,8 @@ void handleCommand(const uint8_t* mac, const uint8_t* data, size_t len) {
 }
 
 void updateHardware() {
-    // Periodic pH reading (non-blocking check)
-    uint32_t now = millis();
-
-    if (now - co2State.lastPHReadTime >= co2Cfg.phReadIntervalMs) {
-        co2State.lastPHReadTime = now;
-
-        float pH = readPH();
-        if (pH >= 0.0f) {
-            co2State.lastPH = pH;
-
-            // Check local safety limits
-            checkLocalSafety();
-
-            // Send periodic pH status report to hub (only when connected)
-            if (isConnectedToHub) {
-                sendPeriodicStatus();
-            }
-        } else {
-            // Sensor error - log but don't change relay state
-            // Hub will notice missing pH reports and can take action
-            if (nodeConfig.debugSerial) {
-                Serial.println("[WARN] pH sensor read failed - keeping current state");
-            }
-        }
-    }
+    // Run continuous pH pipeline (reads A0 every 200ms, computes medians)
+    phPipelineTick();
 
     // Enforce relay state matches software state
     // (safety guard against hardware glitches)
@@ -661,17 +997,21 @@ void setup() {
     Serial.println("[6] Sending initial ANNOUNCE...");
     sendAnnounce();
 
-    // Take initial pH reading
-    Serial.println("[7] Taking initial pH reading...");
-    float initialPH = readPH();
-    if (initialPH >= 0.0f) {
-        co2State.lastPH         = initialPH;
-        co2State.lastPHReadTime = millis();
-        Serial.printf("[7] Initial pH: %.2f (ADC: %d)\n", initialPH, co2State.lastRawADC);
-    } else {
-        Serial.println("[7] Initial pH read failed (sensor may not be connected)");
-        co2State.lastPHReadTime = millis();  // Set time so periodic read starts later
-    }
+    // Initialize pH pipeline
+    Serial.println("[7] Initializing pH pipeline...");
+    phPipeline.rawCount        = 0;
+    phPipeline.medianCount     = 0;
+    phPipeline.lastADCReadTime = millis();
+    phPipeline.trendStartTime  = millis();
+    phPipeline.lastShortMedian = 0.0f;
+    phPipeline.lastTrendMedian = 0.0f;
+    phPipeline.hasTrendMedian  = false;
+    Serial.printf("[7] Pipeline: read A0 every %ums, %d samples/median, %us trend window\n",
+                  co2Cfg.phADCReadIntervalMs, co2Cfg.phSamplesPerMedian,
+                  co2Cfg.phTrendWindowSec);
+    Serial.printf("[7] Calibration: pH = %.2f * (V + %.4f) + (%.2f)\n",
+                  co2Cfg.phCalibSlope, co2Cfg.phCalibVoltTrim, co2Cfg.phCalibOffset);
+    Serial.println("[7] Pipeline will start reading in loop()");
 
     Serial.printf("\n[OK] CO2 regulator node ready (ESP8266 D1 Mini)\n");
     Serial.println("     SAFETY: CO2 relay starts OFF");

@@ -18,8 +18,8 @@ ESPNOW_CHANNEL=11
 # HARDWARE PIN CONFIGURATION (ESP8266 D1 Mini)
 # ============================================================================
 # RELAY_PIN: GPIO connected to CO2 solenoid relay module
-#   D7/GPIO13 = default. HIGH = CO2 ON, LOW = CO2 OFF
-RELAY_PIN=13
+#   D0/GPIO16 = default. HIGH = CO2 ON, LOW = CO2 OFF
+RELAY_PIN=16
 
 # PH_SENSOR_PIN: Analog input for DFRobot pH sensor board
 #   A0 (GPIO17) = ONLY analog input on ESP8266. Do not change unless using
@@ -49,26 +49,60 @@ PH_DISCARD_COUNT=2
 # ============================================================================
 # pH CALIBRATION
 # ============================================================================
-# DFRobot Gravity Analog pH Sensor V2 calibration
+# pH Regulator Board Calibration
 # Formula: pH = PH_CALIB_SLOPE * voltage + PH_CALIB_OFFSET
 #
-# Default values are approximate for DFRobot sensor:
-#   At pH 7.0: output ~2.50V -> slope*2.50 + offset = 7.0
-#   At pH 4.0: output ~3.04V -> slope*3.04 + offset = 4.0
+# Board manual specs (nominal, before probe calibration):
+#   pH 4.0 = 1.5V output
+#   pH 7.0 = 2.0V output
+#   pH 9.0 = 2.5V output
 #
-# To calibrate:
-#   1. Place probe in pH 7.0 buffer solution
-#   2. Read voltage (from serial debug output)
-#   3. Place probe in pH 4.0 buffer solution
-#   4. Read voltage
-#   5. Calculate: slope = (pH2-pH1)/(V2-V1), offset = pH1 - slope*V1
-PH_CALIB_OFFSET=21.34
-PH_CALIB_SLOPE=-5.70
+# Two-point calibration using pH4 and pH7:
+#   slope = (7.0 - 4.0) / (2.0 - 1.5) = 6.0
+#   offset = 4.0 - 6.0 * 1.5 = -5.0
+#
+# To recalibrate with buffer solutions:
+#   1. Place probe in pH 7.0 buffer, note voltage from serial output
+#   2. Place probe in pH 4.0 buffer, note voltage from serial output
+#   3. Calculate: slope = (pH2-pH1)/(V2-V1), offset = pH1 - slope*V1
+#   4. Update values below and reboot
+PH_CALIB_OFFSET=-5.0
+PH_CALIB_SLOPE=6.0
+
+# PH_CALIB_VOLT_TRIM: Fine-tune voltage offset (volts) applied BEFORE slope/offset.
+#   Formula with trim: pH = PH_CALIB_SLOPE * (V_raw + PH_CALIB_VOLT_TRIM) + PH_CALIB_OFFSET
+#   Use hub command 41 to calibrate automatically: place probe in buffer solution,
+#   send {cmd:41, actual_ph:<buffer_ph>} and the node will compute and save the trim.
+#   Manual calculation: trim = (actual_pH - PH_CALIB_OFFSET) / PH_CALIB_SLOPE - V_measured
+#   Example: reading pH 7.47 when actual is 7.00, V_measured = 2.079V
+#     trim = (7.00 - (-5.0)) / 6.0 - 2.079 = 2.000 - 2.079 = -0.0783
+PH_CALIB_VOLT_TRIM=-0.0783
 
 # ADC reference voltage and resolution
 # D1 Mini has voltage divider on A0: 0-3.3V input range
 ADC_VOLTAGE_REF=3.3
 ADC_MAX_VALUE=1024
+
+# ============================================================================
+# pH PIPELINE CONFIGURATION (continuous median-filtered reading)
+# ============================================================================
+# The pH pipeline reads A0 continuously and computes medians:
+#   1. Read A0 every PH_ADC_READ_INTERVAL_MS (200ms)
+#   2. After PH_SAMPLES_PER_MEDIAN readings (20), compute short-term median
+#   3. Accumulate medians over PH_TREND_WINDOW_SEC (300s)
+#   4. Compute trend median for hub reporting
+#
+# Timing: 20 samples x 200ms = 4s per short-term median
+#         300s / 4s = 75 medians per trend window
+
+# How often to read A0 (milliseconds). Range: 50-10000
+PH_ADC_READ_INTERVAL_MS=200
+
+# Number of readings per short-term median batch. Range: 3-20
+PH_SAMPLES_PER_MEDIAN=20
+
+# Trend window duration in seconds. Range: 10-3600
+PH_TREND_WINDOW_SEC=300
 
 # ============================================================================
 # LOCAL SAFETY LIMITS (Emergency protection independent of hub)
@@ -110,14 +144,14 @@ HUB_HEARTBEAT_TIMEOUT_MS=600000
 #   - VCC: 3.3V or 5V, GND
 #
 # CO2 Relay: Standard relay module
-#   - D7/GPIO13 -> relay IN (HIGH = energized = CO2 flows)
+#   D0/GPIO16 -> relay IN (HIGH = energized = CO2 flows)
 #   - Relay controls CO2 solenoid valve
 #
 # Safety: CO2 is ALWAYS OFF at boot and on any error/disconnect
 #
 # Pin Map (D1 Mini):
 #   A0  (GPIO17) = pH sensor analog input
-#   D7  (GPIO13) = CO2 relay output
+#   D0  (GPIO16) = CO2 relay output
 #   D5  (GPIO14) = Status LED
 #   D1  (GPIO5)  = Available (I2C SCL)
 #   D2  (GPIO4)  = Available (I2C SDA)
@@ -127,4 +161,6 @@ HUB_HEARTBEAT_TIMEOUT_MS=600000
 #   1  = CO2 ON (relay HIGH)
 #   2  = CO2 OFF (relay LOW)
 #   40 = Status request (read pH now)
+#   41 = Calibrate: data[1..4] = known actual pH (float)
+#        Node computes voltage trim and saves PH_CALIB_VOLT_TRIM
 #   0xFF = Force fail-safe (test)

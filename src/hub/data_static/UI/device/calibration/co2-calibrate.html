@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>CO₂ Calibration - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        .status-indicator { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 1.1rem; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+        .status-dot.on { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.5); }
+        .status-dot.off { background: #ef4444; }
+        .ph-display { margin-top: 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+        .ph-value { font-size: 2.5rem; font-weight: 700; color: var(--primary-color); line-height: 1; }
+        .ph-label { font-size: 0.85rem; color: var(--text-secondary); }
+        .calibration-form { display: flex; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color); }
+        .calibration-form label { font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem; }
+        .calibration-form input[type="number"] { width: 120px; padding: 0.5rem; font-size: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); }
+        .chart-container { position: relative; width: 100%; height: 320px; margin-top: 1rem; }
+        .chart-canvas { width: 100% !important; height: 100% !important; }
+        .chart-empty { text-align: center; padding: 3rem 1rem; color: var(--text-secondary); }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/new-header.PNG" alt="AquaSense" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">CO₂ Calibration</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="../../device/manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar"></aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>CO₂ pH Calibration</h1>
+                <p class="page-description">Calibrate your pH sensor using a known reference buffer solution</p>
+            </div>
+
+            <!-- Device Info -->
+            <div class="card">
+                <div class="card-header"><h3>Device Information</h3></div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">—</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;">CO₂ Regulator</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">—</span></div>
+                        <div><span>MAC:</span> <span style="font-weight: bold;" id="deviceMac">—</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Calibrate Card -->
+            <div class="card" style="margin-top: 1.5rem;">
+                <div class="card-header">
+                    <h3>Calibrate</h3>
+                    <span class="badge badge-secondary" id="statusBadge">Fetching…</span>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; align-items: center; gap: 2rem; flex-wrap: wrap;">
+                        <div>
+                            <div class="status-indicator">
+                                <span class="status-dot off" id="statusDot"></span>
+                                <span id="statusText">Unknown</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="ph-label">Current pH (from sensor)</div>
+                            <div class="ph-value" id="phValue">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Calibration Form -->
+                    <div class="calibration-form">
+                        <div>
+                            <label for="actualPH">Reference Buffer pH</label>
+                            <input type="number" id="actualPH" min="0" max="14" step="0.01" value="7.00" placeholder="e.g. 7.00">
+                        </div>
+                        <button id="calibrateBtn" class="btn btn-primary" onclick="sendCalibration()" style="background: #8b5cf6; border-color: #8b5cf6;">
+                            🧪 Set Calibration
+                        </button>
+                        <button class="btn btn-secondary" onclick="refreshStatus()">
+                            🔄 Refresh
+                        </button>
+                        <span id="calibrationStatus" class="badge badge-secondary" style="display: none;"></span>
+                    </div>
+
+                    <p style="margin-top: 1rem; font-size: 0.8rem; color: var(--text-secondary);">
+                        Place the pH probe in a known reference buffer solution (e.g. pH 4.0, 7.0, or 10.0).
+                        Enter the exact pH value and click <strong>Set Calibration</strong> to send the calibration command to the node.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Calibration Trend Graph -->
+            <div class="card" style="margin-top: 1.5rem;">
+                <div class="card-header">
+                    <h3>Calibration Trend</h3>
+                    <span class="badge badge-info" id="trendCount">0 readings</span>
+                </div>
+                <div class="card-content">
+                    <div class="chart-container" id="chartContainer">
+                        <canvas id="calibrationChart" class="chart-canvas"></canvas>
+                    </div>
+                    <div class="chart-empty" id="chartEmpty">
+                        pH readings will appear here as they are polled every minute.
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Chart.js from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="../../scripts/sidebar-inject.js"></script>
+    <script>
+        let currentDevice = null;
+        let currentStatus = { relayOn: false, pH: 0.0, rawADC: 0, errorFlags: 0 };
+        let calibrationChart = null;
+        let trendData = [];  // In-memory only, max 60 points
+        const MAX_TREND_POINTS = 60;
+        let pollingId = null;
+
+        function getQueryParam(name) {
+            return new URLSearchParams(window.location.search).get(name);
+        }
+
+        // ---- Load Device ----
+        async function loadDevice() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '../manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const device = (data.devices || []).find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    alert('Device not found.');
+                    window.location.href = '../manage-devices.html';
+                    return;
+                }
+
+                currentDevice = device;
+                document.getElementById('tankName').textContent = 'Aquarium ' + device.tankId;
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                document.getElementById('deviceMac').textContent = device.mac;
+
+                await refreshStatus();
+            } catch (err) {
+                console.error('Failed to load device:', err);
+                alert('Failed to load device.');
+            }
+        }
+
+        // ---- Status ----
+        async function refreshStatus() {
+            if (!currentDevice) return;
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = 'Fetching…';
+            badge.className = 'badge badge-secondary';
+
+            try {
+                const resp = await fetch('/api/co2-status?mac=' + encodeURIComponent(currentDevice.mac));
+                const data = await resp.json();
+
+                if (data && data.success && data.status) {
+                    currentStatus.relayOn = data.status.relayOn;
+                    currentStatus.pH = data.status.pH;
+                    currentStatus.rawADC = data.status.rawADC || 0;
+                    currentStatus.errorFlags = data.status.errorFlags || 0;
+                    renderStatus();
+                    badge.textContent = 'Updated';
+                    badge.className = 'badge badge-online';
+
+                    // Add to trend data
+                    addTrendPoint(currentStatus.pH);
+                } else if (data && data.pending) {
+                    badge.textContent = 'Waiting…';
+                    badge.className = 'badge badge-secondary';
+                    setTimeout(async () => {
+                        try {
+                            const r2 = await fetch('/api/co2-status?mac=' + encodeURIComponent(currentDevice.mac));
+                            const d2 = await r2.json();
+                            if (d2 && d2.success && d2.status) {
+                                currentStatus.relayOn = d2.status.relayOn;
+                                currentStatus.pH = d2.status.pH;
+                                currentStatus.rawADC = d2.status.rawADC || 0;
+                                currentStatus.errorFlags = d2.status.errorFlags || 0;
+                                renderStatus();
+                                badge.textContent = 'Updated';
+                                badge.className = 'badge badge-online';
+                                addTrendPoint(currentStatus.pH);
+                            }
+                        } catch (e) { /* ignore */ }
+                    }, 2500);
+                } else {
+                    badge.textContent = 'No data';
+                    badge.className = 'badge badge-offline';
+                }
+            } catch (err) {
+                console.warn('Status refresh failed:', err);
+                badge.textContent = 'Offline';
+                badge.className = 'badge badge-offline';
+            }
+        }
+
+        function renderStatus() {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            const phEl = document.getElementById('phValue');
+
+            if (currentStatus.relayOn) {
+                dot.className = 'status-dot on';
+                text.textContent = 'CO₂ ON (Injecting)';
+            } else {
+                dot.className = 'status-dot off';
+                text.textContent = 'CO₂ OFF';
+            }
+
+            if (currentStatus.pH > 0) {
+                phEl.textContent = currentStatus.pH.toFixed(2);
+                if (currentStatus.pH >= 6.5 && currentStatus.pH <= 7.5) {
+                    phEl.style.color = '#10b981';
+                } else if (currentStatus.pH >= 6.0 && currentStatus.pH <= 8.0) {
+                    phEl.style.color = '#f59e0b';
+                } else {
+                    phEl.style.color = '#ef4444';
+                }
+            } else {
+                phEl.textContent = '—';
+                phEl.style.color = 'var(--text-secondary)';
+            }
+        }
+
+        // ---- Send Calibration ----
+        async function sendCalibration() {
+            if (!currentDevice) return;
+
+            const phInput = document.getElementById('actualPH');
+            const phVal = parseFloat(phInput.value);
+            if (isNaN(phVal) || phVal < 0 || phVal > 14) {
+                alert('Invalid pH value. Must be between 0 and 14.');
+                return;
+            }
+
+            const btn = document.getElementById('calibrateBtn');
+            const calStatus = document.getElementById('calibrationStatus');
+
+            btn.disabled = true;
+            btn.textContent = 'Sending…';
+            calStatus.style.display = 'inline';
+            calStatus.textContent = 'Sending…';
+            calStatus.className = 'badge badge-secondary';
+
+            try {
+                const resp = await fetch('/api/co2/calibrate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: currentDevice.mac, actual_ph: phVal })
+                });
+
+                const data = await resp.json();
+                if (data.success) {
+                    calStatus.textContent = 'Calibration sent ✓ (pH=' + phVal.toFixed(2) + ')';
+                    calStatus.className = 'badge badge-online';
+                } else {
+                    calStatus.textContent = 'Failed: ' + (data.error || 'Unknown error');
+                    calStatus.className = 'badge badge-offline';
+                }
+            } catch (err) {
+                console.error('Calibration error:', err);
+                calStatus.textContent = 'Failed to send';
+                calStatus.className = 'badge badge-offline';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🧪 Set Calibration';
+            }
+        }
+
+        // ---- Calibration Trend (in-memory, 1-min polling) ----
+        function addTrendPoint(pH) {
+            if (pH <= 0) return;
+
+            const now = new Date();
+            const label = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+
+            trendData.push({ time: label, pH: pH });
+            if (trendData.length > MAX_TREND_POINTS) {
+                trendData.shift();
+            }
+
+            document.getElementById('trendCount').textContent = trendData.length + ' readings';
+            renderCalibrationChart();
+        }
+
+        function renderCalibrationChart() {
+            if (trendData.length === 0) {
+                document.getElementById('chartContainer').style.display = 'none';
+                document.getElementById('chartEmpty').style.display = 'block';
+                return;
+            }
+
+            document.getElementById('chartContainer').style.display = 'block';
+            document.getElementById('chartEmpty').style.display = 'none';
+
+            const ctx = document.getElementById('calibrationChart').getContext('2d');
+            const labels = trendData.map(d => d.time);
+            const values = trendData.map(d => d.pH);
+
+            if (calibrationChart) {
+                calibrationChart.destroy();
+            }
+
+            const minVal = Math.min(...values);
+            const maxVal = Math.max(...values);
+            const yMin = Math.max(0, Math.floor((minVal - 0.5) * 10) / 10);
+            const yMax = Math.min(14, Math.ceil((maxVal + 0.5) * 10) / 10);
+
+            calibrationChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'pH',
+                        data: values,
+                        borderColor: '#8b5cf6',
+                        backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 3,
+                        pointHoverRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(ctx) {
+                                    return 'pH: ' + ctx.parsed.y.toFixed(2);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Time', color: '#94a3b8' },
+                            ticks: { color: '#94a3b8', maxTicksLimit: 15, maxRotation: 45 },
+                            grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                        },
+                        y: {
+                            title: { display: true, text: 'pH', color: '#94a3b8' },
+                            min: yMin,
+                            max: yMax,
+                            ticks: { color: '#94a3b8', stepSize: 0.2 },
+                            grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        // ---- Init ----
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadDevice();
+            // Poll pH every 60 seconds for calibration trend
+            pollingId = setInterval(refreshStatus, 60000);
+        });
+    </script>
+</body>
+</html>

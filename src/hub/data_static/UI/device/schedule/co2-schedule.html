@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>CO₂ Schedule - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        .schedule-table { width: 100%; border-collapse: collapse; }
+        .schedule-table th, .schedule-table td { padding: 0.75rem 0.5rem; text-align: left; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
+        .schedule-table th { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); }
+        .schedule-row { transition: background 0.15s; }
+        .schedule-row:hover { background: var(--bg-tertiary); }
+        .time-group { display: flex; gap: 0.35rem; align-items: center; }
+        .time-group select { width: auto; min-width: 50px; padding: 0.4rem 0.3rem; font-size: 0.85rem; }
+        .ph-inputs { display: flex; gap: 0.35rem; align-items: center; }
+        .ph-inputs input[type="number"] { width: 80px; padding: 0.4rem 0.3rem; font-size: 0.85rem; text-align: center; }
+        .ph-inputs span { color: var(--text-secondary); font-size: 0.8rem; }
+        .remove-btn { background: none; border: none; color: var(--color-accent-danger, #ef4444); cursor: pointer; font-size: 1.2rem; padding: 0.25rem 0.5rem; border-radius: 4px; }
+        .remove-btn:hover { background: rgba(239,68,68,0.1); }
+        @media (max-width: 640px) {
+            .schedule-table th:nth-child(1), .schedule-table td:nth-child(1) { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/new-header.PNG" alt="AquaSense" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">CO₂ Schedule</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="/device/manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar"></aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>CO₂ Schedule</h1>
+                <p class="page-description">Configure scheduled start/stop times and pH drop target for your CO₂ regulator</p>
+            </div>
+
+            <!-- Device Information -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Device Information</h3>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">—</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;" id="deviceType">CO₂ Regulator</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">—</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule Table -->
+            <div class="card">
+                <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3>Schedule Entries</h3>
+                    <button type="button" class="btn btn-primary" id="addScheduleBtn" style="padding: 0.4rem 1rem; font-size: 0.85rem;">
+                        ➕ Add Schedule
+                    </button>
+                </div>
+                <div class="card-content" style="overflow-x: auto;">
+                    <table class="schedule-table" id="scheduleTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Time</th>
+                                <th>Action</th>
+                                <th>pH Drop</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="scheduleBody">
+                            <!-- Rows added dynamically -->
+                        </tbody>
+                    </table>
+                    <div id="emptyMsg" style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                        No schedule entries yet. Click <strong>Add Schedule</strong> to create one.
+                    </div>
+                </div>
+            </div>
+
+            <!-- pH Delta Thresholds -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>pH Delta Auto-Control</h3>
+                </div>
+                <div class="card-content">
+                    <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1rem;">
+                        When CO₂ is running, the hub monitors the pH drop from baseline. If the drop reaches the <strong>Off Threshold</strong>,
+                        the relay turns off automatically. If pH recovers to the <strong>On Threshold</strong> (and the schedule is still active),
+                        the relay turns back on.
+                    </p>
+                    <div style="display: flex; gap: 2rem; flex-wrap: wrap; align-items: flex-end;">
+                        <div style="flex: 1; min-width: 160px;">
+                            <label class="form-label" for="deltaOffThreshold">Off Threshold (pH drop)</label>
+                            <input type="number" class="form-input" id="deltaOffThreshold"
+                                   min="0.1" max="2.0" step="0.05" value="0.8" placeholder="0.8"
+                                   style="max-width: 140px;">
+                            <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">
+                                Turn CO₂ OFF when pH drops ≥ this value
+                            </small>
+                        </div>
+                        <div style="flex: 1; min-width: 160px;">
+                            <label class="form-label" for="deltaOnThreshold">On Threshold (pH drop)</label>
+                            <input type="number" class="form-input" id="deltaOnThreshold"
+                                   min="0.1" max="2.0" step="0.05" value="0.6" placeholder="0.6"
+                                   style="max-width: 140px;">
+                            <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">
+                                Turn CO₂ back ON when pH drop recovers ≤ this value
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                <button type="button" class="btn btn-create-aquarium" id="saveScheduleBtn">
+                    <span>✓</span> Save Schedule
+                </button>
+                <button type="button" class="btn btn-cancel" id="cancelScheduleBtn">
+                    Cancel
+                </button>
+                <button type="button" class="btn btn-danger" id="deleteScheduleBtn" title="Delete schedule for this device">
+                    🗑️ Delete Schedule
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <script src="/scripts/sidebar-inject.js"></script>
+    <script>
+        // ---- State ----
+        let currentDevice = null;
+        let scheduleEntries = []; // Array of { hour, minute, ampm, action, minPH, maxPH }
+
+        // ---- Helpers ----
+        function getQueryParam(name) {
+            return new URLSearchParams(window.location.search).get(name);
+        }
+
+        // ---- Dropdown Helpers ----
+        function makeOptions(values, pad) {
+            return values.map(v => {
+                const text = pad ? String(v).padStart(2, '0') : String(v);
+                return `<option value="${v}">${text}</option>`;
+            }).join('');
+        }
+        const hourOptions = makeOptions([1,2,3,4,5,6,7,8,9,10,11,12], false);
+        const minuteOptions = makeOptions([0,15,30,45], true);
+        const ampmOptions = '<option value="AM">AM</option><option value="PM">PM</option>';
+
+        // ---- Render Schedule Table ----
+        function renderTable() {
+            const tbody = document.getElementById('scheduleBody');
+            const emptyMsg = document.getElementById('emptyMsg');
+
+            if (scheduleEntries.length === 0) {
+                tbody.innerHTML = '';
+                emptyMsg.style.display = 'block';
+                return;
+            }
+
+            emptyMsg.style.display = 'none';
+            tbody.innerHTML = scheduleEntries.map((entry, idx) => {
+                const phHidden = entry.action === 'stop' ? 'style="visibility:hidden;"' : '';
+                return `
+                <tr class="schedule-row" data-idx="${idx}">
+                    <td style="font-weight:600; color: var(--text-secondary);">${idx + 1}</td>
+                    <td>
+                        <div class="time-group">
+                            <select class="form-input sc-hour" data-idx="${idx}">${hourOptions}</select>
+                            <span>:</span>
+                            <select class="form-input sc-min" data-idx="${idx}">${minuteOptions}</select>
+                            <select class="form-input sc-ampm" data-idx="${idx}">${ampmOptions}</select>
+                        </div>
+                    </td>
+                    <td>
+                        <select class="form-input sc-action" data-idx="${idx}" style="min-width:100px;">
+                            <option value="start" ${entry.action === 'start' ? 'selected' : ''}>Start</option>
+                            <option value="stop" ${entry.action === 'stop' ? 'selected' : ''}>Stop</option>
+                        </select>
+                    </td>
+                    <td>
+                        <div class="ph-inputs" ${phHidden} data-idx="${idx}">
+                            <input type="number" class="form-input sc-phdrop" data-idx="${idx}"
+                                   min="0.1" max="3.0" step="0.1" value="${entry.phDrop ?? 1.0}" placeholder="Drop">
+                            <span>pH</span>
+                        </div>
+                    </td>
+                    <td>
+                        <button type="button" class="remove-btn" data-idx="${idx}" title="Remove entry">✕</button>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            // Set dropdown values after HTML is in DOM
+            scheduleEntries.forEach((entry, idx) => {
+                const row = tbody.querySelector(`tr[data-idx="${idx}"]`);
+                if (!row) return;
+                row.querySelector('.sc-hour').value = entry.hour || 8;
+                row.querySelector('.sc-min').value = entry.minute || 0;
+                row.querySelector('.sc-ampm').value = entry.ampm || 'AM';
+            });
+
+            attachRowEvents();
+        }
+
+        // ---- Attach events to each row ----
+        function attachRowEvents() {
+            // Action change -> show/hide pH inputs
+            document.querySelectorAll('.sc-action').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    const idx = parseInt(this.dataset.idx, 10);
+                    scheduleEntries[idx].action = this.value;
+                    const wrap = document.querySelector(`.ph-inputs[data-idx="${idx}"]`);
+                    if (wrap) wrap.style.visibility = this.value === 'stop' ? 'hidden' : 'visible';
+                });
+            });
+
+            // pH drop input changes
+            document.querySelectorAll('.sc-phdrop').forEach(inp => {
+                inp.addEventListener('change', function() {
+                    scheduleEntries[parseInt(this.dataset.idx, 10)].phDrop = parseFloat(this.value) || 1.0;
+                });
+            });
+
+            // Time dropdown changes
+            document.querySelectorAll('.sc-hour').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    scheduleEntries[parseInt(this.dataset.idx, 10)].hour = parseInt(this.value, 10);
+                });
+            });
+            document.querySelectorAll('.sc-min').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    scheduleEntries[parseInt(this.dataset.idx, 10)].minute = parseInt(this.value, 10);
+                });
+            });
+            document.querySelectorAll('.sc-ampm').forEach(sel => {
+                sel.addEventListener('change', function() {
+                    scheduleEntries[parseInt(this.dataset.idx, 10)].ampm = this.value;
+                });
+            });
+
+            // Remove button
+            document.querySelectorAll('.remove-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const idx = parseInt(this.dataset.idx, 10);
+                    scheduleEntries.splice(idx, 1);
+                    renderTable();
+                });
+            });
+        }
+
+        // ---- Add Schedule Entry ----
+        document.getElementById('addScheduleBtn').addEventListener('click', function() {
+            scheduleEntries.push({
+                hour: 8,
+                minute: 0,
+                ampm: 'AM',
+                action: 'start',
+                phDrop: 1.0
+            });
+            renderTable();
+        });
+
+        // ---- Load Device ----
+        async function loadDeviceFromQuery() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '/device/manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const devices = data.devices || [];
+                const device = devices.find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    alert('Device not found. It may have been unmapped or removed.');
+                    window.location.href = '/device/manage-devices.html';
+                    return;
+                }
+
+                document.getElementById('tankName').textContent = 'Aquarium ' + device.tankId;
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                currentDevice = device;
+
+                // Load saved schedule
+                await loadSchedule(mac);
+                renderTable();
+            } catch (err) {
+                console.error('Error loading device:', err);
+                alert('Failed to load device information.');
+            }
+        }
+
+        async function loadSchedule(mac) {
+            try {
+                const resp = await fetch('/api/co2-schedule?mac=' + encodeURIComponent(mac));
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error((data && data.error) || 'Failed');
+
+                if (data.schedule && data.schedule.entries && data.schedule.entries.length > 0) {
+                    scheduleEntries = data.schedule.entries.map(e => ({
+                        hour: e.hour || 8,
+                        minute: e.minute || 0,
+                        ampm: e.ampm || 'AM',
+                        action: e.action || 'start',
+                        phDrop: e.phDrop ?? 1.0
+                    }));
+                }
+
+                // Load pH delta thresholds
+                if (data.schedule) {
+                    const offEl = document.getElementById('deltaOffThreshold');
+                    const onEl = document.getElementById('deltaOnThreshold');
+                    if (data.schedule.deltaOffThreshold != null) offEl.value = data.schedule.deltaOffThreshold;
+                    if (data.schedule.deltaOnThreshold != null) onEl.value = data.schedule.deltaOnThreshold;
+                }
+            } catch (err) {
+                console.warn('No schedule loaded:', err);
+                const cached = localStorage.getItem('co2Schedule:' + mac);
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        if (parsed && parsed.entries) {
+                            scheduleEntries = parsed.entries;
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+            }
+        }
+
+        // ---- Save ----
+        function setSaveState(saving) {
+            const btn = document.getElementById('saveScheduleBtn');
+            btn.disabled = saving;
+            btn.innerHTML = saving ? 'Saving...' : '<span>✓</span> Save Schedule';
+        }
+
+        document.getElementById('saveScheduleBtn').addEventListener('click', async function() {
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+
+            // Validate pH drop values
+            for (let i = 0; i < scheduleEntries.length; i++) {
+                const e = scheduleEntries[i];
+                if (e.action === 'start') {
+                    if (!e.phDrop || e.phDrop < 0.1 || e.phDrop > 3.0) {
+                        alert(`Entry ${i+1}: pH drop must be between 0.1 and 3.0.`);
+                        return;
+                    }
+                }
+            }
+
+            // Validate delta thresholds
+            const offThr = parseFloat(document.getElementById('deltaOffThreshold').value);
+            const onThr = parseFloat(document.getElementById('deltaOnThreshold').value);
+            if (isNaN(offThr) || offThr < 0.1 || offThr > 2.0) {
+                alert('Off Threshold must be between 0.1 and 2.0.');
+                return;
+            }
+            if (isNaN(onThr) || onThr < 0.1 || onThr > 2.0) {
+                alert('On Threshold must be between 0.1 and 2.0.');
+                return;
+            }
+            if (onThr >= offThr) {
+                alert('On Threshold must be less than Off Threshold for proper hysteresis.');
+                return;
+            }
+
+            const payload = {
+                mac: currentDevice.mac,
+                tankId: currentDevice.tankId,
+                deviceName: currentDevice.name || currentDevice.mac,
+                schedule: { entries: scheduleEntries },
+                deltaOffThreshold: parseFloat(document.getElementById('deltaOffThreshold').value) || 0.8,
+                deltaOnThreshold: parseFloat(document.getElementById('deltaOnThreshold').value) || 0.6
+            };
+
+            try {
+                setSaveState(true);
+                const resp = await fetch('/api/co2-schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error((data && data.error) || 'Save failed');
+
+                localStorage.setItem('co2Schedule:' + currentDevice.mac, JSON.stringify(payload.schedule));
+                alert('CO₂ schedule saved successfully.');
+            } catch (err) {
+                console.error('Save failed:', err);
+                alert('Failed to save schedule.');
+            } finally {
+                setSaveState(false);
+            }
+        });
+
+        // ---- Cancel ----
+        document.getElementById('cancelScheduleBtn').addEventListener('click', function() {
+            if (currentDevice) {
+                loadSchedule(currentDevice.mac).then(() => renderTable());
+            }
+        });
+
+        // ---- Delete ----
+        document.getElementById('deleteScheduleBtn').addEventListener('click', async function() {
+            if (!currentDevice) { alert('Device not loaded.'); return; }
+            if (!confirm('Delete schedule for this device? This cannot be undone.')) return;
+
+            try {
+                let resp = await fetch('/api/co2-schedule/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: currentDevice.mac })
+                });
+
+                let data = {};
+                try { data = await resp.json(); } catch (e) { /* ignore */ }
+
+                if (!resp.ok || !data.success) {
+                    resp = await fetch('/api/co2-schedule', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ mac: currentDevice.mac, action: 'delete' })
+                    });
+                    data = await resp.json();
+                }
+
+                if (!resp.ok || !data.success) throw new Error((data && data.error) || 'Delete failed');
+
+                localStorage.removeItem('co2Schedule:' + currentDevice.mac);
+                alert('Schedule deleted successfully.');
+                window.location.href = '/device/manage-devices.html';
+            } catch (err) {
+                console.error('Delete failed:', err);
+                alert('Failed to delete schedule.');
+            }
+        });
+
+        // ---- Init ----
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDeviceFromQuery();
+        });
+    </script>
+</body>
+</html>

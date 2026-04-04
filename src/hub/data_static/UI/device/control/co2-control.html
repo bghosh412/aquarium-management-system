@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0c4a6e">
+    <title>CO₂ Control - Aquarium Hub</title>
+    <link rel="stylesheet" href="/styles/styles.css">
+    <style>
+        .status-indicator { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 1.1rem; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+        .status-dot.on { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.5); }
+        .status-dot.off { background: #ef4444; }
+        .ph-display { margin-top: 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+        .ph-value { font-size: 2.5rem; font-weight: 700; color: var(--primary-color); line-height: 1; }
+        .ph-label { font-size: 0.85rem; color: var(--text-secondary); }
+        .toggle-section { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; margin-top: 1rem; }
+        .btn .btn-icon { display: inline-block; width: 18px; height: 18px; margin-right: 0.5rem; vertical-align: middle; }
+        .btn .btn-icon svg { display: inline-block; vertical-align: middle; }
+        .btn.btn-success { background-color: #16a34a; border-color: #16a34a; }
+        .btn.btn-danger { background-color: #dc2626; border-color: #dc2626; }
+        .spinner svg { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        /* Chart styles */
+        .chart-container { position: relative; width: 100%; height: 320px; margin-top: 1rem; }
+        .chart-canvas { width: 100% !important; height: 100% !important; }
+        .chart-empty { text-align: center; padding: 3rem 1rem; color: var(--text-secondary); }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-brand">
+                <img src="/images/new-header.PNG" alt="AquaSense" class="navbar-logo">
+                <div>
+                    <h1 class="brand-title">Aquarium Hub</h1>
+                    <p class="brand-subtitle">CO₂ Control</p>
+                </div>
+            </div>
+            <div class="navbar-actions">
+                <a href="../../device/manage-devices.html" class="btn btn-secondary">
+                    <span>←</span> Back
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar"></aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="page-header">
+                <h1>CO₂ Control</h1>
+                <p class="page-description">Monitor pH readings and control your CO₂ regulator</p>
+            </div>
+
+            <!-- Device Info -->
+            <div class="card">
+                <div class="card-header"><h3>Device Information</h3></div>
+                <div class="card-content">
+                    <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center;">
+                        <div><span>Aquarium:</span> <span style="font-weight: bold;" id="tankName">—</span></div>
+                        <div><span>Device Type:</span> <span style="font-weight: bold;">CO₂ Regulator</span></div>
+                        <div><span>Name:</span> <span style="font-weight: bold;" id="deviceName">—</span></div>
+                        <div><span>MAC:</span> <span style="font-weight: bold;" id="deviceMac">—</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Current Status -->
+            <div class="card" style="margin-top: 1.5rem;">
+                <div class="card-header">
+                    <h3>Current Status</h3>
+                    <span class="badge badge-secondary" id="statusBadge">Fetching…</span>
+                </div>
+                <div class="card-content">
+                    <div style="display: flex; align-items: center; gap: 2rem; flex-wrap: wrap;">
+                        <div>
+                            <div class="status-indicator">
+                                <span class="status-dot off" id="statusDot"></span>
+                                <span id="statusText">Unknown</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="ph-label">Current pH (median of last 5)</div>
+                            <div class="ph-value" id="phValue">—</div>
+                        </div>
+                    </div>
+
+                    <!-- On/Off Toggle -->
+                    <div class="toggle-section">
+                        <button id="toggleBtn" class="btn btn-success" onclick="toggleCO2()">
+                            <span class="btn-icon" aria-hidden></span>
+                            <span class="btn-label">Turn ON</span>
+                        </button>
+                        <button class="btn btn-secondary" onclick="refreshStatus()">
+                            🔄 Refresh Status
+                        </button>
+                        <span id="commandStatus" class="badge badge-secondary" style="display: none;"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- pH Trend Graph (last 24 hours) -->
+            <div class="card" style="margin-top: 1.5rem;">
+                <div class="card-header">
+                    <h3>pH Trend (Last 24 Hours)</h3>
+                    <span class="badge badge-info" id="historyCount">0 readings</span>
+                </div>
+                <div class="card-content">
+                    <div class="chart-container" id="chartContainer">
+                        <canvas id="phChart" class="chart-canvas"></canvas>
+                    </div>
+                    <div class="chart-empty" id="chartEmpty" style="display: none;">
+                        No pH history data available yet. Data is recorded every 5 minutes.
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Chart.js from CDN (lightweight) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="../../scripts/sidebar-inject.js"></script>
+    <script>
+        let currentDevice = null;
+        let currentStatus = { relayOn: false, pH: 0.0, rawADC: 0, errorFlags: 0 };
+        let phChart = null;
+        let pollingId = null;
+
+        // SVG icons for toggle button
+        const SVG_POWER_ON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2V12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M5.758 5.758A9 9 0 1 0 18.242 18.242" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const SVG_POWER_OFF = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 18.36A9 9 0 1 0 18 6.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 2v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+        const SVG_SPINNER = '<svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="60" stroke-dashoffset="0" fill="none"/></svg>';
+
+        function getQueryParam(name) {
+            return new URLSearchParams(window.location.search).get(name);
+        }
+
+        // ---- Load Device ----
+        async function loadDevice() {
+            const mac = getQueryParam('mac') || localStorage.getItem('selectedDeviceMac');
+            if (!mac) {
+                alert('No device selected.');
+                window.location.href = '../manage-devices.html';
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/devices');
+                const data = await resp.json();
+                const device = (data.devices || []).find(d => d.mac && d.mac.toUpperCase() === mac.toUpperCase());
+
+                if (!device) {
+                    alert('Device not found.');
+                    window.location.href = '../manage-devices.html';
+                    return;
+                }
+
+                currentDevice = device;
+                document.getElementById('tankName').textContent = 'Aquarium ' + device.tankId;
+                document.getElementById('deviceName').textContent = device.name || device.mac;
+                document.getElementById('deviceMac').textContent = device.mac;
+
+                await refreshStatus();
+                await loadPhHistory();
+            } catch (err) {
+                console.error('Failed to load device:', err);
+                alert('Failed to load device.');
+            }
+        }
+
+        // ---- Status ----
+        async function refreshStatus() {
+            if (!currentDevice) return;
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = 'Fetching…';
+            badge.className = 'badge badge-secondary';
+
+            try {
+                const resp = await fetch('/api/co2-status?mac=' + encodeURIComponent(currentDevice.mac));
+                const data = await resp.json();
+
+                if (data && data.success && data.status) {
+                    currentStatus.relayOn = data.status.relayOn;
+                    currentStatus.pH = data.status.pH;
+                    currentStatus.rawADC = data.status.rawADC || 0;
+                    currentStatus.errorFlags = data.status.errorFlags || 0;
+                    renderStatus();
+                    badge.textContent = 'Updated';
+                    badge.className = 'badge badge-online';
+                } else if (data && data.pending) {
+                    badge.textContent = 'Waiting for response…';
+                    badge.className = 'badge badge-secondary';
+                    setTimeout(() => refreshStatusPoll(), 2500);
+                } else {
+                    badge.textContent = 'No data';
+                    badge.className = 'badge badge-offline';
+                }
+            } catch (err) {
+                console.warn('Status refresh failed:', err);
+                badge.textContent = 'Offline';
+                badge.className = 'badge badge-offline';
+            }
+        }
+
+        async function refreshStatusPoll() {
+            if (!currentDevice) return;
+            try {
+                const resp = await fetch('/api/co2-status?mac=' + encodeURIComponent(currentDevice.mac));
+                const data = await resp.json();
+                if (data && data.success && data.status) {
+                    currentStatus.relayOn = data.status.relayOn;
+                    currentStatus.pH = data.status.pH;
+                    currentStatus.rawADC = data.status.rawADC || 0;
+                    currentStatus.errorFlags = data.status.errorFlags || 0;
+                    renderStatus();
+                    document.getElementById('statusBadge').textContent = 'Updated';
+                    document.getElementById('statusBadge').className = 'badge badge-online';
+                }
+            } catch (err) {
+                console.warn('Status poll failed:', err);
+            }
+        }
+
+        function renderStatus() {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            const phEl = document.getElementById('phValue');
+            const btn = document.getElementById('toggleBtn');
+            const iconEl = btn.querySelector('.btn-icon');
+            const labelEl = btn.querySelector('.btn-label');
+
+            if (currentStatus.relayOn) {
+                dot.className = 'status-dot on';
+                text.textContent = 'CO₂ ON (Injecting)';
+                btn.className = 'btn btn-danger';
+                if (iconEl) iconEl.innerHTML = SVG_POWER_ON;
+                if (labelEl) labelEl.textContent = 'Turn OFF';
+            } else {
+                dot.className = 'status-dot off';
+                text.textContent = 'CO₂ OFF';
+                btn.className = 'btn btn-success';
+                if (iconEl) iconEl.innerHTML = SVG_POWER_OFF;
+                if (labelEl) labelEl.textContent = 'Turn ON';
+            }
+
+            if (currentStatus.pH > 0) {
+                phEl.textContent = currentStatus.pH.toFixed(2);
+                // Color code: green = 6.5-7.5, yellow = outside, red = extreme
+                if (currentStatus.pH >= 6.5 && currentStatus.pH <= 7.5) {
+                    phEl.style.color = '#10b981';
+                } else if (currentStatus.pH >= 6.0 && currentStatus.pH <= 8.0) {
+                    phEl.style.color = '#f59e0b';
+                } else {
+                    phEl.style.color = '#ef4444';
+                }
+            } else {
+                phEl.textContent = '—';
+                phEl.style.color = 'var(--text-secondary)';
+            }
+        }
+
+        // ---- Toggle CO2 On/Off ----
+        async function toggleCO2() {
+            if (!currentDevice) return;
+
+            const isOn = currentStatus.relayOn;
+            const command = isOn ? 'TURN_OFF' : 'TURN_ON';
+            const btn = document.getElementById('toggleBtn');
+            const iconEl = btn.querySelector('.btn-icon');
+            const labelEl = btn.querySelector('.btn-label');
+            const cmdStatus = document.getElementById('commandStatus');
+
+            btn.disabled = true;
+            if (labelEl) labelEl.textContent = '...';
+            if (iconEl) iconEl.innerHTML = SVG_SPINNER;
+            cmdStatus.style.display = 'inline';
+            cmdStatus.textContent = 'Sending…';
+            cmdStatus.className = 'badge badge-secondary';
+
+            try {
+                const resp = await fetch('/api/co2-command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: currentDevice.mac, command: command })
+                });
+
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error((data && data.error) || 'Command failed');
+
+                cmdStatus.textContent = 'Sent ✓';
+                cmdStatus.className = 'badge badge-online';
+
+                // Wait for node to respond, then refresh
+                setTimeout(async () => {
+                    await refreshStatus();
+                    btn.disabled = false;
+                    renderStatus();
+                }, 3000);
+            } catch (err) {
+                console.error('Toggle failed:', err);
+                cmdStatus.textContent = 'Failed ✕';
+                cmdStatus.className = 'badge badge-offline';
+                btn.disabled = false;
+                renderStatus();
+                alert('Failed to send command: ' + (err.message || 'Unknown error'));
+            }
+        }
+
+        // ---- pH History Chart ----
+        async function loadPhHistory() {
+            if (!currentDevice) return;
+
+            try {
+                const resp = await fetch('/api/co2/ph-history?mac=' + encodeURIComponent(currentDevice.mac));
+                const data = await resp.json();
+                const history = (data && data.history) || [];
+
+                if (history.length > 0) {
+                    document.getElementById('chartContainer').style.display = 'block';
+                    document.getElementById('chartEmpty').style.display = 'none';
+                    document.getElementById('historyCount').textContent = history.length + ' readings';
+                    renderChart(history);
+                } else {
+                    document.getElementById('chartContainer').style.display = 'none';
+                    document.getElementById('chartEmpty').style.display = 'block';
+                    document.getElementById('historyCount').textContent = '0 readings';
+                }
+            } catch (err) {
+                console.warn('Failed to load pH history:', err);
+                document.getElementById('chartContainer').style.display = 'none';
+                document.getElementById('chartEmpty').style.display = 'block';
+            }
+        }
+
+        function renderChart(history) {
+            const ctx = document.getElementById('phChart').getContext('2d');
+
+            const labels = history.map(h => h.time || '');
+            const values = history.map(h => parseFloat(h.pH));
+
+            if (phChart) {
+                phChart.destroy();
+            }
+
+            // Determine Y axis bounds
+            const minVal = Math.min(...values);
+            const maxVal = Math.max(...values);
+            const yMin = Math.max(0, Math.floor((minVal - 0.5) * 10) / 10);
+            const yMax = Math.min(14, Math.ceil((maxVal + 0.5) * 10) / 10);
+
+            phChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'pH',
+                        data: values,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 2,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(ctx) {
+                                    return 'pH: ' + ctx.parsed.y.toFixed(2);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Time (Hours)', color: '#94a3b8' },
+                            ticks: { color: '#94a3b8', maxTicksLimit: 24, maxRotation: 45 },
+                            grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                        },
+                        y: {
+                            title: { display: true, text: 'pH', color: '#94a3b8' },
+                            min: yMin,
+                            max: yMax,
+                            ticks: { color: '#94a3b8', stepSize: 0.5 },
+                            grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        // ---- Init ----
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadDevice();
+            // Poll status every 60 seconds, refresh history every 5 min
+            pollingId = setInterval(refreshStatus, 60000);
+            setInterval(loadPhHistory, 300000);
+        });
+    </script>
+</body>
+</html>

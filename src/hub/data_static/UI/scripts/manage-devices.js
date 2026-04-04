@@ -169,6 +169,10 @@ function renderDevices() {
                         `<button class="device-action-btn btn-primary" onclick="viewDevice('${device.mac}')" title="View Schedules">
                             <i class="fas fa-calendar-alt"></i> Schedule
                         </button>` : ''}
+                    ${deviceTypeLower === 'co2' ? 
+                        `<button class="device-action-btn btn-info" onclick="calibrateDevice('${device.mac}')" title="pH Calibration" style="background: #8b5cf6; color: white;">
+                            <i class="fas fa-flask"></i> Calibrate
+                        </button>` : ''}
                     <button class="device-action-btn btn-success" onclick="setupDevice('${device.mac}')" title="Configure Device">
                         <i class="fas fa-cog"></i> Setup
                     </button>
@@ -342,11 +346,15 @@ function viewDevice(mac) {
         return;
     }
 
-    // Route to appropriate details page
+    // CO2: open co2 schedule
+    if (deviceType === 'co2') {
+        window.location.href = `schedule/co2-schedule.html?mac=${mac}`;
+        return;
+    }
+
+    // Route to appropriate details page (fallback for types without dedicated schedule pages)
     const detailsPages = {
-        'co2': '../aquarium/details/co2-details.html',
         'heater': '../aquarium/details/heater-details.html',
-        'feeder': '../aquarium/details/feeder-details.html',
         'sensor': '../aquarium/details/sensor-details.html'
     };
     
@@ -384,7 +392,22 @@ function controlDevice(mac) {
         return;
     }
 
-    showNotification('Control is only available for light, feeder, and wave maker devices.', 'error');
+    // CO2: open co2 control page
+    if (deviceType === 'co2') {
+        localStorage.setItem('selectedDeviceMac', mac);
+        window.location.href = `control/co2-control.html?mac=${mac}`;
+        return;
+    }
+
+    showNotification('Control is only available for light, feeder, wave maker, and CO₂ devices.', 'error');
+}
+
+function calibrateDevice(mac) {
+    const device = allDevices.find(d => d.mac === mac);
+    if (!device) return;
+
+    localStorage.setItem('selectedDeviceMac', mac);
+    window.location.href = 'calibration/co2-calibrate.html?mac=' + encodeURIComponent(mac);
 }
 
 function unmapDevice(mac, name) {

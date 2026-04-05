@@ -110,7 +110,12 @@
             <div class="card" style="margin-top: 1.5rem;">
                 <div class="card-header">
                     <h3>pH Trend (Last 24 Hours)</h3>
-                    <span class="badge badge-info" id="historyCount">0 readings</span>
+                    <div style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                        <button id="clearHistoryBtn" class="btn btn-secondary" onclick="clearPhHistory()" style="padding: 0.35rem 0.7rem; font-size: 0.85rem;">
+                            🗑️ Clear
+                        </button>
+                        <span class="badge badge-info" id="historyCount">0 readings</span>
+                    </div>
                 </div>
                 <div class="card-content">
                     <div class="chart-container" id="chartContainer">
@@ -118,6 +123,9 @@
                     </div>
                     <div class="chart-empty" id="chartEmpty" style="display: none;">
                         No pH history data available yet. Data is recorded every 5 minutes.
+                    </div>
+                    <div style="margin-top: 0.75rem;">
+                        <span id="clearHistoryStatus" class="badge badge-secondary" style="display: none;"></span>
                     </div>
                 </div>
             </div>
@@ -336,6 +344,53 @@
                 console.warn('Failed to load pH history:', err);
                 document.getElementById('chartContainer').style.display = 'none';
                 document.getElementById('chartEmpty').style.display = 'block';
+            }
+        }
+
+        async function clearPhHistory() {
+            if (!currentDevice) return;
+
+            const confirmed = window.confirm('Clear all stored pH trend readings for this CO₂ node? This cannot be undone.');
+            if (!confirmed) return;
+
+            const btn = document.getElementById('clearHistoryBtn');
+            const status = document.getElementById('clearHistoryStatus');
+
+            btn.disabled = true;
+            status.style.display = 'inline';
+            status.textContent = 'Clearing…';
+            status.className = 'badge badge-secondary';
+
+            try {
+                const resp = await fetch('/api/co2/ph-history/clear', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: currentDevice.mac })
+                });
+
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error((data && data.error) || 'Failed to clear history');
+                }
+
+                if (phChart) {
+                    phChart.destroy();
+                    phChart = null;
+                }
+
+                document.getElementById('chartContainer').style.display = 'none';
+                document.getElementById('chartEmpty').style.display = 'block';
+                document.getElementById('historyCount').textContent = '0 readings';
+
+                status.textContent = 'Cleared ✓';
+                status.className = 'badge badge-online';
+            } catch (err) {
+                console.error('Failed to clear pH history:', err);
+                status.textContent = 'Clear failed ✕';
+                status.className = 'badge badge-offline';
+                alert('Failed to clear pH history: ' + (err.message || 'Unknown error'));
+            } finally {
+                btn.disabled = false;
             }
         }
 

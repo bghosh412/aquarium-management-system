@@ -65,6 +65,14 @@
             "enabled": true
         },
         {
+            "event": "co2.*",
+            "channel": "ntfy",
+            "title": "AMS - CO2",
+            "priority": 4,
+            "throttleMs": 30000,
+            "enabled": true
+        },
+        {
             "event": "*",
             "channel": "log",
             "priority": 3,

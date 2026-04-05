@@ -437,8 +437,14 @@ static void phPipelineTick() {
         // Implausible reading - skip this sample
         co2State.sensorError = true;
         co2State.errorFlags  = 1;
-        if (nodeConfig.debugHardware) {
-            Serial.printf("[PH] Pipeline: implausible ADC=%d, skipping\n", rawADC);
+        // Always log implausible readings (throttled to every 5s to avoid spam)
+        static uint32_t lastImplausibleLog = 0;
+        if (now - lastImplausibleLog >= 5000) {
+            lastImplausibleLog = now;
+            float voltage = (float)rawADC * co2Cfg.adcVoltageRef / (float)co2Cfg.adcMaxValue;
+            float rawPH = co2Cfg.phCalibSlope * (voltage + co2Cfg.phCalibVoltTrim) + co2Cfg.phCalibOffset;
+            Serial.printf("[PH] WARN: implausible ADC=%d V=%.3f pH=%.2f (out of 0-14 range), skipping\n",
+                          rawADC, voltage, rawPH);
         }
         return;
     }

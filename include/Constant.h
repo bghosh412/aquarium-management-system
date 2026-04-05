@@ -40,6 +40,12 @@
 // Device CRUD notifications
 #define NTFY_MSG_DEVICE_DELETED "Device deleted: %s"
 
+// CO2 delta control notifications
+#define NTFY_MSG_CO2_DELTA_OFF "CO2 auto-OFF: pH drop %.2f in %s (%s)"
+// args: delta, deviceName, aquariumName
+#define NTFY_MSG_CO2_DELTA_ON "CO2 auto-ON: pH recovered to delta %.2f in %s (%s)"
+// args: delta, deviceName, aquariumName
+
 // OTA notifications
 #define NTFY_MSG_HUB_OTA_STARTED "Hub OTA started: %s update %s → %s"
 // args: type (Firmware/LittleFS), currentVersion, newVersion

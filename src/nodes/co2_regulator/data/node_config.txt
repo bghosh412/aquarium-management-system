@@ -50,33 +50,33 @@ PH_DISCARD_COUNT=2
 # pH CALIBRATION
 # ============================================================================
 # pH Regulator Board Calibration
-# Formula: pH = PH_CALIB_SLOPE * voltage + PH_CALIB_OFFSET
+# Formula: pH = PH_CALIB_SLOPE * (V_raw + PH_CALIB_VOLT_TRIM) + PH_CALIB_OFFSET
 #
-# Board manual specs (nominal, before probe calibration):
-#   pH 4.0 = 1.5V output
-#   pH 7.0 = 2.0V output
-#   pH 9.0 = 2.5V output
+# 3-point calibration using buffer solutions (2026-04-05):
+#   pH 4.0 = 1.869V
+#   pH 7.0 = 2.098V
+#   pH 9.0 = 2.249V
 #
-# Two-point calibration using pH4 and pH7:
-#   slope = (7.0 - 4.0) / (2.0 - 1.5) = 6.0
-#   offset = 4.0 - 6.0 * 1.5 = -5.0
+# Linear regression (least squares):
+#   V = 0.07603 * pH + 1.5652  →  pH = 13.1533 * V - 20.5879
+#   R² ≈ 0.999 across 3 calibration points
 #
 # To recalibrate with buffer solutions:
 #   1. Place probe in pH 7.0 buffer, note voltage from serial output
 #   2. Place probe in pH 4.0 buffer, note voltage from serial output
-#   3. Calculate: slope = (pH2-pH1)/(V2-V1), offset = pH1 - slope*V1
-#   4. Update values below and reboot
-PH_CALIB_OFFSET=-5.0
-PH_CALIB_SLOPE=6.0
+#   3. (Optional) Place probe in pH 9.0 buffer for 3rd point
+#   4. Calculate: slope = (pH2-pH1)/(V2-V1), offset = pH1 - slope*V1
+#   5. Update values below and reboot
+PH_CALIB_OFFSET=-20.5879
+PH_CALIB_SLOPE=13.1533
 
 # PH_CALIB_VOLT_TRIM: Fine-tune voltage offset (volts) applied BEFORE slope/offset.
 #   Formula with trim: pH = PH_CALIB_SLOPE * (V_raw + PH_CALIB_VOLT_TRIM) + PH_CALIB_OFFSET
 #   Use hub command 41 to calibrate automatically: place probe in buffer solution,
 #   send {cmd:41, actual_ph:<buffer_ph>} and the node will compute and save the trim.
 #   Manual calculation: trim = (actual_pH - PH_CALIB_OFFSET) / PH_CALIB_SLOPE - V_measured
-#   Example: reading pH 7.47 when actual is 7.00, V_measured = 2.079V
-#     trim = (7.00 - (-5.0)) / 6.0 - 2.079 = 2.000 - 2.079 = -0.0783
-PH_CALIB_VOLT_TRIM=-0.0783
+#   Set to 0.0 when slope/offset are freshly calibrated from buffer solutions.
+PH_CALIB_VOLT_TRIM=0.0288
 
 # ADC reference voltage and resolution
 # D1 Mini has voltage divider on A0: 0-3.3V input range

@@ -3616,9 +3616,19 @@ void setupNotifications() {
             notifier.route("node.*",      "ntfy", NTF_PRIORITY_HIGH,    "AMS - Node Event", 10000);
             notifier.route("config.*",    "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Config",        0);
             notifier.route("scheduler.*", "ntfy", NTF_PRIORITY_DEFAULT, "AMS - Scheduler", 30000);
+            notifier.route("co2.*",       "ntfy", NTF_PRIORITY_HIGH,    "AMS - CO2",       30000);
         }
         // Always log everything to Serial
         notifier.route("*", "log", NTF_PRIORITY_DEFAULT, "", 0);
+    }
+
+    // Ensure co2.* route always exists (may be missing from older notifications.json on device)
+    // route() is additive — if co2.* was already loaded from JSON, this adds a duplicate
+    // which is harmless (first match wins and both point to ntfy). Guarantees CO2 delta
+    // events reach ntfy even if the on-device JSON predates the co2.* route.
+    if (ntfyTopic.length() > 0) {
+        notifier.route("co2.*", "ntfy", NTF_PRIORITY_HIGH, "AMS - CO2", 30000);
+        LOG_INFO("[NTF] Ensured co2.* route exists");
     }
 
     // Start async worker on Core 1 (same core as WebUI)
@@ -6026,6 +6036,64 @@ void setupWebServer() {
 
         String response;
         serializeJson(responseDoc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // POST clear CO2 pH history for selected MAC (deletes persisted file)
+    // Body: {"mac":"AA:BB:CC:DD:EE:FF"}
+    server.on("/api/co2/ph-history/clear", HTTP_POST, [](AsyncWebServerRequest *request){
+    }, nullptr, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        if (index != 0 || (index + len) != total) {
+            Serial.println("[CO2] clear-history rejected: chunked request body not supported");
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Chunked JSON body not supported\"}");
+            return;
+        }
+
+        DynamicJsonDocument body(512);
+        DeserializationError error = deserializeJson(body, data, len);
+        if (error) {
+            Serial.println("[CO2] clear-history failed: invalid JSON body");
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid JSON\"}");
+            return;
+        }
+
+        String macStr = body["mac"] | "";
+        if (macStr.length() == 0) {
+            Serial.println("[CO2] clear-history failed: missing mac");
+            request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing mac\"}");
+            return;
+        }
+
+        String macKey = macStr;
+        macKey.toUpperCase();
+        String filePath = phHistoryPath(macKey);
+
+        bool existed = FS_USER.exists(filePath);
+        bool removed = true;
+        if (existed) {
+            removed = FS_USER.remove(filePath);
+        }
+
+        // Reset in-memory store interval state so new trend starts immediately
+        g_phHistoryLastStore.erase(macKey);
+
+        if (!removed) {
+            Serial.printf("[CO2] clear-history failed for %s (%s)\n", macStr.c_str(), filePath.c_str());
+            request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to clear history\"}");
+            return;
+        }
+
+        Serial.printf("[CO2] clear-history success for %s (%s, existed=%s)\n",
+                      macStr.c_str(), filePath.c_str(), existed ? "true" : "false");
+
+        DynamicJsonDocument resp(256);
+        resp["success"] = true;
+        resp["mac"] = macStr;
+        resp["cleared"] = true;
+        resp["fileExisted"] = existed;
+
+        String response;
+        serializeJson(resp, response);
         request->send(200, "application/json", response);
     });
 
@@ -9594,7 +9662,7 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
                         String devName, aqName, devType;
                         lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
                         appendActivityLog("auto", "co2", "CO2 OFF (pH delta)", devName.c_str(), aqName.c_str());
-                        notifier.emitf("co2.delta", "CO2 auto-OFF: pH drop %.2f in %s (%s)",
+                        notifier.emitf("co2.delta", NTFY_MSG_CO2_DELTA_OFF,
                                        delta, devName.c_str(), aqName.c_str());
                     }
                 } else if (!co2St.relayOn &&
@@ -9627,7 +9695,7 @@ void onStatusReceived(const uint8_t* mac, const StatusMessage& msg) {
                             String devName, aqName, devType;
                             lookupDeviceAndAquariumNames(macStr, devName, aqName, devType);
                             appendActivityLog("auto", "co2", "CO2 ON (pH recovered)", devName.c_str(), aqName.c_str());
-                            notifier.emitf("co2.delta", "CO2 auto-ON: pH recovered to delta %.2f in %s (%s)",
+                            notifier.emitf("co2.delta", NTFY_MSG_CO2_DELTA_ON,
                                            delta, devName.c_str(), aqName.c_str());
                         }
                     } else {
